@@ -1,0 +1,20 @@
+{
+  "name": "codebius-backup-manager",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "engine:migrate": "pnpm --filter engine-cli exec node dist/index.js migrate",
+    "engine:run": "pnpm --filter engine-cli exec node dist/index.js"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22.20.1",
+    "@types/ssh2": "^1.15.5",
+    "@types/ssh2-sftp-client": "^9.0.6",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  },
+  "packageManager": "pnpm@10.33.2"
+}

@@ -1,0 +1,19 @@
+{
+  "name": "engine-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b && node scripts/copy-migrations.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "^1.3.0",
+    "better-sqlite3": "^13.0.3",
+    "pino": "^10.3.1",
+    "ssh2": "^1.17.0",
+    "ssh2-sftp-client": "^12.1.1"
+  }
+}

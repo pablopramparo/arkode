@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+build/
+target/
+src-tauri/target/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
