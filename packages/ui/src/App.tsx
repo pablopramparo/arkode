@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { Clientes } from './components/Clientes';
+import { ClienteDetalle } from './components/ClienteDetalle';
 import { Conexiones } from './components/Conexiones';
 import { Tareas } from './components/Tareas';
 import { Historial } from './components/Historial';
@@ -8,11 +9,22 @@ import { AppShell, type Screen } from './components/AppShell';
 
 function App() {
   const [screen, setScreen] = useState<Screen>('dashboard');
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+
+  function navigate(next: Screen) {
+    setScreen(next);
+    setSelectedClientId(null);
+  }
 
   return (
-    <AppShell screen={screen} onNavigate={setScreen}>
+    <AppShell screen={screen} onNavigate={navigate}>
       {screen === 'dashboard' && <Dashboard />}
-      {screen === 'clientes' && <Clientes />}
+      {screen === 'clientes' &&
+        (selectedClientId ? (
+          <ClienteDetalle clientId={selectedClientId} onBack={() => setSelectedClientId(null)} />
+        ) : (
+          <Clientes onSelectClient={setSelectedClientId} />
+        ))}
       {screen === 'conexiones' && <Conexiones />}
       {screen === 'tareas' && <Tareas />}
       {screen === 'historial' && <Historial />}

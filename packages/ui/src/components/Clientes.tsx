@@ -114,7 +114,7 @@ function ClientFields({
   );
 }
 
-export function Clientes() {
+export function Clientes({ onSelectClient }: { onSelectClient: (clientId: string) => void }) {
   const [clients, setClients] = useState<ClientWithTaskCount[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
@@ -271,7 +271,18 @@ export function Clientes() {
                   }}
                 >
                   <td className="px-4 py-2.5 font-medium">
-                    {client.name}
+                    {client.isActive ? (
+                      <button
+                        type="button"
+                        className="hover:underline"
+                        style={{ color: 'inherit' }}
+                        onClick={() => onSelectClient(client.id)}
+                      >
+                        {client.name}
+                      </button>
+                    ) : (
+                      client.name
+                    )}
                     {!client.isActive && (
                       <span className="ml-2 text-xs font-normal" style={{ color: 'var(--muted)' }}>
                         (inactivo)
