@@ -7,6 +7,7 @@ import {
   SettingsIcon,
   UsersIcon,
 } from "./icons";
+import arkodeLogo from "../assets/arkode-logo-completo.png";
 
 export type Screen = "dashboard" | "clientes" | "conexiones" | "tareas";
 
@@ -59,19 +60,8 @@ export function AppShell({
             "color-mix(in oklab, var(--foreground) 3%, var(--background))",
         }}
       >
-        <div className="mb-6 flex items-center gap-3 px-2">
-          <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white"
-            style={{ background: "linear-gradient(135deg, #38bdf8, #3b82f6, #d946ef)" }}
-          >
-            <DatabaseIcon className="h-5 w-5" />
-          </div>
-          <div className="leading-tight">
-            <div className="text-sm font-semibold">Codebius</div>
-            <div className="text-xs" style={{ color: "var(--muted)" }}>
-              Backup Manager
-            </div>
-          </div>
+        <div className="mb-6 px-2">
+          <img src={arkodeLogo} alt="Arkode by Codebius" className="w-full" />
         </div>
 
         <nav className="flex flex-col gap-0.5">
@@ -104,12 +94,15 @@ export function AppShell({
           })}
         </nav>
 
-        <div
-          className="mt-auto px-2 pt-4 text-xs"
+        <a
+          href="https://codebius.com"
+          target="_blank"
+          rel="noreferrer"
+          className="mt-auto px-2 pt-4 text-xs hover:underline"
           style={{ color: "var(--muted)" }}
         >
-          by codebius
-        </div>
+          Arkode by Codebius
+        </a>
       </aside>
 
       <main className="flex-1">{children}</main>
