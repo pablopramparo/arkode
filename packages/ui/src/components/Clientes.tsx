@@ -9,6 +9,8 @@ import {
   type ClientWithTaskCount,
 } from '../lib/clientsClient';
 import { formatRetention } from '../lib/format';
+import { Modal } from './Modal';
+import { Switch } from './Switch';
 
 interface ClientFormValues {
   name: string;
@@ -44,54 +46,106 @@ const inputStyle: React.CSSProperties = {
   backgroundColor: 'var(--background)',
   border: '1px solid var(--border)',
   borderRadius: 6,
-  padding: '4px 8px',
+  padding: '6px 10px',
   color: 'var(--foreground)',
   width: '100%',
 };
 
+const primaryPillStyle: React.CSSProperties = {
+  background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
+  color: 'white',
+  border: 0,
+};
+
+const dangerPillStyle: React.CSSProperties = {
+  color: '#f87171',
+  backgroundColor: 'color-mix(in oklab, #ef4444 12%, transparent)',
+  border: 0,
+};
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1 text-sm">
+      <span style={{ color: 'var(--muted)' }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+/** `layout="row"` for the full-width inline create panel (5 across); `layout="stack"` for the narrower edit modal. */
 function ClientFields({
   values,
   onChange,
+  layout,
 }: {
   values: ClientFormValues;
   onChange: (patch: Partial<ClientFormValues>) => void;
+  layout: 'row' | 'stack';
 }) {
+  const nameAndPath = (
+    <>
+      <Field label="Nombre *">
+        <input style={inputStyle} value={values.name} onChange={(e) => onChange({ name: e.target.value })} autoFocus />
+      </Field>
+      <Field label="Descripción">
+        {layout === 'row' ? (
+          <input
+            style={inputStyle}
+            placeholder="Opcional"
+            value={values.description}
+            onChange={(e) => onChange({ description: e.target.value })}
+          />
+        ) : (
+          <textarea
+            style={{ ...inputStyle, minHeight: 64, resize: 'vertical' }}
+            value={values.description}
+            onChange={(e) => onChange({ description: e.target.value })}
+          />
+        )}
+      </Field>
+      <Field label="Carpeta local *">
+        <input
+          style={inputStyle}
+          placeholder="Ej: D:/Backups/Cliente"
+          value={values.localBasePath}
+          onChange={(e) => onChange({ localBasePath: e.target.value })}
+        />
+      </Field>
+    </>
+  );
+
+  const retentionFields = (
+    <>
+      <Field label="Retención (N backups)">
+        <input
+          style={inputStyle}
+          type="number"
+          min={0}
+          placeholder="Ej: 10"
+          value={values.retentionCount}
+          onChange={(e) => onChange({ retentionCount: e.target.value })}
+        />
+      </Field>
+      <Field label="Retención (N días)">
+        <input
+          style={inputStyle}
+          type="number"
+          min={0}
+          placeholder="Ej: 30"
+          value={values.retentionDays}
+          onChange={(e) => onChange({ retentionDays: e.target.value })}
+        />
+      </Field>
+    </>
+  );
+
+  if (layout === 'row') {
+    return <div className="grid grid-cols-5 gap-3">{nameAndPath}{retentionFields}</div>;
+  }
   return (
-    <div className="grid grid-cols-5 gap-2">
-      <input
-        style={inputStyle}
-        placeholder="Nombre *"
-        value={values.name}
-        onChange={(e) => onChange({ name: e.target.value })}
-      />
-      <input
-        style={inputStyle}
-        placeholder="Descripción"
-        value={values.description}
-        onChange={(e) => onChange({ description: e.target.value })}
-      />
-      <input
-        style={inputStyle}
-        placeholder="Carpeta local *"
-        value={values.localBasePath}
-        onChange={(e) => onChange({ localBasePath: e.target.value })}
-      />
-      <input
-        style={inputStyle}
-        placeholder="Retención (N backups)"
-        type="number"
-        min={0}
-        value={values.retentionCount}
-        onChange={(e) => onChange({ retentionCount: e.target.value })}
-      />
-      <input
-        style={inputStyle}
-        placeholder="Retención (N días)"
-        type="number"
-        min={0}
-        value={values.retentionDays}
-        onChange={(e) => onChange({ retentionDays: e.target.value })}
-      />
+    <div className="flex flex-col gap-3">
+      {nameAndPath}
+      <div className="grid grid-cols-2 gap-3">{retentionFields}</div>
     </div>
   );
 }
@@ -99,20 +153,20 @@ function ClientFields({
 export function Clientes() {
   const [clients, setClients] = useState<ClientWithTaskCount[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
 
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState<ClientFormValues>(EMPTY_FORM);
   const [createBusy, setCreateBusy] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingClient, setEditingClient] = useState<ClientWithTaskCount | null>(null);
   const [editForm, setEditForm] = useState<ClientFormValues>(EMPTY_FORM);
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
   const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
   const [reactivatingId, setReactivatingId] = useState<string | null>(null);
-  const [showInactive, setShowInactive] = useState(false);
 
   const refresh = useCallback(async (includeInactive: boolean) => {
     try {
@@ -144,18 +198,18 @@ export function Clientes() {
   }
 
   function startEdit(client: ClientWithTaskCount) {
-    setEditingId(client.id);
+    setEditingClient(client);
     setEditForm(toClientFormValues(client));
     setEditError(null);
   }
 
   async function handleSaveEdit() {
-    if (!editingId) return;
+    if (!editingClient) return;
     setEditBusy(true);
     setEditError(null);
     try {
-      await updateClient(editingId, toInput(editForm));
-      setEditingId(null);
+      await updateClient(editingClient.id, toInput(editForm));
+      setEditingClient(null);
       await refresh(showInactive);
     } catch (err) {
       setEditError(err instanceof Error ? err.message : String(err));
@@ -192,10 +246,10 @@ export function Clientes() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
+    <div className="mx-auto max-w-6xl px-8 py-8">
       <header className="mb-6 flex items-baseline justify-between">
         <div>
-          <h1 className="text-xl font-semibold">Clientes</h1>
+          <h1 className="text-2xl font-semibold">Clientes</h1>
           <p className="text-sm" style={{ color: 'var(--muted)' }}>
             {clients == null
               ? 'Cargando…'
@@ -204,11 +258,18 @@ export function Clientes() {
                 : `${clients.length} cliente${clients.length === 1 ? '' : 's'} activo${clients.length === 1 ? '' : 's'}`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="ghost" onPress={() => setShowInactive((v) => !v)}>
-            {showInactive ? 'Ocultar inactivos' : 'Mostrar inactivos'}
-          </Button>
-          <Button size="sm" variant="secondary" onPress={() => setShowCreate((v) => !v)}>
+        <div className="flex items-center gap-4">
+          <Switch checked={showInactive} onChange={() => setShowInactive((v) => !v)} label="Mostrar inactivos" />
+          <Button
+            size="sm"
+            className="rounded-full px-4"
+            style={primaryPillStyle}
+            onPress={() => {
+              setCreateForm(EMPTY_FORM);
+              setCreateError(null);
+              setShowCreate((v) => !v);
+            }}
+          >
             {showCreate ? 'Cancelar' : '+ Nuevo cliente'}
           </Button>
         </div>
@@ -224,20 +285,21 @@ export function Clientes() {
       )}
 
       {showCreate && (
-        <div className="mb-4 rounded-lg border p-4" style={{ borderColor: 'var(--border)' }}>
-          <ClientFields values={createForm} onChange={(patch) => setCreateForm((prev) => ({ ...prev, ...patch }))} />
+        <div className="mb-4 rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+          <ClientFields layout="row" values={createForm} onChange={(patch) => setCreateForm((prev) => ({ ...prev, ...patch }))} />
           {createError && (
             <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
               {createError}
             </p>
           )}
           <div className="mt-3 flex justify-end gap-2">
-            <Button size="sm" variant="ghost" isDisabled={createBusy} onPress={() => setShowCreate(false)}>
+            <Button size="sm" variant="ghost" className="rounded-full px-4" isDisabled={createBusy} onPress={() => setShowCreate(false)}>
               Cancelar
             </Button>
             <Button
               size="sm"
-              variant="secondary"
+              className="rounded-full px-4"
+              style={primaryPillStyle}
               isDisabled={createBusy || !createForm.name.trim() || !createForm.localBasePath.trim()}
               onPress={handleCreate}
             >
@@ -248,7 +310,7 @@ export function Clientes() {
       )}
 
       {clients && clients.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--border)' }}>
+        <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="text-left" style={{ color: 'var(--muted)' }}>
@@ -261,95 +323,92 @@ export function Clientes() {
               </tr>
             </thead>
             <tbody>
-              {clients.map((client) => {
-                const isEditing = editingId === client.id;
-                return (
-                  <tr
-                    key={client.id}
-                    style={{
-                      borderTop: '1px solid var(--separator)',
-                      opacity: client.isActive ? 1 : 0.55,
-                    }}
-                  >
-                    {isEditing ? (
-                      <td className="px-4 py-2.5" colSpan={4}>
-                        <ClientFields values={editForm} onChange={(patch) => setEditForm((prev) => ({ ...prev, ...patch }))} />
-                        {editError && (
-                          <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
-                            {editError}
-                          </p>
-                        )}
-                      </td>
-                    ) : (
-                      <>
-                        <td className="px-4 py-2.5 font-medium">
-                          {client.name}
-                          {!client.isActive && (
-                            <span className="ml-2 text-xs font-normal" style={{ color: 'var(--muted)' }}>
-                              (inactivo)
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                          {client.description ?? '—'}
-                        </td>
-                        <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                          {client.localBasePath}
-                        </td>
-                        <td className="px-4 py-2.5">{formatRetention(client.retentionCount, client.retentionDays)}</td>
-                      </>
+              {clients.map((client) => (
+                <tr
+                  key={client.id}
+                  style={{
+                    borderTop: '1px solid var(--separator)',
+                    opacity: client.isActive ? 1 : 0.55,
+                  }}
+                >
+                  <td className="px-4 py-2.5 font-medium">
+                    {client.name}
+                    {!client.isActive && (
+                      <span className="ml-2 text-xs font-normal" style={{ color: 'var(--muted)' }}>
+                        (inactivo)
+                      </span>
                     )}
-                    <td className="px-4 py-2.5">{client.taskCount}</td>
-                    <td className="px-4 py-2.5">
-                      {isEditing ? (
-                        <div className="flex items-center gap-2">
-                          <Button size="sm" variant="ghost" isDisabled={editBusy} onPress={() => setEditingId(null)}>
-                            Cancelar
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            isDisabled={editBusy || !editForm.name.trim() || !editForm.localBasePath.trim()}
-                            onPress={handleSaveEdit}
-                          >
-                            {editBusy ? 'Guardando…' : 'Guardar'}
-                          </Button>
-                        </div>
-                      ) : client.isActive ? (
-                        <div className="flex items-center gap-2">
-                          <Button size="sm" variant="ghost" onPress={() => startEdit(client)}>
-                            Editar
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            isDisabled={deactivatingId === client.id}
-                            onPress={() => handleDeactivate(client)}
-                          >
-                            {deactivatingId === client.id ? 'Desactivando…' : 'Desactivar'}
-                          </Button>
-                        </div>
-                      ) : (
+                  </td>
+                  <td className="max-w-xs truncate px-4 py-2.5" style={{ color: 'var(--muted)' }} title={client.description ?? undefined}>
+                    {client.description ?? '—'}
+                  </td>
+                  <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                    {client.localBasePath}
+                  </td>
+                  <td className="px-4 py-2.5">{formatRetention(client.retentionCount, client.retentionDays)}</td>
+                  <td className="px-4 py-2.5">{client.taskCount}</td>
+                  <td className="px-4 py-2.5">
+                    {client.isActive ? (
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" variant="ghost" className="rounded-full px-3" onPress={() => startEdit(client)}>
+                          Editar
+                        </Button>
                         <Button
                           size="sm"
-                          variant="secondary"
-                          isDisabled={reactivatingId === client.id}
-                          onPress={() => handleReactivate(client)}
+                          className="rounded-full px-3"
+                          style={dangerPillStyle}
+                          isDisabled={deactivatingId === client.id}
+                          onPress={() => handleDeactivate(client)}
                         >
-                          {reactivatingId === client.id ? 'Reactivando…' : 'Reactivar'}
+                          {deactivatingId === client.id ? 'Desactivando…' : 'Desactivar'}
                         </Button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="rounded-full px-3"
+                        style={primaryPillStyle}
+                        isDisabled={reactivatingId === client.id}
+                        onPress={() => handleReactivate(client)}
+                      >
+                        {reactivatingId === client.id ? 'Reactivando…' : 'Reactivar'}
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       )}
 
-      {clients && clients.length === 0 && !showCreate && (
+      {clients && clients.length === 0 && (
         <p style={{ color: 'var(--muted)' }}>No hay clientes activos todavía.</p>
+      )}
+
+      {editingClient && (
+        <Modal title={`Editar "${editingClient.name}"`} onClose={() => setEditingClient(null)}>
+          <ClientFields layout="stack" values={editForm} onChange={(patch) => setEditForm((prev) => ({ ...prev, ...patch }))} />
+          {editError && (
+            <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
+              {editError}
+            </p>
+          )}
+          <div className="mt-4 flex justify-end gap-2">
+            <Button size="sm" variant="ghost" className="rounded-full px-4" isDisabled={editBusy} onPress={() => setEditingClient(null)}>
+              Cancelar
+            </Button>
+            <Button
+              size="sm"
+              className="rounded-full px-4"
+              style={primaryPillStyle}
+              isDisabled={editBusy || !editForm.name.trim() || !editForm.localBasePath.trim()}
+              onPress={handleSaveEdit}
+            >
+              {editBusy ? 'Guardando…' : 'Guardar'}
+            </Button>
+          </div>
+        </Modal>
       )}
     </div>
   );
