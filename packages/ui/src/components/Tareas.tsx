@@ -14,6 +14,8 @@ import { fetchConnections, type ConnectionsData } from '../lib/connectionsClient
 import { runTaskNow, testTaskConnection } from '../lib/statusClient';
 import { Modal } from './Modal';
 import { Switch } from './Switch';
+import { IconButton } from './IconButton';
+import { PulseIcon } from './icons';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 
 const STRATEGY_LABEL: Record<BackupStrategyKind, string> = {
@@ -420,7 +422,7 @@ export function Tareas() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
+    <div className="max-w-[1600px] px-10 py-8">
       <header className="mb-6 flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Tareas</h1>
@@ -509,15 +511,12 @@ export function Tareas() {
                               >
                                 {state?.busy === 'run' ? 'Ejecutando…' : 'Ejecutar ahora'}
                               </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="rounded-full px-3"
-                                isDisabled={Boolean(state?.busy)}
+                              <IconButton
+                                icon={<PulseIcon />}
+                                label={state?.busy === 'test' ? 'Probando conexión…' : 'Probar conexión'}
+                                disabled={Boolean(state?.busy)}
                                 onPress={() => handleTest(task)}
-                              >
-                                {state?.busy === 'test' ? 'Probando…' : 'Probar conexión'}
-                              </Button>
+                              />
                             </>
                           )}
                           <Button

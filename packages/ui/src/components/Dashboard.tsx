@@ -4,8 +4,9 @@ import { fetchDashboardStatus, runTaskNow, testTaskConnection, type ConnectionTe
 import { formatAge, formatSize, ageInHours } from '../lib/format';
 import { StatusChip } from './StatusChip';
 import { StatCard } from './StatCard';
-import { AlertTriangleIcon, CheckCircleIcon, ClipboardIcon, UsersIcon } from './icons';
+import { AlertTriangleIcon, CheckCircleIcon, ClipboardIcon, EyeIcon, PulseIcon, UsersIcon } from './icons';
 import { primaryPillStyle } from '../lib/pillStyles';
+import { IconButton } from './IconButton';
 
 const POLL_INTERVAL_MS = 20_000;
 /** A daily backup task without a fresh file past this age is worth flagging, even if the last *attempt* technically succeeded a while ago. */
@@ -92,10 +93,10 @@ export function Dashboard() {
       .length ?? 0;
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
+    <div className="max-w-[1600px] px-10 py-8">
       <header className="mb-6 flex items-baseline justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">¡Hola, Codebius!</h1>
+          <h1 className="text-2xl font-semibold">Dashboard</h1>
           <p className="text-sm" style={{ color: 'var(--muted)' }}>
             Resumen general de tus backups
           </p>
@@ -115,6 +116,7 @@ export function Dashboard() {
             label="Backups exitosos"
             sublabel="últimas 24 h"
             color="green"
+            alert={rows.length > 0 && recentSuccessCount === 0}
           />
           <StatCard
             icon={<AlertTriangleIcon />}
@@ -122,6 +124,7 @@ export function Dashboard() {
             label="Con errores"
             sublabel={problemCount > 0 ? 'requiere atención' : undefined}
             color="red"
+            alert={problemCount > 0}
           />
         </div>
       )}
@@ -211,19 +214,18 @@ export function Dashboard() {
                             >
                               {state?.busy === 'run' ? 'Ejecutando…' : 'Ejecutar ahora'}
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="rounded-full px-3"
-                              isDisabled={Boolean(state?.busy)}
+                            <IconButton
+                              icon={<PulseIcon />}
+                              label={state?.busy === 'test' ? 'Probando conexión…' : 'Probar conexión'}
+                              disabled={Boolean(state?.busy)}
                               onPress={() => handleTest(row.taskId)}
-                            >
-                              {state?.busy === 'test' ? 'Probando…' : 'Probar conexión'}
-                            </Button>
+                            />
                             {row.status === 'Failed' && row.latestErrorMessage && (
-                              <Button size="sm" variant="ghost" className="rounded-full px-3" onPress={() => toggleError(row.taskId)}>
-                                {state?.errorExpanded ? 'Ocultar error' : 'Ver error'}
-                              </Button>
+                              <IconButton
+                                icon={<EyeIcon />}
+                                label={state?.errorExpanded ? 'Ocultar error' : 'Ver error'}
+                                onPress={() => toggleError(row.taskId)}
+                              />
                             )}
                           </div>
                         </td>

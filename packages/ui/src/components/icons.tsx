@@ -99,6 +99,23 @@ export function ChartIcon({ className }: IconProps) {
   );
 }
 
+export function PulseIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <path d="M3 12h3.5l2-6.5 4 13 2-9.5 1.5 3h5" />
+    </svg>
+  );
+}
+
+export function EyeIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
+      <circle cx="12" cy="12" r="2.8" />
+    </svg>
+  );
+}
+
 export function SettingsIcon({ className }: IconProps) {
   return (
     <svg className={className} {...base}>

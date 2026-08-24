@@ -210,7 +210,7 @@ export function Clientes() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
+    <div className="max-w-[1600px] px-10 py-8">
       <header className="mb-6 flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Clientes</h1>
