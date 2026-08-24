@@ -8,7 +8,7 @@ import {
   UsersIcon,
 } from "./icons";
 
-export type Screen = "dashboard" | "clientes" | "conexiones";
+export type Screen = "dashboard" | "clientes" | "conexiones" | "tareas";
 
 interface NavItem {
   id: Screen | string;
@@ -24,7 +24,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: <GridIcon />, enabled: true },
   { id: "clientes", label: "Clientes", icon: <UsersIcon />, enabled: true },
   { id: "conexiones", label: "Conexiones", icon: <DatabaseIcon />, enabled: true },
-  { id: "tareas", label: "Tareas", icon: <ClockIcon />, enabled: false },
+  { id: "tareas", label: "Tareas", icon: <ClockIcon />, enabled: true },
   {
     id: "historial",
     label: "Historial",

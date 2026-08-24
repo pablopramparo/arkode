@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { Clientes } from './components/Clientes';
 import { Conexiones } from './components/Conexiones';
+import { Tareas } from './components/Tareas';
 import { AppShell, type Screen } from './components/AppShell';
 
 function App() {
@@ -12,6 +13,7 @@ function App() {
       {screen === 'dashboard' && <Dashboard />}
       {screen === 'clientes' && <Clientes />}
       {screen === 'conexiones' && <Conexiones />}
+      {screen === 'tareas' && <Tareas />}
     </AppShell>
   );
 }

@@ -29,6 +29,7 @@ export type {
   CreateRemoteDumpTaskInput,
   CreateDirectDumpTaskInput,
   SetScheduleInput,
+  UpdateTaskInput,
 } from './db/repositories/tasksRepo.js';
 
 export { createRunsRepo } from './db/repositories/runsRepo.js';

@@ -75,12 +75,22 @@ export interface SetScheduleInput {
   scheduleEnabled: boolean;
 }
 
+/** `strategy`/`transportId`/`databaseConnectionId`/`dbEngine` are deliberately not editable — they determine which downstream pipeline runs; create a new task to change any of them. */
+export interface UpdateTaskInput {
+  name?: string;
+  retentionCount?: number | null;
+  retentionDays?: number | null;
+}
+
 const SCHEDULE_TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export interface TasksRepo {
   createFetchExisting(input: CreateFetchExistingTaskInput): BackupTask;
   createRemoteDump(input: CreateRemoteDumpTaskInput): BackupTask;
   createDirectDump(input: CreateDirectDumpTaskInput): BackupTask;
+  update(id: string, patch: UpdateTaskInput): BackupTask;
+  deactivate(id: string): void;
+  reactivate(id: string): void;
   getById(id: string): BackupTask | null;
   listByClient(clientId: string): BackupTask[];
   /** Every active task with a schedule configured and enabled — what run-due iterates over. */
@@ -110,6 +120,18 @@ export function createTasksRepo(
     `UPDATE backup_tasks
      SET schedule_time = @scheduleTime, schedule_enabled = @scheduleEnabled, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = @taskId`
+  );
+  const updateStmt = db.prepare(
+    `UPDATE backup_tasks
+     SET name = @name, retention_count = @retentionCount, retention_days = @retentionDays,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE id = @id`
+  );
+  const deactivateStmt = db.prepare(
+    `UPDATE backup_tasks SET is_active = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
+  );
+  const reactivateStmt = db.prepare(
+    `UPDATE backup_tasks SET is_active = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
   );
 
   function insertTask(
@@ -177,6 +199,32 @@ export function createTasksRepo(
       }
 
       return insertTask('direct_dump', input, null, input.databaseConnectionId);
+    },
+
+    update(id, patch) {
+      const current = getByIdStmt.get(id);
+      if (!current) throw new Error(`Task ${id} not found.`);
+      updateStmt.run({
+        id,
+        name: patch.name ?? current.name,
+        retentionCount: patch.retentionCount !== undefined ? patch.retentionCount : current.retention_count,
+        retentionDays: patch.retentionDays !== undefined ? patch.retentionDays : current.retention_days,
+      });
+      const row = getByIdStmt.get(id);
+      if (!row) throw new Error(`Failed to read back updated task ${id}`);
+      return toDomain(row);
+    },
+
+    deactivate(id) {
+      const current = getByIdStmt.get(id);
+      if (!current) throw new Error(`Task ${id} not found.`);
+      deactivateStmt.run(id);
+    },
+
+    reactivate(id) {
+      const current = getByIdStmt.get(id);
+      if (!current) throw new Error(`Task ${id} not found.`);
+      reactivateStmt.run(id);
     },
 
     getById(id) {

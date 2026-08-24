@@ -377,6 +377,43 @@ program
     console.log(JSON.stringify(updated, null, 2));
   });
 
+program
+  .command('task:update')
+  .description("Update a task's name/retention (not its strategy/transport/database-connection/db-engine — create a new task to change any of those). Only the flags you pass are changed.")
+  .argument('<taskId>')
+  .option('--name <name>')
+  .option('--retention-count <n>')
+  .option('--retention-days <n>')
+  .action((taskId: string, opts) => {
+    const ctx = buildContext();
+    const task = ctx.tasksRepo.update(taskId, {
+      name: opts.name,
+      retentionCount: opts.retentionCount != null ? Number(opts.retentionCount) : undefined,
+      retentionDays: opts.retentionDays != null ? Number(opts.retentionDays) : undefined,
+    });
+    console.log(JSON.stringify(task, null, 2));
+  });
+
+program
+  .command('task:deactivate')
+  .description('Deactivate a task. It stops appearing on the dashboard and in scheduling; its run history is untouched.')
+  .argument('<taskId>')
+  .action((taskId: string) => {
+    const ctx = buildContext();
+    ctx.tasksRepo.deactivate(taskId);
+    console.log(`Deactivated task ${taskId}.`);
+  });
+
+program
+  .command('task:reactivate')
+  .description('Reactivate a previously deactivated task.')
+  .argument('<taskId>')
+  .action((taskId: string) => {
+    const ctx = buildContext();
+    ctx.tasksRepo.reactivate(taskId);
+    console.log(`Reactivated task ${taskId}.`);
+  });
+
 function testTransportConnection(ctx: ReturnType<typeof buildContext>, transport: Transport): Promise<ConnectionTestResult> {
   const adapter =
     transport.type === 'ssh'
@@ -999,6 +1036,116 @@ program
           if (password) patch.passwordSecretRef = resolveSecretRef(ctx, password, 'databaseConnection:password');
           const connection = ctx.databaseConnectionsRepo.update(dbConnIdMatch[1], patch);
           sendJson(res, 200, connection);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/tasks') {
+        const includeInactive = url.searchParams.get('includeInactive') === 'true';
+        const clients = ctx.clientsRepo.listActive();
+        const tasks = clients.flatMap((client) =>
+          ctx.tasksRepo
+            .listByClient(client.id)
+            .filter((t) => includeInactive || t.isActive)
+            .map((t) => {
+              const transport = t.transportId ? ctx.transportsRepo.getById(t.transportId) : null;
+              const databaseConnection = t.databaseConnectionId ? ctx.databaseConnectionsRepo.getById(t.databaseConnectionId) : null;
+              return {
+                ...t,
+                clientName: client.name,
+                transportName: transport?.name ?? null,
+                databaseConnectionName: databaseConnection?.name ?? null,
+              };
+            })
+        );
+        sendJson(res, 200, tasks);
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/tasks') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.clientId || !body.name || !body.strategy) {
+            sendJson(res, 400, { error: 'clientId, name, and strategy are required.' });
+            return;
+          }
+          const dbEngine = body.dbEngine ?? 'unknown';
+          const retentionCount = body.retentionCount ?? null;
+          const retentionDays = body.retentionDays ?? null;
+
+          let task;
+          if (body.strategy === 'direct_dump') {
+            if (!body.databaseConnectionId) {
+              sendJson(res, 400, { error: 'databaseConnectionId is required for direct_dump.' });
+              return;
+            }
+            task = ctx.tasksRepo.createDirectDump({
+              clientId: body.clientId,
+              databaseConnectionId: body.databaseConnectionId,
+              name: body.name,
+              dbEngine,
+              retentionCount,
+              retentionDays,
+            });
+          } else {
+            if (!body.transportId) {
+              sendJson(res, 400, { error: `${body.strategy} tasks require transportId.` });
+              return;
+            }
+            const input = { clientId: body.clientId, transportId: body.transportId, name: body.name, dbEngine, retentionCount, retentionDays };
+            task = body.strategy === 'remote_dump' ? ctx.tasksRepo.createRemoteDump(input) : ctx.tasksRepo.createFetchExisting(input);
+          }
+
+          if (body.scheduleTime) {
+            task = ctx.tasksRepo.setSchedule(task.id, {
+              scheduleTime: body.scheduleTime,
+              scheduleEnabled: body.scheduleEnabled !== false,
+            });
+          }
+
+          sendJson(res, 201, task);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const taskSetActiveMatch = req.method === 'POST' && pathname.match(/^\/tasks\/([^/]+)\/(deactivate|reactivate)$/);
+      if (taskSetActiveMatch) {
+        try {
+          const [, taskId, action] = taskSetActiveMatch;
+          if (action === 'deactivate') ctx.tasksRepo.deactivate(taskId);
+          else ctx.tasksRepo.reactivate(taskId);
+          sendJson(res, 200, { ok: true });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const taskScheduleMatch = req.method === 'POST' && pathname.match(/^\/tasks\/([^/]+)\/schedule$/);
+      if (taskScheduleMatch) {
+        try {
+          const body = await readJsonBody(req);
+          const task = ctx.tasksRepo.setSchedule(taskScheduleMatch[1], {
+            scheduleTime: body.scheduleTime ?? null,
+            scheduleEnabled: Boolean(body.scheduleEnabled),
+          });
+          sendJson(res, 200, task);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const taskIdMatch = req.method === 'PATCH' && pathname.match(/^\/tasks\/([^/]+)$/);
+      if (taskIdMatch) {
+        try {
+          const body = await readJsonBody(req);
+          const task = ctx.tasksRepo.update(taskIdMatch[1], body);
+          sendJson(res, 200, task);
         } catch (err) {
           sendRepoError(res, err);
         }

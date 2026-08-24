@@ -142,3 +142,67 @@ describe('tasksRepo transport/database-connection invariants', () => {
     expect(client.retentionCount).toBe(30);
   });
 });
+
+describe('tasksRepo update/deactivate/reactivate', () => {
+  function seedTask(ctx: ReturnType<typeof createTestContext>) {
+    const client = seedClient(ctx);
+    const transport = ctx.transportsRepo.createSftp({
+      clientId: client.id,
+      name: 'sftp',
+      host: 'h',
+      username: 'u',
+      privateKeyPath: 'k',
+      remotePath: '/backups',
+    });
+    const task = ctx.tasksRepo.createFetchExisting({
+      clientId: client.id,
+      transportId: transport.id,
+      name: 'task',
+      dbEngine: 'unknown',
+      retentionCount: 10,
+    });
+    return { client, transport, task };
+  }
+
+  it('updates only the fields provided, leaving strategy/transport untouched', () => {
+    const ctx = createTestContext();
+    const { task, transport } = seedTask(ctx);
+
+    const updated = ctx.tasksRepo.update(task.id, { name: 'renamed' });
+
+    expect(updated.name).toBe('renamed');
+    expect(updated.retentionCount).toBe(10); // untouched
+    expect(updated.transportId).toBe(transport.id); // no way to change this via update()
+  });
+
+  it('allows explicitly clearing a nullable retention field by passing null', () => {
+    const ctx = createTestContext();
+    const { task } = seedTask(ctx);
+
+    const updated = ctx.tasksRepo.update(task.id, { retentionCount: null });
+
+    expect(updated.retentionCount).toBeNull();
+  });
+
+  it('throws a clean error when updating a nonexistent task', () => {
+    const ctx = createTestContext();
+    expect(() => ctx.tasksRepo.update('nonexistent', { name: 'x' })).toThrow(/not found/i);
+  });
+
+  it('deactivate() then reactivate() round-trips is_active', () => {
+    const ctx = createTestContext();
+    const { task } = seedTask(ctx);
+
+    ctx.tasksRepo.deactivate(task.id);
+    expect(ctx.tasksRepo.getById(task.id)).toMatchObject({ isActive: false });
+
+    ctx.tasksRepo.reactivate(task.id);
+    expect(ctx.tasksRepo.getById(task.id)).toMatchObject({ isActive: true });
+  });
+
+  it('throws a clean error when deactivating or reactivating a nonexistent task', () => {
+    const ctx = createTestContext();
+    expect(() => ctx.tasksRepo.deactivate('nonexistent')).toThrow(/not found/i);
+    expect(() => ctx.tasksRepo.reactivate('nonexistent')).toThrow(/not found/i);
+  });
+});
