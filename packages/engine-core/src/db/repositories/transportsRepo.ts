@@ -59,8 +59,23 @@ export interface CreateSftpTransportInput {
   knownHostFingerprint?: string | null;
 }
 
+export interface CreateSshTransportInput {
+  clientId: string;
+  name: string;
+  host: string;
+  port?: number;
+  username: string;
+  privateKeyPath: string;
+  passphraseSecretRef?: string | null;
+  remoteCommand: string;
+  remoteOutputPathTemplate: string;
+  remoteCleanup?: boolean;
+  knownHostFingerprint?: string | null;
+}
+
 export interface TransportsRepo {
   createSftp(input: CreateSftpTransportInput): Transport;
+  createSsh(input: CreateSshTransportInput): Transport;
   getById(id: string): Transport | null;
   listByClient(clientId: string): Transport[];
   updateKnownHostFingerprint(id: string, fingerprint: string): void;
@@ -74,6 +89,14 @@ export function createTransportsRepo(db: Database): TransportsRepo {
      VALUES
        (@id, @clientId, @name, 'sftp', @host, @port, @username, @privateKeyPath,
         @passphraseSecretRef, @remotePath, @remoteFilePattern, @knownHostFingerprint)`
+  );
+  const insertSshStmt = db.prepare(
+    `INSERT INTO transports
+       (id, client_id, name, type, host, port, username, private_key_path,
+        passphrase_secret_ref, remote_command, remote_output_path_template, remote_cleanup, known_host_fingerprint)
+     VALUES
+       (@id, @clientId, @name, 'ssh', @host, @port, @username, @privateKeyPath,
+        @passphraseSecretRef, @remoteCommand, @remoteOutputPathTemplate, @remoteCleanup, @knownHostFingerprint)`
   );
   const getByIdStmt = db.prepare<[string], TransportRow>('SELECT * FROM transports WHERE id = ?');
   const listByClientStmt = db.prepare<[string], TransportRow>(
@@ -97,6 +120,27 @@ export function createTransportsRepo(db: Database): TransportsRepo {
         passphraseSecretRef: input.passphraseSecretRef ?? null,
         remotePath: input.remotePath,
         remoteFilePattern: input.remoteFilePattern ?? null,
+        knownHostFingerprint: input.knownHostFingerprint ?? null,
+      });
+      const row = getByIdStmt.get(id);
+      if (!row) throw new Error(`Failed to read back created transport ${id}`);
+      return toDomain(row);
+    },
+
+    createSsh(input) {
+      const id = randomUUID();
+      insertSshStmt.run({
+        id,
+        clientId: input.clientId,
+        name: input.name,
+        host: input.host,
+        port: input.port ?? 22,
+        username: input.username,
+        privateKeyPath: input.privateKeyPath,
+        passphraseSecretRef: input.passphraseSecretRef ?? null,
+        remoteCommand: input.remoteCommand,
+        remoteOutputPathTemplate: input.remoteOutputPathTemplate,
+        remoteCleanup: input.remoteCleanup ? 1 : 0,
         knownHostFingerprint: input.knownHostFingerprint ?? null,
       });
       const row = getByIdStmt.get(id);

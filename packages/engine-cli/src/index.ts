@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { randomUUID } from 'node:crypto';
-import { runBackupTask, createSftpAdapterFromTransport, type DbEngine } from 'engine-core';
+import {
+  runBackupTask,
+  createSftpAdapterFromTransport,
+  createSshAdapterFromTransport,
+  type DbEngine,
+} from 'engine-core';
 import { buildContext } from './context.js';
 import { confirmHostInteractively } from './confirmHost.js';
 
@@ -32,8 +37,15 @@ program
     console.log(JSON.stringify(client, null, 2));
   });
 
+function resolvePassphraseSecretRef(ctx: ReturnType<typeof buildContext>, passphrase: string | undefined): string | null {
+  if (!passphrase) return null;
+  const ref = `transport:${randomUUID()}:passphrase`;
+  ctx.secretStore.set(ref, passphrase);
+  return ref;
+}
+
 program
-  .command('transport:create')
+  .command('transport:create-sftp')
   .description('Create an SFTP transport for a client (fetch_existing strategy).')
   .requiredOption('--client <clientId>')
   .requiredOption('--name <name>')
@@ -46,13 +58,6 @@ program
   .option('--passphrase <passphrase>', 'SSH key passphrase — stored via Windows Credential Manager, never in SQLite')
   .action((opts) => {
     const ctx = buildContext();
-
-    let passphraseSecretRef: string | null = null;
-    if (opts.passphrase) {
-      passphraseSecretRef = `transport:${randomUUID()}:passphrase`;
-      ctx.secretStore.set(passphraseSecretRef, opts.passphrase);
-    }
-
     const transport = ctx.transportsRepo.createSftp({
       clientId: opts.client,
       name: opts.name,
@@ -60,7 +65,7 @@ program
       port: Number(opts.port),
       username: opts.username,
       privateKeyPath: opts.privateKeyPath,
-      passphraseSecretRef,
+      passphraseSecretRef: resolvePassphraseSecretRef(ctx, opts.passphrase),
       remotePath: opts.remotePath,
       remoteFilePattern: opts.remoteFilePattern ?? null,
     });
@@ -68,20 +73,58 @@ program
   });
 
 program
+  .command('transport:create-ssh')
+  .description('Create an SSH transport for a client (remote_dump strategy).')
+  .requiredOption('--client <clientId>')
+  .requiredOption('--name <name>')
+  .requiredOption('--host <host>')
+  .option('--port <port>', 'default 22', '22')
+  .requiredOption('--username <username>')
+  .requiredOption('--private-key-path <path>')
+  .requiredOption('--remote-command <command>', 'command that produces the dump on the remote host')
+  .requiredOption(
+    '--remote-output-path-template <template>',
+    'expected produced-file path, e.g. /tmp/backups/winners_{date:YYYYMMDD_HHmm}.dump'
+  )
+  .option('--remote-cleanup', 'delete the remote file after a successful download', false)
+  .option('--passphrase <passphrase>', 'SSH key passphrase — stored via Windows Credential Manager, never in SQLite')
+  .action((opts) => {
+    const ctx = buildContext();
+    const transport = ctx.transportsRepo.createSsh({
+      clientId: opts.client,
+      name: opts.name,
+      host: opts.host,
+      port: Number(opts.port),
+      username: opts.username,
+      privateKeyPath: opts.privateKeyPath,
+      passphraseSecretRef: resolvePassphraseSecretRef(ctx, opts.passphrase),
+      remoteCommand: opts.remoteCommand,
+      remoteOutputPathTemplate: opts.remoteOutputPathTemplate,
+      remoteCleanup: Boolean(opts.remoteCleanup),
+    });
+    console.log(JSON.stringify(transport, null, 2));
+  });
+
+program
   .command('task:create')
-  .description('Create a fetch_existing backup task.')
+  .description('Create a backup task (fetch_existing or remote_dump, matching the transport\'s type).')
   .requiredOption('--client <clientId>')
   .requiredOption('--transport <transportId>')
   .requiredOption('--name <name>')
+  .option('--strategy <strategy>', 'fetch_existing | remote_dump', 'fetch_existing')
   .option('--db-engine <engine>', 'postgres | mysql | unknown', 'unknown')
   .action((opts) => {
     const ctx = buildContext();
-    const task = ctx.tasksRepo.createFetchExisting({
+    const input = {
       clientId: opts.client,
       transportId: opts.transport,
       name: opts.name,
       dbEngine: opts.dbEngine as DbEngine,
-    });
+    };
+    const task =
+      opts.strategy === 'remote_dump'
+        ? ctx.tasksRepo.createRemoteDump(input)
+        : ctx.tasksRepo.createFetchExisting(input);
     console.log(JSON.stringify(task, null, 2));
   });
 
@@ -136,12 +179,10 @@ program
       return;
     }
 
-    const adapter = createSftpAdapterFromTransport(
-      transport,
-      ctx.secretStore,
-      ctx.knownHostsRepo,
-      confirmHostInteractively
-    );
+    const adapter =
+      transport.type === 'ssh'
+        ? createSshAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, confirmHostInteractively)
+        : createSftpAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, confirmHostInteractively);
     const result = await adapter.testConnection();
     console.log(JSON.stringify(result, null, 2));
     if (!result.ok) process.exitCode = 1;

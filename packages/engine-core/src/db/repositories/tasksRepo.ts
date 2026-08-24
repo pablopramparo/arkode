@@ -47,8 +47,17 @@ export interface CreateFetchExistingTaskInput {
   scheduleTime?: string | null;
 }
 
+export interface CreateRemoteDumpTaskInput {
+  clientId: string;
+  transportId: string;
+  name: string;
+  dbEngine: DbEngine;
+  scheduleTime?: string | null;
+}
+
 export interface TasksRepo {
   createFetchExisting(input: CreateFetchExistingTaskInput): BackupTask;
+  createRemoteDump(input: CreateRemoteDumpTaskInput): BackupTask;
   getById(id: string): BackupTask | null;
   listByClient(clientId: string): BackupTask[];
 }
@@ -56,38 +65,51 @@ export interface TasksRepo {
 export function createTasksRepo(db: Database, transportsRepo: TransportsRepo): TasksRepo {
   const insertStmt = db.prepare(
     `INSERT INTO backup_tasks (id, client_id, strategy, transport_id, name, db_engine)
-     VALUES (@id, @clientId, 'fetch_existing', @transportId, @name, @dbEngine)`
+     VALUES (@id, @clientId, @strategy, @transportId, @name, @dbEngine)`
   );
   const getByIdStmt = db.prepare<[string], BackupTaskRow>('SELECT * FROM backup_tasks WHERE id = ?');
   const listByClientStmt = db.prepare<[string], BackupTaskRow>(
     'SELECT * FROM backup_tasks WHERE client_id = ? ORDER BY name'
   );
 
+  function insertTransportBackedTask(
+    strategy: 'fetch_existing' | 'remote_dump',
+    requiredTransportType: 'sftp' | 'ssh',
+    input: CreateFetchExistingTaskInput | CreateRemoteDumpTaskInput
+  ): BackupTask {
+    // App-level invariant the schema's CHECK can't express across tables:
+    // each strategy requires a specific transport type.
+    const transport = transportsRepo.getById(input.transportId);
+    if (!transport) {
+      throw new Error(`Transport ${input.transportId} not found.`);
+    }
+    if (transport.type !== requiredTransportType) {
+      throw new Error(
+        `${strategy} tasks require a ${requiredTransportType} transport; transport ${input.transportId} is "${transport.type}".`
+      );
+    }
+
+    const id = randomUUID();
+    insertStmt.run({
+      id,
+      clientId: input.clientId,
+      strategy,
+      transportId: input.transportId,
+      name: input.name,
+      dbEngine: input.dbEngine,
+    });
+    const row = getByIdStmt.get(id);
+    if (!row) throw new Error(`Failed to read back created backup task ${id}`);
+    return toDomain(row);
+  }
+
   return {
     createFetchExisting(input) {
-      // App-level invariant the schema's CHECK can't express across tables:
-      // fetch_existing requires an sftp transport specifically.
-      const transport = transportsRepo.getById(input.transportId);
-      if (!transport) {
-        throw new Error(`Transport ${input.transportId} not found.`);
-      }
-      if (transport.type !== 'sftp') {
-        throw new Error(
-          `fetch_existing tasks require an sftp transport; transport ${input.transportId} is "${transport.type}".`
-        );
-      }
+      return insertTransportBackedTask('fetch_existing', 'sftp', input);
+    },
 
-      const id = randomUUID();
-      insertStmt.run({
-        id,
-        clientId: input.clientId,
-        transportId: input.transportId,
-        name: input.name,
-        dbEngine: input.dbEngine,
-      });
-      const row = getByIdStmt.get(id);
-      if (!row) throw new Error(`Failed to read back created backup task ${id}`);
-      return toDomain(row);
+    createRemoteDump(input) {
+      return insertTransportBackedTask('remote_dump', 'ssh', input);
     },
 
     getById(id) {

@@ -1,13 +1,12 @@
 import SftpClient from 'ssh2-sftp-client';
 import { createWriteStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
-import { Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { KnownHostsRepo } from '../db/repositories/knownHostsRepo.js';
 import type { SecretStore } from '../secrets/types.js';
 import type { Transport } from '../types.js';
 import { buildHostVerifier } from './hostKeyVerification.js';
+import { HashingProgressTransform } from './hashingProgressTransform.js';
 import type {
   SftpAdapter,
   SftpTransportConfig,
@@ -16,30 +15,6 @@ import type {
   DownloadOptions,
   ConnectionTestResult,
 } from './types.js';
-
-/** Hashes bytes as they pass through, so downloading and checksumming cost one read, not two. */
-class HashingProgressTransform extends Transform {
-  private readonly hash = createHash('sha256');
-  bytesTransferred = 0;
-
-  constructor(
-    private readonly total: number,
-    private readonly onProgress?: (transferred: number, total: number) => void
-  ) {
-    super();
-  }
-
-  _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
-    this.hash.update(chunk);
-    this.bytesTransferred += chunk.length;
-    this.onProgress?.(this.bytesTransferred, this.total);
-    callback(null, chunk);
-  }
-
-  digestHex(): string {
-    return this.hash.digest('hex');
-  }
-}
 
 export function createSftpAdapter(config: SftpTransportConfig, knownHosts: KnownHostsRepo): SftpAdapter {
   // ssh2-sftp-client's default `error` callback logs low-level socket

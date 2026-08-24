@@ -138,8 +138,13 @@ function resolveExecutor(task: BackupTask, deps: RunBackupTaskDeps): BackupStrat
         deps.onUnknownHost
       );
     }
-    case 'remote_dump':
-      return createRemoteDumpExecutor();
+    case 'remote_dump': {
+      const transport = task.transportId ? deps.transportsRepo.getById(task.transportId) : null;
+      if (!transport) {
+        throw new Error(`Task ${task.id} has strategy remote_dump but no valid transport configured.`);
+      }
+      return createRemoteDumpExecutor(transport, deps.secretStore, deps.knownHostsRepo, deps.onUnknownHost);
+    }
     case 'direct_dump':
       return createDirectDumpExecutor();
   }
