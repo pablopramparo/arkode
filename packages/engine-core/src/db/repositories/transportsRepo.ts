@@ -73,9 +73,27 @@ export interface CreateSshTransportInput {
   knownHostFingerprint?: string | null;
 }
 
+/** `type` is deliberately not editable — changing sftp<->ssh means an entirely different set of required fields (see the table's CHECK constraint); create a new transport instead. */
+export interface UpdateTransportInput {
+  name?: string;
+  host?: string;
+  port?: number;
+  username?: string;
+  privateKeyPath?: string;
+  passphraseSecretRef?: string | null;
+  remotePath?: string;
+  remoteFilePattern?: string | null;
+  remoteCommand?: string;
+  remoteOutputPathTemplate?: string;
+  remoteCleanup?: boolean;
+}
+
 export interface TransportsRepo {
   createSftp(input: CreateSftpTransportInput): Transport;
   createSsh(input: CreateSshTransportInput): Transport;
+  update(id: string, patch: UpdateTransportInput): Transport;
+  deactivate(id: string): void;
+  reactivate(id: string): void;
   getById(id: string): Transport | null;
   listByClient(clientId: string): Transport[];
   updateKnownHostFingerprint(id: string, fingerprint: string): void;
@@ -104,6 +122,20 @@ export function createTransportsRepo(db: Database): TransportsRepo {
   );
   const updateFingerprintStmt = db.prepare(
     `UPDATE transports SET known_host_fingerprint = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
+  );
+  const updateStmt = db.prepare(
+    `UPDATE transports
+     SET name = @name, host = @host, port = @port, username = @username, private_key_path = @privateKeyPath,
+         passphrase_secret_ref = @passphraseSecretRef, remote_path = @remotePath, remote_file_pattern = @remoteFilePattern,
+         remote_command = @remoteCommand, remote_output_path_template = @remoteOutputPathTemplate, remote_cleanup = @remoteCleanup,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE id = @id`
+  );
+  const deactivateStmt = db.prepare(
+    `UPDATE transports SET is_active = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
+  );
+  const reactivateStmt = db.prepare(
+    `UPDATE transports SET is_active = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
   );
 
   return {
@@ -146,6 +178,41 @@ export function createTransportsRepo(db: Database): TransportsRepo {
       const row = getByIdStmt.get(id);
       if (!row) throw new Error(`Failed to read back created transport ${id}`);
       return toDomain(row);
+    },
+
+    update(id, patch) {
+      const current = getByIdStmt.get(id);
+      if (!current) throw new Error(`Transport ${id} not found.`);
+      updateStmt.run({
+        id,
+        name: patch.name ?? current.name,
+        host: patch.host ?? current.host,
+        port: patch.port ?? current.port,
+        username: patch.username ?? current.username,
+        privateKeyPath: patch.privateKeyPath ?? current.private_key_path,
+        passphraseSecretRef: patch.passphraseSecretRef !== undefined ? patch.passphraseSecretRef : current.passphrase_secret_ref,
+        remotePath: patch.remotePath !== undefined ? patch.remotePath : current.remote_path,
+        remoteFilePattern: patch.remoteFilePattern !== undefined ? patch.remoteFilePattern : current.remote_file_pattern,
+        remoteCommand: patch.remoteCommand !== undefined ? patch.remoteCommand : current.remote_command,
+        remoteOutputPathTemplate:
+          patch.remoteOutputPathTemplate !== undefined ? patch.remoteOutputPathTemplate : current.remote_output_path_template,
+        remoteCleanup: patch.remoteCleanup !== undefined ? (patch.remoteCleanup ? 1 : 0) : current.remote_cleanup,
+      });
+      const row = getByIdStmt.get(id);
+      if (!row) throw new Error(`Failed to read back updated transport ${id}`);
+      return toDomain(row);
+    },
+
+    deactivate(id) {
+      const current = getByIdStmt.get(id);
+      if (!current) throw new Error(`Transport ${id} not found.`);
+      deactivateStmt.run(id);
+    },
+
+    reactivate(id) {
+      const current = getByIdStmt.get(id);
+      if (!current) throw new Error(`Transport ${id} not found.`);
+      reactivateStmt.run(id);
     },
 
     getById(id) {

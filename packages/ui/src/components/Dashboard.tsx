@@ -5,6 +5,7 @@ import { formatAge, formatSize, ageInHours } from '../lib/format';
 import { StatusChip } from './StatusChip';
 import { StatCard } from './StatCard';
 import { AlertTriangleIcon, CheckCircleIcon, ClipboardIcon, UsersIcon } from './icons';
+import { primaryPillStyle } from '../lib/pillStyles';
 
 const POLL_INTERVAL_MS = 20_000;
 /** A daily backup task without a fresh file past this age is worth flagging, even if the last *attempt* technically succeeded a while ago. */
@@ -24,12 +25,6 @@ interface RowActionState {
   actionError?: string;
   errorExpanded?: boolean;
 }
-
-const primaryPillStyle: React.CSSProperties = {
-  background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
-  color: 'white',
-  border: 0,
-};
 
 export function Dashboard() {
   const [rows, setRows] = useState<DashboardRow[] | null>(null);

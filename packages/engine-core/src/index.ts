@@ -8,10 +8,19 @@ export { createClientsRepo } from './db/repositories/clientsRepo.js';
 export type { ClientsRepo, CreateClientInput, UpdateClientInput } from './db/repositories/clientsRepo.js';
 
 export { createTransportsRepo } from './db/repositories/transportsRepo.js';
-export type { TransportsRepo, CreateSftpTransportInput, CreateSshTransportInput } from './db/repositories/transportsRepo.js';
+export type {
+  TransportsRepo,
+  CreateSftpTransportInput,
+  CreateSshTransportInput,
+  UpdateTransportInput,
+} from './db/repositories/transportsRepo.js';
 
 export { createDatabaseConnectionsRepo } from './db/repositories/databaseConnectionsRepo.js';
-export type { DatabaseConnectionsRepo, CreateDatabaseConnectionInput } from './db/repositories/databaseConnectionsRepo.js';
+export type {
+  DatabaseConnectionsRepo,
+  CreateDatabaseConnectionInput,
+  UpdateDatabaseConnectionInput,
+} from './db/repositories/databaseConnectionsRepo.js';
 
 export { createTasksRepo } from './db/repositories/tasksRepo.js';
 export type {

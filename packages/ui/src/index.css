@@ -1,5 +1,23 @@
 @import "@heroui/styles";
 
+/*
+ * HeroUI's own dark theme is near-neutral gray (hue ~286, chroma 0.005-0.006
+ * — barely a tint). Overriding with a real blue hue (~258) and higher chroma
+ * here, unlayered, so it wins over HeroUI's @layer base rule regardless of
+ * import order — see https://www.w3.org/TR/css-cascade-5/#layering.
+ */
+:root.dark,
+:root[data-theme="dark"] {
+  --background: oklch(16% 0.03 258);
+  --surface: oklch(20% 0.032 258);
+  --surface-secondary: oklch(23% 0.028 258);
+  --surface-tertiary: oklch(26% 0.024 258);
+  --overlay: oklch(20% 0.032 258);
+  --border: oklch(29% 0.032 258);
+  --separator: oklch(25% 0.028 258);
+  --field-background: oklch(20% 0.032 258);
+}
+
 body {
   margin: 0;
   min-height: 100vh;

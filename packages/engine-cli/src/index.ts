@@ -208,6 +208,104 @@ program
   });
 
 program
+  .command('transport:update')
+  .description("Update a transport's fields (not its type — create a new one to switch sftp/ssh). Only the flags you pass are changed.")
+  .argument('<transportId>')
+  .option('--name <name>')
+  .option('--host <host>')
+  .option('--port <port>')
+  .option('--username <username>')
+  .option('--private-key-path <path>')
+  .option('--passphrase <passphrase>', 'set a new SSH key passphrase — omit to leave the existing one untouched')
+  .option('--remote-path <remotePath>', 'sftp only')
+  .option('--remote-file-pattern <regex>', 'sftp only')
+  .option('--remote-command <command>', 'ssh only')
+  .option('--remote-output-path-template <template>', 'ssh only')
+  .option('--remote-cleanup <bool>', 'ssh only: true|false')
+  .action((transportId: string, opts) => {
+    const ctx = buildContext();
+    const transport = ctx.transportsRepo.update(transportId, {
+      name: opts.name,
+      host: opts.host,
+      port: opts.port != null ? Number(opts.port) : undefined,
+      username: opts.username,
+      privateKeyPath: opts.privateKeyPath,
+      passphraseSecretRef: opts.passphrase ? resolvePassphraseSecretRef(ctx, opts.passphrase) : undefined,
+      remotePath: opts.remotePath,
+      remoteFilePattern: opts.remoteFilePattern,
+      remoteCommand: opts.remoteCommand,
+      remoteOutputPathTemplate: opts.remoteOutputPathTemplate,
+      remoteCleanup: opts.remoteCleanup != null ? opts.remoteCleanup === 'true' : undefined,
+    });
+    console.log(JSON.stringify(transport, null, 2));
+  });
+
+program
+  .command('transport:deactivate')
+  .description('Deactivate a transport. Tasks referencing it will fail cleanly at run time rather than being deleted.')
+  .argument('<transportId>')
+  .action((transportId: string) => {
+    const ctx = buildContext();
+    ctx.transportsRepo.deactivate(transportId);
+    console.log(`Deactivated transport ${transportId}.`);
+  });
+
+program
+  .command('transport:reactivate')
+  .description('Reactivate a previously deactivated transport.')
+  .argument('<transportId>')
+  .action((transportId: string) => {
+    const ctx = buildContext();
+    ctx.transportsRepo.reactivate(transportId);
+    console.log(`Reactivated transport ${transportId}.`);
+  });
+
+program
+  .command('database-connection:update')
+  .description("Update a database connection's fields (not its engine — create a new one to switch postgres/mysql/mariadb). Only the flags you pass are changed.")
+  .argument('<databaseConnectionId>')
+  .option('--name <name>')
+  .option('--host <host>')
+  .option('--port <port>')
+  .option('--database <databaseName>')
+  .option('--username <username>')
+  .option('--password <password>', 'set a new DB password — omit to leave the existing one untouched')
+  .option('--ssl-mode <sslMode>', 'disable | require | verify-full')
+  .action((databaseConnectionId: string, opts) => {
+    const ctx = buildContext();
+    const connection = ctx.databaseConnectionsRepo.update(databaseConnectionId, {
+      name: opts.name,
+      host: opts.host,
+      port: opts.port != null ? Number(opts.port) : undefined,
+      databaseName: opts.database,
+      username: opts.username,
+      passwordSecretRef: opts.password ? resolveSecretRef(ctx, opts.password, 'databaseConnection:password') : undefined,
+      sslMode: opts.sslMode,
+    });
+    console.log(JSON.stringify(connection, null, 2));
+  });
+
+program
+  .command('database-connection:deactivate')
+  .description('Deactivate a database connection. Tasks referencing it will fail cleanly at run time rather than being deleted.')
+  .argument('<databaseConnectionId>')
+  .action((databaseConnectionId: string) => {
+    const ctx = buildContext();
+    ctx.databaseConnectionsRepo.deactivate(databaseConnectionId);
+    console.log(`Deactivated database connection ${databaseConnectionId}.`);
+  });
+
+program
+  .command('database-connection:reactivate')
+  .description('Reactivate a previously deactivated database connection.')
+  .argument('<databaseConnectionId>')
+  .action((databaseConnectionId: string) => {
+    const ctx = buildContext();
+    ctx.databaseConnectionsRepo.reactivate(databaseConnectionId);
+    console.log(`Reactivated database connection ${databaseConnectionId}.`);
+  });
+
+program
   .command('task:create')
   .description('Create a backup task (strategy determined by --strategy, matching the transport/database-connection type).')
   .requiredOption('--client <clientId>')
@@ -721,6 +819,186 @@ program
           const body = await readJsonBody(req);
           const client = ctx.clientsRepo.update(clientIdMatch[1], body);
           sendJson(res, 200, client);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/connections') {
+        const includeInactive = url.searchParams.get('includeInactive') === 'true';
+        const clients = ctx.clientsRepo.listActive();
+        const transports = clients.flatMap((client) =>
+          ctx.transportsRepo
+            .listByClient(client.id)
+            .filter((t) => includeInactive || t.isActive)
+            .map((t) => ({ ...t, clientName: client.name }))
+        );
+        const databaseConnections = clients.flatMap((client) =>
+          ctx.databaseConnectionsRepo
+            .listByClient(client.id)
+            .filter((d) => includeInactive || d.isActive)
+            .map((d) => ({ ...d, clientName: client.name }))
+        );
+        sendJson(res, 200, { clients: clients.map((c) => ({ id: c.id, name: c.name })), transports, databaseConnections });
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/transports') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.clientId || !body.name || !body.host || !body.username || !body.privateKeyPath) {
+            sendJson(res, 400, { error: 'clientId, name, host, username, and privateKeyPath are required.' });
+            return;
+          }
+          const passphraseSecretRef = resolvePassphraseSecretRef(ctx, body.passphrase);
+          let transport;
+          if (body.type === 'ssh') {
+            if (!body.remoteCommand || !body.remoteOutputPathTemplate) {
+              sendJson(res, 400, { error: 'remoteCommand and remoteOutputPathTemplate are required for an ssh transport.' });
+              return;
+            }
+            transport = ctx.transportsRepo.createSsh({
+              clientId: body.clientId,
+              name: body.name,
+              host: body.host,
+              port: body.port,
+              username: body.username,
+              privateKeyPath: body.privateKeyPath,
+              passphraseSecretRef,
+              remoteCommand: body.remoteCommand,
+              remoteOutputPathTemplate: body.remoteOutputPathTemplate,
+              remoteCleanup: Boolean(body.remoteCleanup),
+            });
+          } else {
+            if (!body.remotePath) {
+              sendJson(res, 400, { error: 'remotePath is required for an sftp transport.' });
+              return;
+            }
+            transport = ctx.transportsRepo.createSftp({
+              clientId: body.clientId,
+              name: body.name,
+              host: body.host,
+              port: body.port,
+              username: body.username,
+              privateKeyPath: body.privateKeyPath,
+              passphraseSecretRef,
+              remotePath: body.remotePath,
+              remoteFilePattern: body.remoteFilePattern ?? null,
+            });
+          }
+          sendJson(res, 201, transport);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const transportSetActiveMatch = req.method === 'POST' && pathname.match(/^\/transports\/([^/]+)\/(deactivate|reactivate)$/);
+      if (transportSetActiveMatch) {
+        try {
+          const [, transportId, action] = transportSetActiveMatch;
+          if (action === 'deactivate') ctx.transportsRepo.deactivate(transportId);
+          else ctx.transportsRepo.reactivate(transportId);
+          sendJson(res, 200, { ok: true });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const transportTestMatch = req.method === 'POST' && pathname.match(/^\/transports\/([^/]+)\/test$/);
+      if (transportTestMatch) {
+        const transport = ctx.transportsRepo.getById(transportTestMatch[1]);
+        if (!transport) {
+          sendJson(res, 404, { error: `Transport ${transportTestMatch[1]} not found.` });
+          return;
+        }
+        try {
+          const result = await testTransportConnection(ctx, transport);
+          sendJson(res, result.ok ? 200 : 502, result);
+        } catch (err) {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      const transportIdMatch = req.method === 'PATCH' && pathname.match(/^\/transports\/([^/]+)$/);
+      if (transportIdMatch) {
+        try {
+          const { passphrase, ...rest } = await readJsonBody(req);
+          const patch: Record<string, unknown> = { ...rest };
+          if (passphrase) patch.passphraseSecretRef = resolvePassphraseSecretRef(ctx, passphrase);
+          const transport = ctx.transportsRepo.update(transportIdMatch[1], patch);
+          sendJson(res, 200, transport);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/database-connections') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.clientId || !body.name || !body.engine || !body.host || !body.port || !body.databaseName || !body.username) {
+            sendJson(res, 400, { error: 'clientId, name, engine, host, port, databaseName, and username are required.' });
+            return;
+          }
+          const connection = ctx.databaseConnectionsRepo.create({
+            clientId: body.clientId,
+            name: body.name,
+            engine: body.engine,
+            host: body.host,
+            port: body.port,
+            databaseName: body.databaseName,
+            username: body.username,
+            passwordSecretRef: resolveSecretRef(ctx, body.password, 'databaseConnection:password'),
+            sslMode: body.sslMode ?? null,
+          });
+          sendJson(res, 201, connection);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const dbConnSetActiveMatch = req.method === 'POST' && pathname.match(/^\/database-connections\/([^/]+)\/(deactivate|reactivate)$/);
+      if (dbConnSetActiveMatch) {
+        try {
+          const [, connectionId, action] = dbConnSetActiveMatch;
+          if (action === 'deactivate') ctx.databaseConnectionsRepo.deactivate(connectionId);
+          else ctx.databaseConnectionsRepo.reactivate(connectionId);
+          sendJson(res, 200, { ok: true });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const dbConnTestMatch = req.method === 'POST' && pathname.match(/^\/database-connections\/([^/]+)\/test$/);
+      if (dbConnTestMatch) {
+        const connection = ctx.databaseConnectionsRepo.getById(dbConnTestMatch[1]);
+        if (!connection) {
+          sendJson(res, 404, { error: `Database connection ${dbConnTestMatch[1]} not found.` });
+          return;
+        }
+        try {
+          const result = await testDatabaseConnection(connection, ctx.secretStore);
+          sendJson(res, result.ok ? 200 : 502, result);
+        } catch (err) {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      const dbConnIdMatch = req.method === 'PATCH' && pathname.match(/^\/database-connections\/([^/]+)$/);
+      if (dbConnIdMatch) {
+        try {
+          const { password, ...rest } = await readJsonBody(req);
+          const patch: Record<string, unknown> = { ...rest };
+          if (password) patch.passwordSecretRef = resolveSecretRef(ctx, password, 'databaseConnection:password');
+          const connection = ctx.databaseConnectionsRepo.update(dbConnIdMatch[1], patch);
+          sendJson(res, 200, connection);
         } catch (err) {
           sendRepoError(res, err);
         }

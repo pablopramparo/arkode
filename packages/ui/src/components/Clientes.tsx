@@ -11,6 +11,7 @@ import {
 import { formatRetention } from '../lib/format';
 import { Modal } from './Modal';
 import { Switch } from './Switch';
+import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 
 interface ClientFormValues {
   name: string;
@@ -49,18 +50,6 @@ const inputStyle: React.CSSProperties = {
   padding: '6px 10px',
   color: 'var(--foreground)',
   width: '100%',
-};
-
-const primaryPillStyle: React.CSSProperties = {
-  background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
-  color: 'white',
-  border: 0,
-};
-
-const dangerPillStyle: React.CSSProperties = {
-  color: '#f87171',
-  backgroundColor: 'color-mix(in oklab, #ef4444 12%, transparent)',
-  border: 0,
 };
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

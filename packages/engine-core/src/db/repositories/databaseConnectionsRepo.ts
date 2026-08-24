@@ -48,12 +48,22 @@ export interface CreateDatabaseConnectionInput {
   sslMode?: string | null;
 }
 
-/**
- * CRUD only — unused until the direct_dump strategy is implemented. Defined
- * now so that increment doesn't need a schema/repository-layer change.
- */
+/** `engine` is deliberately not editable — create a new connection instead of switching postgres/mysql/mariadb on an existing one. */
+export interface UpdateDatabaseConnectionInput {
+  name?: string;
+  host?: string;
+  port?: number;
+  databaseName?: string;
+  username?: string;
+  passwordSecretRef?: string | null;
+  sslMode?: string | null;
+}
+
 export interface DatabaseConnectionsRepo {
   create(input: CreateDatabaseConnectionInput): DatabaseConnection;
+  update(id: string, patch: UpdateDatabaseConnectionInput): DatabaseConnection;
+  deactivate(id: string): void;
+  reactivate(id: string): void;
   getById(id: string): DatabaseConnection | null;
   listByClient(clientId: string): DatabaseConnection[];
 }
@@ -68,6 +78,19 @@ export function createDatabaseConnectionsRepo(db: Database): DatabaseConnections
   const getByIdStmt = db.prepare<[string], DatabaseConnectionRow>('SELECT * FROM database_connections WHERE id = ?');
   const listByClientStmt = db.prepare<[string], DatabaseConnectionRow>(
     'SELECT * FROM database_connections WHERE client_id = ? ORDER BY name'
+  );
+  const updateStmt = db.prepare(
+    `UPDATE database_connections
+     SET name = @name, host = @host, port = @port, database_name = @databaseName, username = @username,
+         password_secret_ref = @passwordSecretRef, ssl_mode = @sslMode,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE id = @id`
+  );
+  const deactivateStmt = db.prepare(
+    `UPDATE database_connections SET is_active = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
+  );
+  const reactivateStmt = db.prepare(
+    `UPDATE database_connections SET is_active = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
   );
 
   return {
@@ -88,6 +111,36 @@ export function createDatabaseConnectionsRepo(db: Database): DatabaseConnections
       const row = getByIdStmt.get(id);
       if (!row) throw new Error(`Failed to read back created database connection ${id}`);
       return toDomain(row);
+    },
+
+    update(id, patch) {
+      const current = getByIdStmt.get(id);
+      if (!current) throw new Error(`Database connection ${id} not found.`);
+      updateStmt.run({
+        id,
+        name: patch.name ?? current.name,
+        host: patch.host ?? current.host,
+        port: patch.port ?? current.port,
+        databaseName: patch.databaseName ?? current.database_name,
+        username: patch.username ?? current.username,
+        passwordSecretRef: patch.passwordSecretRef !== undefined ? patch.passwordSecretRef : current.password_secret_ref,
+        sslMode: patch.sslMode !== undefined ? patch.sslMode : current.ssl_mode,
+      });
+      const row = getByIdStmt.get(id);
+      if (!row) throw new Error(`Failed to read back updated database connection ${id}`);
+      return toDomain(row);
+    },
+
+    deactivate(id) {
+      const current = getByIdStmt.get(id);
+      if (!current) throw new Error(`Database connection ${id} not found.`);
+      deactivateStmt.run(id);
+    },
+
+    reactivate(id) {
+      const current = getByIdStmt.get(id);
+      if (!current) throw new Error(`Database connection ${id} not found.`);
+      reactivateStmt.run(id);
     },
 
     getById(id) {
