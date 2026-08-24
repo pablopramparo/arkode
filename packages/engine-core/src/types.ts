@@ -103,6 +103,17 @@ export interface BackupRun {
   createdAt: string;
 }
 
+export interface RetentionDeletion {
+  id: string;
+  taskId: string;
+  deletedBackupRunId: string;
+  triggeredByRunId: string | null;
+  localPath: string;
+  sizeBytes: number | null;
+  reason: string;
+  deletedAt: string;
+}
+
 export interface KnownHost {
   id: string;
   host: string;

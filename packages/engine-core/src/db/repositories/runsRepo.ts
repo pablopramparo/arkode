@@ -77,6 +77,8 @@ export interface RunsRepo {
   getLatestByTask(taskId: string): BackupRun | null;
   /** Signatures of Success runs for a task, used to avoid redundant re-downloads. */
   listSuccessfulFileSignatures(taskId: string): SuccessfulFileSignature[];
+  /** Success runs for a task, newest first — the population retention operates over. */
+  listSuccessfulRuns(taskId: string): BackupRun[];
   /** In-progress runs (Running/Producing/Validating) whose recorded pid may no longer be alive. */
   listInProgress(taskId?: string): BackupRun[];
 }
@@ -117,6 +119,13 @@ export function createRunsRepo(db: Database): RunsRepo {
   const successfulSignaturesStmt = db.prepare<[string], { remote_file_name: string; size_bytes: number }>(
     `SELECT remote_file_name, size_bytes FROM backup_runs
      WHERE task_id = ? AND status = 'Success' AND remote_file_name IS NOT NULL`
+  );
+  // local_path IS NOT NULL excludes "no new backup needed" no-op Success
+  // runs (fetch_existing's NoNewDumpAvailableError path) — those don't
+  // correspond to an actual file on disk and must never occupy a "kept
+  // backup" slot for retention purposes.
+  const successfulRunsStmt = db.prepare<[string], BackupRunRow>(
+    `SELECT * FROM backup_runs WHERE task_id = ? AND status = 'Success' AND local_path IS NOT NULL ORDER BY started_at DESC`
   );
   const inProgressStmt = db.prepare<[string], BackupRunRow>(
     `SELECT * FROM backup_runs WHERE task_id = ? AND status IN ('Running','Producing','Validating')`
@@ -181,6 +190,10 @@ export function createRunsRepo(db: Database): RunsRepo {
       return successfulSignaturesStmt
         .all(taskId)
         .map((row) => ({ remoteFileName: row.remote_file_name, sizeBytes: row.size_bytes }));
+    },
+
+    listSuccessfulRuns(taskId) {
+      return successfulRunsStmt.all(taskId).map(toDomain);
     },
 
     listInProgress(taskId) {

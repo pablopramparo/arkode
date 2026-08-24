@@ -9,6 +9,7 @@ import type { DatabaseConnectionsRepo } from '../db/repositories/databaseConnect
 import type { RunsRepo } from '../db/repositories/runsRepo.js';
 import type { LogEventsRepo } from '../db/repositories/logEventsRepo.js';
 import type { KnownHostsRepo } from '../db/repositories/knownHostsRepo.js';
+import type { RetentionDeletionsRepo } from '../db/repositories/retentionDeletionsRepo.js';
 import type { SecretStore } from '../secrets/types.js';
 import { NoNewDumpAvailableError, type BackupStrategyExecutor } from '../strategies/types.js';
 import { createFetchExistingExecutor } from '../strategies/fetchExistingExecutor.js';
@@ -17,7 +18,8 @@ import { createDirectDumpExecutor } from '../strategies/directDumpExecutor.js';
 import type { DumpValidator } from '../validators/types.js';
 import { createGenericValidator } from '../validators/genericValidator.js';
 import { createPostgresCustomValidator } from '../validators/postgresCustomValidator.js';
-import { createRunLogger } from '../logging/logger.js';
+import { createRunLogger, type RunLogger } from '../logging/logger.js';
+import { applyRetention, resolveRetentionPolicy } from '../retention/applyRetention.js';
 
 /** Roughly a day — a .part file older than this with no live owner is almost certainly orphaned. */
 const ORPHANED_PART_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -29,6 +31,7 @@ export interface RunBackupTaskDeps {
   runsRepo: RunsRepo;
   logEventsRepo: LogEventsRepo;
   knownHostsRepo: KnownHostsRepo;
+  retentionDeletionsRepo: RetentionDeletionsRepo;
   secretStore: SecretStore;
   onUnknownHost?: (presented: { keyType: string; fingerprintSha256: string }) => Promise<boolean>;
 }
@@ -118,6 +121,32 @@ function pickValidators(dbEngine: DbEngine): DumpValidator[] {
   const validators: DumpValidator[] = [createGenericValidator()];
   if (dbEngine === 'postgres') validators.push(createPostgresCustomValidator());
   return validators;
+}
+
+/**
+ * Applies retention after every completed attempt, regardless of this run's
+ * own outcome — an old Success backup can be past its policy even if today's
+ * run just failed. Best-effort: a retention failure is logged, never
+ * allowed to override this run's own already-recorded status.
+ */
+async function applyRetentionSafely(
+  task: BackupTask,
+  client: Client,
+  deps: RunBackupTaskDeps,
+  logger: RunLogger,
+  triggeredByRunId: string
+): Promise<void> {
+  try {
+    const policy = resolveRetentionPolicy(client, task);
+    await applyRetention(task, policy, {
+      runsRepo: deps.runsRepo,
+      retentionDeletionsRepo: deps.retentionDeletionsRepo,
+      logger,
+      triggeredByRunId,
+    });
+  } catch (err) {
+    logger.log('warn', 'retention', `Retention check failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /**
@@ -241,6 +270,7 @@ export async function runBackupTask(task: BackupTask, deps: RunBackupTaskDeps): 
       logger.log('info', 'result', `Backup succeeded: ${finalPath} (sha256 ${checksumSha256}).`);
     }
 
+    await applyRetentionSafely(task, client, deps, logger, run.id);
     const finished = deps.runsRepo.getById(run.id);
     if (!finished) throw new Error(`Run ${run.id} vanished after completion — this should never happen.`);
     return { run: finished, skipped: false };
@@ -251,6 +281,7 @@ export async function runBackupTask(task: BackupTask, deps: RunBackupTaskDeps): 
       // successful no-op, not an error a dashboard should flag red.
       deps.runsRepo.markFinished(run.id, 'Success');
       logger.log('info', 'result', `No new backup needed: ${err.message}`);
+      await applyRetentionSafely(task, client, deps, logger, run.id);
       const finished = deps.runsRepo.getById(run.id);
       if (!finished) throw err;
       return { run: finished, skipped: true };
@@ -260,6 +291,7 @@ export async function runBackupTask(task: BackupTask, deps: RunBackupTaskDeps): 
     const stack = err instanceof Error ? err.stack : undefined;
     deps.runsRepo.markFinished(run.id, 'Failed', { errorMessage: message, errorStack: stack });
     logger.log('error', 'result', `Run failed: ${message}`);
+    await applyRetentionSafely(task, client, deps, logger, run.id);
     const finished = deps.runsRepo.getById(run.id);
     if (!finished) throw err;
     return { run: finished, skipped: false };

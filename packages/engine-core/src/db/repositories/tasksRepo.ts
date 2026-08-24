@@ -46,6 +46,8 @@ export interface CreateFetchExistingTaskInput {
   name: string;
   dbEngine: DbEngine;
   scheduleTime?: string | null;
+  retentionCount?: number | null;
+  retentionDays?: number | null;
 }
 
 export interface CreateRemoteDumpTaskInput {
@@ -54,6 +56,8 @@ export interface CreateRemoteDumpTaskInput {
   name: string;
   dbEngine: DbEngine;
   scheduleTime?: string | null;
+  retentionCount?: number | null;
+  retentionDays?: number | null;
 }
 
 export interface CreateDirectDumpTaskInput {
@@ -62,6 +66,8 @@ export interface CreateDirectDumpTaskInput {
   name: string;
   dbEngine: DbEngine;
   scheduleTime?: string | null;
+  retentionCount?: number | null;
+  retentionDays?: number | null;
 }
 
 export interface TasksRepo {
@@ -78,8 +84,10 @@ export function createTasksRepo(
   databaseConnectionsRepo: DatabaseConnectionsRepo
 ): TasksRepo {
   const insertStmt = db.prepare(
-    `INSERT INTO backup_tasks (id, client_id, strategy, transport_id, database_connection_id, name, db_engine)
-     VALUES (@id, @clientId, @strategy, @transportId, @databaseConnectionId, @name, @dbEngine)`
+    `INSERT INTO backup_tasks
+       (id, client_id, strategy, transport_id, database_connection_id, name, db_engine, retention_count, retention_days)
+     VALUES
+       (@id, @clientId, @strategy, @transportId, @databaseConnectionId, @name, @dbEngine, @retentionCount, @retentionDays)`
   );
   const getByIdStmt = db.prepare<[string], BackupTaskRow>('SELECT * FROM backup_tasks WHERE id = ?');
   const listByClientStmt = db.prepare<[string], BackupTaskRow>(
@@ -88,7 +96,13 @@ export function createTasksRepo(
 
   function insertTask(
     strategy: BackupTask['strategy'],
-    input: { clientId: string; name: string; dbEngine: DbEngine },
+    input: {
+      clientId: string;
+      name: string;
+      dbEngine: DbEngine;
+      retentionCount?: number | null;
+      retentionDays?: number | null;
+    },
     transportId: string | null,
     databaseConnectionId: string | null
   ): BackupTask {
@@ -101,6 +115,8 @@ export function createTasksRepo(
       databaseConnectionId,
       name: input.name,
       dbEngine: input.dbEngine,
+      retentionCount: input.retentionCount ?? null,
+      retentionDays: input.retentionDays ?? null,
     });
     const row = getByIdStmt.get(id);
     if (!row) throw new Error(`Failed to read back created backup task ${id}`);

@@ -8,6 +8,7 @@ import {
   createRunsRepo,
   createKnownHostsRepo,
   createLogEventsRepo,
+  createRetentionDeletionsRepo,
   createSettingsRepo,
   WindowsCredentialManagerStore,
 } from 'engine-core';
@@ -23,6 +24,7 @@ export function buildContext() {
   const runsRepo = createRunsRepo(db);
   const knownHostsRepo = createKnownHostsRepo(db);
   const logEventsRepo = createLogEventsRepo(db);
+  const retentionDeletionsRepo = createRetentionDeletionsRepo(db);
   const settingsRepo = createSettingsRepo(db);
   const secretStore = new WindowsCredentialManagerStore();
 
@@ -35,6 +37,7 @@ export function buildContext() {
     runsRepo,
     knownHostsRepo,
     logEventsRepo,
+    retentionDeletionsRepo,
     settingsRepo,
     secretStore,
   };

@@ -24,6 +24,9 @@ export type {
 export { createRunsRepo } from './db/repositories/runsRepo.js';
 export type { RunsRepo, CreateRunInput, SuccessfulFileSignature } from './db/repositories/runsRepo.js';
 
+export { createRetentionDeletionsRepo } from './db/repositories/retentionDeletionsRepo.js';
+export type { RetentionDeletionsRepo, CreateRetentionDeletionInput } from './db/repositories/retentionDeletionsRepo.js';
+
 export { createKnownHostsRepo } from './db/repositories/knownHostsRepo.js';
 export type { KnownHostsRepo } from './db/repositories/knownHostsRepo.js';
 
@@ -57,6 +60,9 @@ export { createPostgresCustomValidator } from './validators/postgresCustomValida
 
 export { createRunLogger } from './logging/logger.js';
 export type { RunLogger } from './logging/logger.js';
+
+export { applyRetention, resolveRetentionPolicy } from './retention/applyRetention.js';
+export type { RetentionPolicy, ApplyRetentionDeps } from './retention/applyRetention.js';
 
 export { runBackupTask } from './orchestrator/runBackupTask.js';
 export type { RunBackupTaskDeps, RunBackupTaskResult } from './orchestrator/runBackupTask.js';

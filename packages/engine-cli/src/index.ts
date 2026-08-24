@@ -27,12 +27,16 @@ program
   .requiredOption('--name <name>')
   .requiredOption('--local-base-path <path>')
   .option('--description <description>')
+  .option('--retention-count <n>', 'default retention policy for this client\'s tasks: keep the last N Success backups')
+  .option('--retention-days <n>', 'default retention policy for this client\'s tasks: keep backups from the last N days')
   .action((opts) => {
     const ctx = buildContext();
     const client = ctx.clientsRepo.create({
       name: opts.name,
       description: opts.description ?? null,
       localBasePath: opts.localBasePath,
+      retentionCount: opts.retentionCount != null ? Number(opts.retentionCount) : null,
+      retentionDays: opts.retentionDays != null ? Number(opts.retentionDays) : null,
     });
     console.log(JSON.stringify(client, null, 2));
   });
@@ -146,9 +150,13 @@ program
   .option('--transport <transportId>', 'required for fetch_existing/remote_dump')
   .option('--database-connection <databaseConnectionId>', 'required for direct_dump')
   .option('--db-engine <engine>', 'postgres | mysql | unknown', 'unknown')
+  .option('--retention-count <n>', 'override the client default: keep the last N Success backups for this task')
+  .option('--retention-days <n>', 'override the client default: keep backups from the last N days for this task')
   .action((opts) => {
     const ctx = buildContext();
     const dbEngine = opts.dbEngine as DbEngine;
+    const retentionCount = opts.retentionCount != null ? Number(opts.retentionCount) : null;
+    const retentionDays = opts.retentionDays != null ? Number(opts.retentionDays) : null;
 
     if (opts.strategy === 'direct_dump') {
       if (!opts.databaseConnection) {
@@ -161,6 +169,8 @@ program
         databaseConnectionId: opts.databaseConnection,
         name: opts.name,
         dbEngine,
+        retentionCount,
+        retentionDays,
       });
       console.log(JSON.stringify(task, null, 2));
       return;
@@ -171,7 +181,7 @@ program
       process.exitCode = 1;
       return;
     }
-    const input = { clientId: opts.client, transportId: opts.transport, name: opts.name, dbEngine };
+    const input = { clientId: opts.client, transportId: opts.transport, name: opts.name, dbEngine, retentionCount, retentionDays };
     const task =
       opts.strategy === 'remote_dump' ? ctx.tasksRepo.createRemoteDump(input) : ctx.tasksRepo.createFetchExisting(input);
     console.log(JSON.stringify(task, null, 2));
@@ -197,6 +207,7 @@ program
       runsRepo: ctx.runsRepo,
       logEventsRepo: ctx.logEventsRepo,
       knownHostsRepo: ctx.knownHostsRepo,
+      retentionDeletionsRepo: ctx.retentionDeletionsRepo,
       secretStore: ctx.secretStore,
       onUnknownHost: confirmHostInteractively,
     });
@@ -240,6 +251,16 @@ program
     const result = await adapter.testConnection();
     console.log(JSON.stringify(result, null, 2));
     if (!result.ok) process.exitCode = 1;
+  });
+
+program
+  .command('retention:history')
+  .description('List backups retention has deleted for a task.')
+  .argument('<taskId>')
+  .action((taskId: string) => {
+    const ctx = buildContext();
+    const deletions = ctx.retentionDeletionsRepo.listByTask(taskId);
+    console.log(JSON.stringify(deletions, null, 2));
   });
 
 program
