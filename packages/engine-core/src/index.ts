@@ -42,7 +42,7 @@ export { createKnownHostsRepo } from './db/repositories/knownHostsRepo.js';
 export type { KnownHostsRepo } from './db/repositories/knownHostsRepo.js';
 
 export { createLogEventsRepo } from './db/repositories/logEventsRepo.js';
-export type { LogEventsRepo, LogEventLevel } from './db/repositories/logEventsRepo.js';
+export type { LogEventsRepo, LogEvent, LogEventLevel, ListLogEventsOptions } from './db/repositories/logEventsRepo.js';
 
 export { createSettingsRepo } from './db/repositories/settingsRepo.js';
 export type { SettingsRepo } from './db/repositories/settingsRepo.js';

@@ -676,6 +676,30 @@ program
   });
 
 program
+  .command('log:list')
+  .description('List log_events (any run), newest first, paginated and filterable — the same data backing the UI\'s Logs screen.')
+  .option('--search <text>', 'substring match against the message')
+  .option('--step <step>', 'e.g. connect | produce | download | validate | result | retention | recovery')
+  .option('--level <level>', 'debug | info | warn | error')
+  .option('--from <isoDate>', 'inclusive lower bound on created_at')
+  .option('--to <isoDate>', 'inclusive upper bound on created_at')
+  .option('--limit <n>', 'default 50', '50')
+  .option('--offset <n>', 'default 0', '0')
+  .action((opts) => {
+    const ctx = buildContext();
+    const result = ctx.logEventsRepo.listRecent({
+      search: opts.search,
+      step: opts.step,
+      level: opts.level,
+      from: opts.from,
+      to: opts.to,
+      limit: Number(opts.limit),
+      offset: Number(opts.offset),
+    });
+    console.log(JSON.stringify(result, null, 2));
+  });
+
+program
   .command('config:export')
   .description('Export one, several, or all clients\' configuration to JSON. Never includes secrets (SSH passphrases, DB passwords) — see config:import.')
   .option('--client <clientId>', 'repeatable: export just this client', (value, previous: string[]) => [...previous, value], [] as string[])
@@ -1086,6 +1110,36 @@ program
           return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null };
         });
         sendJson(res, 200, runs);
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/logs') {
+        const limitParam = url.searchParams.get('limit');
+        const offsetParam = url.searchParams.get('offset');
+        const { events, total } = ctx.logEventsRepo.listRecent({
+          search: url.searchParams.get('search') ?? undefined,
+          step: url.searchParams.get('step') ?? undefined,
+          level: (url.searchParams.get('level') as any) ?? undefined,
+          from: url.searchParams.get('from') ?? undefined,
+          to: url.searchParams.get('to') ?? undefined,
+          limit: limitParam ? Number(limitParam) : undefined,
+          offset: offsetParam ? Number(offsetParam) : undefined,
+        });
+        // A page of log lines often repeats the same run_id many times (every step of one run) — cache the client/task lookup per run instead of re-querying per line.
+        const runNameCache = new Map<string, { clientName: string | null; taskName: string | null }>();
+        function resolveRunNames(runId: string | null) {
+          if (!runId) return { clientName: null, taskName: null };
+          const cached = runNameCache.get(runId);
+          if (cached) return cached;
+          const run = ctx.runsRepo.getById(runId);
+          const client = run ? ctx.clientsRepo.getById(run.clientId) : null;
+          const task = run ? ctx.tasksRepo.getById(run.taskId) : null;
+          const names = { clientName: client?.name ?? null, taskName: task?.name ?? null };
+          runNameCache.set(runId, names);
+          return names;
+        }
+        const enrichedEvents = events.map((event) => ({ ...event, ...resolveRunNames(event.runId) }));
+        sendJson(res, 200, { events: enrichedEvents, total, steps: ctx.logEventsRepo.listDistinctSteps() });
         return;
       }
 

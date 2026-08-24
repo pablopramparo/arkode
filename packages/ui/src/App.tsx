@@ -5,6 +5,7 @@ import { ClienteDetalle } from './components/ClienteDetalle';
 import { Conexiones } from './components/Conexiones';
 import { Tareas } from './components/Tareas';
 import { Historial } from './components/Historial';
+import { Logs } from './components/Logs';
 import { AppShell, type Screen } from './components/AppShell';
 
 function App() {
@@ -28,6 +29,7 @@ function App() {
       {screen === 'conexiones' && <Conexiones />}
       {screen === 'tareas' && <Tareas />}
       {screen === 'historial' && <Historial />}
+      {screen === 'logs' && <Logs />}
     </AppShell>
   );
 }
