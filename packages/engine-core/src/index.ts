@@ -48,6 +48,9 @@ export { resolveOutputPathTemplate } from './transports/outputPathTemplate.js';
 export * from './databaseConnections/types.js';
 export { createPostgresDumpClient } from './databaseConnections/postgresDumpClient.js';
 export { createMysqlDumpClient } from './databaseConnections/mysqlDumpClient.js';
+export { createPostgresConnectionTester } from './databaseConnections/postgresConnectionTester.js';
+export { createMysqlConnectionTester } from './databaseConnections/mysqlConnectionTester.js';
+export { testDatabaseConnection } from './databaseConnections/testDatabaseConnection.js';
 
 export * from './strategies/types.js';
 export { createFetchExistingExecutor } from './strategies/fetchExistingExecutor.js';
@@ -66,3 +69,9 @@ export type { RetentionPolicy, ApplyRetentionDeps } from './retention/applyReten
 
 export { runBackupTask } from './orchestrator/runBackupTask.js';
 export type { RunBackupTaskDeps, RunBackupTaskResult } from './orchestrator/runBackupTask.js';
+
+export * from './config/types.js';
+export { exportConfig } from './config/exportConfig.js';
+export type { ExportConfigDeps } from './config/exportConfig.js';
+export { importConfig } from './config/importConfig.js';
+export type { ImportConfigDeps, ImportConfigResult, ImportedClientResult } from './config/importConfig.js';

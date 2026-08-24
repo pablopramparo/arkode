@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { randomUUID } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
 import {
   runBackupTask,
   createSftpAdapterFromTransport,
   createSshAdapterFromTransport,
+  testDatabaseConnection,
+  exportConfig,
+  importConfig,
   type DbEngine,
+  type Transport,
+  type ConnectionTestResult,
+  type ConfigExport,
 } from 'engine-core';
 import { buildContext } from './context.js';
 import { confirmHostInteractively } from './confirmHost.js';
@@ -187,6 +194,76 @@ program
     console.log(JSON.stringify(task, null, 2));
   });
 
+function testTransportConnection(ctx: ReturnType<typeof buildContext>, transport: Transport): Promise<ConnectionTestResult> {
+  const adapter =
+    transport.type === 'ssh'
+      ? createSshAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, confirmHostInteractively)
+      : createSftpAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, confirmHostInteractively);
+  return adapter.testConnection();
+}
+
+program
+  .command('transport:test')
+  .description('Test an SFTP/SSH transport connection directly, without running a backup.')
+  .argument('<transportId>')
+  .action(async (transportId: string) => {
+    const ctx = buildContext();
+    const transport = ctx.transportsRepo.getById(transportId);
+    if (!transport) {
+      console.error(`Transport ${transportId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    const result = await testTransportConnection(ctx, transport);
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
+  });
+
+program
+  .command('database-connection:test')
+  .description('Test a direct_dump database connection (connectivity + auth only — no dump is produced).')
+  .argument('<databaseConnectionId>')
+  .action(async (databaseConnectionId: string) => {
+    const ctx = buildContext();
+    const connection = ctx.databaseConnectionsRepo.getById(databaseConnectionId);
+    if (!connection) {
+      console.error(`Database connection ${databaseConnectionId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    const result = await testDatabaseConnection(connection, ctx.secretStore);
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
+  });
+
+program
+  .command('client:test-connections')
+  .description("Test every transport and database connection belonging to a client, without running any backup.")
+  .argument('<clientId>')
+  .action(async (clientId: string) => {
+    const ctx = buildContext();
+    const client = ctx.clientsRepo.getById(clientId);
+    if (!client) {
+      console.error(`Client ${clientId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const results: Array<{ kind: 'transport' | 'databaseConnection'; id: string; name: string } & ConnectionTestResult> = [];
+
+    for (const transport of ctx.transportsRepo.listByClient(clientId)) {
+      const result = await testTransportConnection(ctx, transport);
+      results.push({ kind: 'transport', id: transport.id, name: transport.name, ...result });
+    }
+    for (const connection of ctx.databaseConnectionsRepo.listByClient(clientId)) {
+      const result = await testDatabaseConnection(connection, ctx.secretStore);
+      results.push({ kind: 'databaseConnection', id: connection.id, name: connection.name, ...result });
+    }
+
+    console.log(JSON.stringify(results, null, 2));
+    if (results.some((r) => !r.ok)) process.exitCode = 1;
+  });
+
 program
   .command('task:run')
   .description('Run a backup task now.')
@@ -218,7 +295,7 @@ program
 
 program
   .command('task:test-connection')
-  .description('Test a task\'s transport connection without running a backup.')
+  .description("Test a task's transport or database connection, without running a backup.")
   .argument('<taskId>')
   .action(async (taskId: string) => {
     const ctx = buildContext();
@@ -228,27 +305,26 @@ program
       process.exitCode = 1;
       return;
     }
-    if (!task.transportId) {
-      console.error(
-        task.strategy === 'direct_dump'
-          ? `Task ${taskId} uses direct_dump — connection testing isn't implemented for database connections yet (only for SFTP/SSH transports).`
-          : `Task ${taskId} has no transport configured (strategy: ${task.strategy}).`
-      );
-      process.exitCode = 1;
-      return;
-    }
-    const transport = ctx.transportsRepo.getById(task.transportId);
-    if (!transport) {
-      console.error(`Transport ${task.transportId} not found.`);
-      process.exitCode = 1;
-      return;
+
+    let result: ConnectionTestResult;
+    if (task.strategy === 'direct_dump') {
+      const connection = task.databaseConnectionId ? ctx.databaseConnectionsRepo.getById(task.databaseConnectionId) : null;
+      if (!connection) {
+        console.error(`Task ${taskId} has no valid database connection configured.`);
+        process.exitCode = 1;
+        return;
+      }
+      result = await testDatabaseConnection(connection, ctx.secretStore);
+    } else {
+      const transport = task.transportId ? ctx.transportsRepo.getById(task.transportId) : null;
+      if (!transport) {
+        console.error(`Task ${taskId} has no valid transport configured.`);
+        process.exitCode = 1;
+        return;
+      }
+      result = await testTransportConnection(ctx, transport);
     }
 
-    const adapter =
-      transport.type === 'ssh'
-        ? createSshAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, confirmHostInteractively)
-        : createSftpAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, confirmHostInteractively);
-    const result = await adapter.testConnection();
     console.log(JSON.stringify(result, null, 2));
     if (!result.ok) process.exitCode = 1;
   });
@@ -261,6 +337,55 @@ program
     const ctx = buildContext();
     const deletions = ctx.retentionDeletionsRepo.listByTask(taskId);
     console.log(JSON.stringify(deletions, null, 2));
+  });
+
+program
+  .command('config:export')
+  .description('Export one, several, or all clients\' configuration to JSON. Never includes secrets (SSH passphrases, DB passwords) — see config:import.')
+  .option('--client <clientId>', 'repeatable: export just this client', (value, previous: string[]) => [...previous, value], [] as string[])
+  .option('--all', 'export every active client')
+  .option('--output <path>', 'write to this file instead of stdout')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    if (!opts.all && opts.client.length === 0) {
+      console.error('Specify --client <id> (repeatable) or --all.');
+      process.exitCode = 1;
+      return;
+    }
+    const data = exportConfig(opts.all ? 'all' : opts.client, ctx);
+    const json = JSON.stringify(data, null, 2);
+    if (opts.output) {
+      await writeFile(opts.output, json, 'utf8');
+      console.log(`Wrote ${data.clients.length} client(s) to ${opts.output}`);
+    } else {
+      console.log(json);
+    }
+  });
+
+program
+  .command('config:import')
+  .description('Import client configuration from a config:export JSON file. Always creates new clients — never overwrites an existing one with the same name.')
+  .requiredOption('--file <path>')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    const raw = await readFile(opts.file, 'utf8');
+    const data = JSON.parse(raw) as ConfigExport;
+    if (data.schemaVersion !== 1) {
+      console.error(`Unsupported config export schemaVersion: ${data.schemaVersion}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const result = importConfig(data, ctx);
+    console.log(JSON.stringify(result, null, 2));
+
+    const anySecrets = result.clients.some((c) => c.secretsNeedingReentry.length > 0);
+    if (anySecrets) {
+      console.error(
+        '\nSecrets (SSH key passphrases, DB passwords) are never exported and must be re-entered for the items listed above under "secretsNeedingReentry".'
+      );
+    }
+    if (result.clients.some((c) => c.errors.length > 0)) process.exitCode = 1;
   });
 
 program
