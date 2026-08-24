@@ -49,6 +49,7 @@ export { resolveOutputPathTemplate } from './transports/outputPathTemplate.js';
 export * from './databaseConnections/types.js';
 export { createPostgresDumpClient } from './databaseConnections/postgresDumpClient.js';
 export { createMysqlDumpClient } from './databaseConnections/mysqlDumpClient.js';
+export { createMariaDbDumpClient } from './databaseConnections/mariaDbDumpClient.js';
 export { createPostgresConnectionTester } from './databaseConnections/postgresConnectionTester.js';
 export { createMysqlConnectionTester } from './databaseConnections/mysqlConnectionTester.js';
 export { testDatabaseConnection } from './databaseConnections/testDatabaseConnection.js';

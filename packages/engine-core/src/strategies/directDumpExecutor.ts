@@ -4,11 +4,13 @@ import type { SecretStore } from '../secrets/types.js';
 import type { DatabaseConnectionConfig, DatabaseDumpClient } from '../databaseConnections/types.js';
 import { createPostgresDumpClient } from '../databaseConnections/postgresDumpClient.js';
 import { createMysqlDumpClient } from '../databaseConnections/mysqlDumpClient.js';
+import { createMariaDbDumpClient } from '../databaseConnections/mariaDbDumpClient.js';
 import type { BackupStrategyContext, BackupStrategyExecutor, ProducedDump } from './types.js';
 
 const EXTENSION_BY_ENGINE: Record<DatabaseConnection['engine'], string> = {
   postgres: 'dump',
   mysql: 'sql',
+  mariadb: 'sql', // mariadb-dump produces the same plain-SQL format as mysqldump
 };
 
 function resolveDumpClient(engine: DatabaseConnection['engine']): DatabaseDumpClient {
@@ -17,6 +19,8 @@ function resolveDumpClient(engine: DatabaseConnection['engine']): DatabaseDumpCl
       return createPostgresDumpClient();
     case 'mysql':
       return createMysqlDumpClient();
+    case 'mariadb':
+      return createMariaDbDumpClient(); // not implemented yet — throws on dump()
   }
 }
 

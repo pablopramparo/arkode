@@ -1,7 +1,16 @@
 export type BackupStrategyKind = 'fetch_existing' | 'remote_dump' | 'direct_dump';
 export type TransportType = 'sftp' | 'ssh';
-export type DbEngine = 'postgres' | 'mysql' | 'unknown';
-export type DatabaseEngine = 'postgres' | 'mysql';
+export type DbEngine = 'postgres' | 'mysql' | 'mariadb' | 'unknown';
+/**
+ * 'mariadb' is declared but not implemented — MySQL and MariaDB are
+ * wire-compatible but not interchangeable at the dump-tool level
+ * (mysqldump vs mariadb-dump, version compatibility rules differ). Widened
+ * now (cheap, nothing has shipped yet) rather than later, when adding a
+ * value to a SQLite CHECK constraint needs a real table-recreate migration.
+ * See databaseConnections/mariaDbDumpClient.ts and CLAUDE.md's "direct_dump
+ * tool version management" note for the real implementation this unblocks.
+ */
+export type DatabaseEngine = 'postgres' | 'mysql' | 'mariadb';
 
 export type BackupRunStatus =
   | 'Pending'

@@ -26,7 +26,12 @@ export async function testDatabaseConnection(
     sslMode: connection.sslMode ? (connection.sslMode as DatabaseConnectionConfig['sslMode']) : undefined,
   };
 
-  const tester =
-    connection.engine === 'postgres' ? createPostgresConnectionTester() : createMysqlConnectionTester();
+  // mariadb reuses the mysql tester: MariaDB is wire-compatible with MySQL's
+  // client/auth protocol, so a plain SELECT 1 connectivity check works
+  // identically. This does NOT extend to dump-tool selection (mariadb-dump
+  // vs mysqldump) — see mariaDbDumpClient.ts and the "direct_dump tool
+  // version management" note in CLAUDE.md for why those aren't the same
+  // question.
+  const tester = connection.engine === 'postgres' ? createPostgresConnectionTester() : createMysqlConnectionTester();
   return tester(config);
 }
