@@ -6,6 +6,7 @@ import { Conexiones } from './components/Conexiones';
 import { Tareas } from './components/Tareas';
 import { Historial } from './components/Historial';
 import { Logs } from './components/Logs';
+import { Configuracion } from './components/Configuracion';
 import { AppShell, type Screen } from './components/AppShell';
 
 function App() {
@@ -30,6 +31,7 @@ function App() {
       {screen === 'tareas' && <Tareas />}
       {screen === 'historial' && <Historial />}
       {screen === 'logs' && <Logs />}
+      {screen === 'configuracion' && <Configuracion />}
     </AppShell>
   );
 }

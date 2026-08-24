@@ -16,6 +16,7 @@ import {
   uninstallScheduledTask,
   scheduledTaskStatus,
   getDashboardStatus,
+  getSystemInfo,
   type DbEngine,
   type Transport,
   type ConnectionTestResult,
@@ -764,6 +765,13 @@ program
   });
 
 program
+  .command('system:info')
+  .description("Show where the app's data lives and whether each direct_dump tool-path env var is configured and points at a real file.")
+  .action(() => {
+    console.log(JSON.stringify(getSystemInfo(), null, 2));
+  });
+
+program
   .command('serve')
   .description(
     'Start a local HTTP server exposing dashboard status (GET /status) and per-task actions (run now, test connection) for the UI. Dev-only for now — see CLAUDE.md.'
@@ -1140,6 +1148,40 @@ program
         }
         const enrichedEvents = events.map((event) => ({ ...event, ...resolveRunNames(event.runId) }));
         sendJson(res, 200, { events: enrichedEvents, total, steps: ctx.logEventsRepo.listDistinctSteps() });
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/system') {
+        sendJson(res, 200, getSystemInfo());
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/config/export') {
+        try {
+          const data = exportConfig('all', ctx);
+          res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Content-Disposition': 'attachment; filename="arkode-config-export.json"',
+          });
+          res.end(JSON.stringify(data, null, 2));
+        } catch (err) {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/config/import') {
+        try {
+          const body = await readJsonBody(req);
+          if (body.schemaVersion !== 1) {
+            sendJson(res, 400, { error: `Unsupported config export schemaVersion: ${body.schemaVersion}` });
+            return;
+          }
+          const result = importConfig(body as ConfigExport, ctx);
+          sendJson(res, 200, result);
+        } catch (err) {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
         return;
       }
 

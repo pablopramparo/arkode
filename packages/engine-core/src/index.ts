@@ -96,6 +96,9 @@ export type { InstallScheduledTaskInput, ScheduledTaskStatus } from './scheduler
 export { getDashboardStatus } from './status/getDashboardStatus.js';
 export type { DashboardRow, GetDashboardStatusDeps } from './status/getDashboardStatus.js';
 
+export { getSystemInfo } from './status/getSystemInfo.js';
+export type { SystemInfo, ToolPathStatus } from './status/getSystemInfo.js';
+
 export { runBackupTask } from './orchestrator/runBackupTask.js';
 export type { RunBackupTaskDeps, RunBackupTaskResult } from './orchestrator/runBackupTask.js';
 
