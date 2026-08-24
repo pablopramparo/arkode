@@ -72,36 +72,24 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-/** `layout="row"` for the full-width inline create panel (5 across); `layout="stack"` for the narrower edit modal. */
 function ClientFields({
   values,
   onChange,
-  layout,
 }: {
   values: ClientFormValues;
   onChange: (patch: Partial<ClientFormValues>) => void;
-  layout: 'row' | 'stack';
 }) {
-  const nameAndPath = (
-    <>
+  return (
+    <div className="flex flex-col gap-3">
       <Field label="Nombre *">
         <input style={inputStyle} value={values.name} onChange={(e) => onChange({ name: e.target.value })} autoFocus />
       </Field>
       <Field label="Descripción">
-        {layout === 'row' ? (
-          <input
-            style={inputStyle}
-            placeholder="Opcional"
-            value={values.description}
-            onChange={(e) => onChange({ description: e.target.value })}
-          />
-        ) : (
-          <textarea
-            style={{ ...inputStyle, minHeight: 64, resize: 'vertical' }}
-            value={values.description}
-            onChange={(e) => onChange({ description: e.target.value })}
-          />
-        )}
+        <textarea
+          style={{ ...inputStyle, minHeight: 64, resize: 'vertical' }}
+          value={values.description}
+          onChange={(e) => onChange({ description: e.target.value })}
+        />
       </Field>
       <Field label="Carpeta local *">
         <input
@@ -111,41 +99,28 @@ function ClientFields({
           onChange={(e) => onChange({ localBasePath: e.target.value })}
         />
       </Field>
-    </>
-  );
-
-  const retentionFields = (
-    <>
-      <Field label="Retención (N backups)">
-        <input
-          style={inputStyle}
-          type="number"
-          min={0}
-          placeholder="Ej: 10"
-          value={values.retentionCount}
-          onChange={(e) => onChange({ retentionCount: e.target.value })}
-        />
-      </Field>
-      <Field label="Retención (N días)">
-        <input
-          style={inputStyle}
-          type="number"
-          min={0}
-          placeholder="Ej: 30"
-          value={values.retentionDays}
-          onChange={(e) => onChange({ retentionDays: e.target.value })}
-        />
-      </Field>
-    </>
-  );
-
-  if (layout === 'row') {
-    return <div className="grid grid-cols-5 gap-3">{nameAndPath}{retentionFields}</div>;
-  }
-  return (
-    <div className="flex flex-col gap-3">
-      {nameAndPath}
-      <div className="grid grid-cols-2 gap-3">{retentionFields}</div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Retención (N backups)">
+          <input
+            style={inputStyle}
+            type="number"
+            min={0}
+            placeholder="Ej: 10"
+            value={values.retentionCount}
+            onChange={(e) => onChange({ retentionCount: e.target.value })}
+          />
+        </Field>
+        <Field label="Retención (N días)">
+          <input
+            style={inputStyle}
+            type="number"
+            min={0}
+            placeholder="Ej: 30"
+            value={values.retentionDays}
+            onChange={(e) => onChange({ retentionDays: e.target.value })}
+          />
+        </Field>
+      </div>
     </div>
   );
 }
@@ -267,10 +242,10 @@ export function Clientes() {
             onPress={() => {
               setCreateForm(EMPTY_FORM);
               setCreateError(null);
-              setShowCreate((v) => !v);
+              setShowCreate(true);
             }}
           >
-            {showCreate ? 'Cancelar' : '+ Nuevo cliente'}
+            + Nuevo cliente
           </Button>
         </div>
       </header>
@@ -281,31 +256,6 @@ export function Clientes() {
           style={{ borderColor: 'var(--danger)', color: 'var(--danger)', backgroundColor: 'color-mix(in oklab, var(--danger) 10%, transparent)' }}
         >
           {error}
-        </div>
-      )}
-
-      {showCreate && (
-        <div className="mb-4 rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
-          <ClientFields layout="row" values={createForm} onChange={(patch) => setCreateForm((prev) => ({ ...prev, ...patch }))} />
-          {createError && (
-            <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
-              {createError}
-            </p>
-          )}
-          <div className="mt-3 flex justify-end gap-2">
-            <Button size="sm" variant="ghost" className="rounded-full px-4" isDisabled={createBusy} onPress={() => setShowCreate(false)}>
-              Cancelar
-            </Button>
-            <Button
-              size="sm"
-              className="rounded-full px-4"
-              style={primaryPillStyle}
-              isDisabled={createBusy || !createForm.name.trim() || !createForm.localBasePath.trim()}
-              onPress={handleCreate}
-            >
-              {createBusy ? 'Creando…' : 'Crear'}
-            </Button>
-          </div>
         </div>
       )}
 
@@ -386,9 +336,34 @@ export function Clientes() {
         <p style={{ color: 'var(--muted)' }}>No hay clientes activos todavía.</p>
       )}
 
+      {showCreate && (
+        <Modal title="Nuevo cliente" onClose={() => setShowCreate(false)}>
+          <ClientFields values={createForm} onChange={(patch) => setCreateForm((prev) => ({ ...prev, ...patch }))} />
+          {createError && (
+            <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
+              {createError}
+            </p>
+          )}
+          <div className="mt-4 flex justify-end gap-2">
+            <Button size="sm" variant="ghost" className="rounded-full px-4" isDisabled={createBusy} onPress={() => setShowCreate(false)}>
+              Cancelar
+            </Button>
+            <Button
+              size="sm"
+              className="rounded-full px-4"
+              style={primaryPillStyle}
+              isDisabled={createBusy || !createForm.name.trim() || !createForm.localBasePath.trim()}
+              onPress={handleCreate}
+            >
+              {createBusy ? 'Creando…' : 'Crear'}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
       {editingClient && (
         <Modal title={`Editar "${editingClient.name}"`} onClose={() => setEditingClient(null)}>
-          <ClientFields layout="stack" values={editForm} onChange={(patch) => setEditForm((prev) => ({ ...prev, ...patch }))} />
+          <ClientFields values={editForm} onChange={(patch) => setEditForm((prev) => ({ ...prev, ...patch }))} />
           {editError && (
             <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
               {editError}
