@@ -10,7 +10,7 @@ import {
   updateTask,
   type TaskRow,
 } from '../lib/tasksClient';
-import { fetchConnections, type ConnectionsData } from '../lib/connectionsClient';
+import { createDatabaseConnection, createTransport, fetchConnections, type ConnectionsData } from '../lib/connectionsClient';
 import { runTaskNow, testTaskConnection } from '../lib/statusClient';
 import { Modal } from './Modal';
 import { Switch } from './Switch';
@@ -24,12 +24,34 @@ const STRATEGY_LABEL: Record<BackupStrategyKind, string> = {
   direct_dump: 'Conexión directa a BD',
 };
 
+type ConnectionMode = 'new' | 'existing';
+
 interface FormValues {
   clientId: string;
   name: string;
   strategy: BackupStrategyKind;
+  connectionMode: ConnectionMode;
+  // "existing" mode
   transportId: string;
   databaseConnectionId: string;
+  // "new" mode — shared
+  connectionName: string;
+  host: string;
+  port: string;
+  username: string;
+  // "new" mode — sftp/ssh
+  privateKeyPath: string;
+  passphrase: string;
+  remotePath: string;
+  remoteFilePattern: string;
+  remoteCommand: string;
+  remoteOutputPathTemplate: string;
+  remoteCleanup: boolean;
+  // "new" mode — direct_dump
+  databaseName: string;
+  password: string;
+  sslMode: string;
+  // task-level (dbEngine doubles as the new connection's engine when strategy is direct_dump)
   dbEngine: DbEngine;
   retentionCount: string;
   retentionDays: string;
@@ -41,14 +63,34 @@ const EMPTY_FORM: FormValues = {
   clientId: '',
   name: '',
   strategy: 'fetch_existing',
+  connectionMode: 'new',
   transportId: '',
   databaseConnectionId: '',
+  connectionName: '',
+  host: '',
+  port: '22',
+  username: '',
+  privateKeyPath: '',
+  passphrase: '',
+  remotePath: '',
+  remoteFilePattern: '',
+  remoteCommand: '',
+  remoteOutputPathTemplate: '',
+  remoteCleanup: false,
+  databaseName: '',
+  password: '',
+  sslMode: '',
   dbEngine: 'unknown',
   retentionCount: '',
   retentionDays: '',
   scheduleTime: '',
   scheduleEnabled: true,
 };
+
+function defaultPortFor(strategy: BackupStrategyKind, dbEngine: DbEngine): string {
+  if (strategy !== 'direct_dump') return '22';
+  return dbEngine === 'mysql' || dbEngine === 'mariadb' ? '3306' : '5432';
+}
 
 function taskToFormValues(task: TaskRow): FormValues {
   return {
@@ -66,25 +108,21 @@ function taskToFormValues(task: TaskRow): FormValues {
   };
 }
 
-function toCreateInput(values: FormValues) {
-  return {
-    clientId: values.clientId,
-    name: values.name.trim(),
-    strategy: values.strategy,
-    transportId: values.strategy !== 'direct_dump' ? values.transportId : undefined,
-    databaseConnectionId: values.strategy === 'direct_dump' ? values.databaseConnectionId : undefined,
-    dbEngine: values.dbEngine,
-    retentionCount: values.retentionCount.trim() ? Number(values.retentionCount) : null,
-    retentionDays: values.retentionDays.trim() ? Number(values.retentionDays) : null,
-    scheduleTime: values.scheduleTime.trim() || undefined,
-    scheduleEnabled: values.scheduleEnabled,
-  };
-}
-
 function isCreateValid(values: FormValues): boolean {
   if (!values.clientId || !values.name.trim()) return false;
-  if (values.strategy === 'direct_dump') return Boolean(values.databaseConnectionId);
-  return Boolean(values.transportId);
+
+  if (values.connectionMode === 'existing') {
+    return values.strategy === 'direct_dump' ? Boolean(values.databaseConnectionId) : Boolean(values.transportId);
+  }
+
+  // "new" connection mode
+  if (!values.connectionName.trim() || !values.host.trim() || !values.username.trim()) return false;
+  if (values.strategy === 'direct_dump') {
+    return Boolean(values.databaseName.trim() && values.port.trim() && values.dbEngine !== 'unknown');
+  }
+  if (!values.privateKeyPath.trim()) return false;
+  if (values.strategy === 'fetch_existing') return Boolean(values.remotePath.trim());
+  return Boolean(values.remoteCommand.trim() && values.remoteOutputPathTemplate.trim());
 }
 
 const inputStyle: React.CSSProperties = {
@@ -116,6 +154,150 @@ function StrategyBadge({ strategy }: { strategy: BackupStrategyKind }) {
   );
 }
 
+function SegmentedButtons<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="flex gap-2">
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => onChange(opt.value)}
+          className="rounded-full px-3 py-1 text-xs font-medium"
+          style={{
+            backgroundColor: value === opt.value ? 'var(--accent)' : 'var(--surface-secondary)',
+            color: value === opt.value ? 'white' : 'var(--muted)',
+          }}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The connection-specific fields for creating a brand-new transport/database connection inline — deliberately simpler than Conexiones.tsx's own form (no type/client selector; the strategy and client are already chosen one step up in this same wizard). */
+function NewConnectionFields({ values, onChange }: { values: FormValues; onChange: (patch: Partial<FormValues>) => void }) {
+  return (
+    <>
+      <Field label="Nombre de la conexión *">
+        <input
+          style={inputStyle}
+          placeholder="Ej: Servidor principal"
+          value={values.connectionName}
+          onChange={(e) => onChange({ connectionName: e.target.value })}
+        />
+      </Field>
+
+      {values.strategy === 'direct_dump' && (
+        <Field label="Motor *">
+          <select
+            style={inputStyle}
+            value={values.dbEngine === 'unknown' ? '' : values.dbEngine}
+            onChange={(e) => {
+              const dbEngine = e.target.value as DbEngine;
+              onChange({ dbEngine, port: defaultPortFor('direct_dump', dbEngine) });
+            }}
+          >
+            <option value="">Seleccionar…</option>
+            <option value="postgres">PostgreSQL</option>
+            <option value="mysql">MySQL</option>
+            <option value="mariadb">MariaDB</option>
+          </select>
+        </Field>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Host *">
+          <input style={inputStyle} value={values.host} onChange={(e) => onChange({ host: e.target.value })} />
+        </Field>
+        <Field label="Puerto">
+          <input style={inputStyle} type="number" value={values.port} onChange={(e) => onChange({ port: e.target.value })} />
+        </Field>
+      </div>
+
+      <Field label="Usuario *">
+        <input style={inputStyle} value={values.username} onChange={(e) => onChange({ username: e.target.value })} />
+      </Field>
+
+      {values.strategy === 'direct_dump' ? (
+        <>
+          <Field label="Nombre de base de datos *">
+            <input
+              style={inputStyle}
+              value={values.databaseName}
+              onChange={(e) => onChange({ databaseName: e.target.value })}
+            />
+          </Field>
+          <Field label="Contraseña">
+            <input
+              style={inputStyle}
+              type="password"
+              value={values.password}
+              onChange={(e) => onChange({ password: e.target.value })}
+            />
+          </Field>
+        </>
+      ) : (
+        <>
+          <Field label="Ruta de clave privada *">
+            <input
+              style={inputStyle}
+              placeholder="Ej: C:/keys/id_rsa"
+              value={values.privateKeyPath}
+              onChange={(e) => onChange({ privateKeyPath: e.target.value })}
+            />
+          </Field>
+          <Field label="Passphrase">
+            <input
+              style={inputStyle}
+              type="password"
+              value={values.passphrase}
+              onChange={(e) => onChange({ passphrase: e.target.value })}
+            />
+          </Field>
+          {values.strategy === 'fetch_existing' ? (
+            <Field label="Ruta remota *">
+              <input
+                style={inputStyle}
+                placeholder="Ej: /backups"
+                value={values.remotePath}
+                onChange={(e) => onChange({ remotePath: e.target.value })}
+              />
+            </Field>
+          ) : (
+            <>
+              <Field label="Comando remoto *">
+                <input
+                  style={inputStyle}
+                  placeholder="Comando que genera el dump en el host remoto"
+                  value={values.remoteCommand}
+                  onChange={(e) => onChange({ remoteCommand: e.target.value })}
+                />
+              </Field>
+              <Field label="Plantilla de ruta de salida *">
+                <input
+                  style={inputStyle}
+                  placeholder="Ej: /tmp/backups/db_{date:YYYYMMDD_HHmm}.dump"
+                  value={values.remoteOutputPathTemplate}
+                  onChange={(e) => onChange({ remoteOutputPathTemplate: e.target.value })}
+                />
+              </Field>
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 function CreateFields({
   values,
   onChange,
@@ -129,6 +311,7 @@ function CreateFields({
   const clientDbConnections = connections.databaseConnections.filter((d) => d.clientId === values.clientId && d.isActive);
   const sftpTransports = clientTransports.filter((t) => t.type === 'sftp');
   const sshTransports = clientTransports.filter((t) => t.type === 'ssh');
+  const existingOptions = values.strategy === 'direct_dump' ? clientDbConnections : values.strategy === 'fetch_existing' ? sftpTransports : sshTransports;
 
   return (
     <div className="flex flex-col gap-3">
@@ -147,79 +330,77 @@ function CreateFields({
         </select>
       </Field>
 
-      <Field label="Nombre *">
+      <Field label="Nombre de la tarea *">
         <input style={inputStyle} value={values.name} onChange={(e) => onChange({ name: e.target.value })} />
       </Field>
 
       <Field label="Estrategia *">
-        <div className="flex gap-2">
-          {(Object.keys(STRATEGY_LABEL) as BackupStrategyKind[]).map((strategy) => (
-            <button
-              key={strategy}
-              type="button"
-              onClick={() => onChange({ strategy, transportId: '', databaseConnectionId: '' })}
-              className="rounded-full px-3 py-1 text-xs font-medium"
-              style={{
-                backgroundColor: values.strategy === strategy ? 'var(--accent)' : 'var(--surface-secondary)',
-                color: values.strategy === strategy ? 'white' : 'var(--muted)',
-              }}
-            >
-              {STRATEGY_LABEL[strategy]}
-            </button>
-          ))}
-        </div>
+        <SegmentedButtons
+          value={values.strategy}
+          onChange={(strategy) =>
+            onChange({
+              strategy,
+              transportId: '',
+              databaseConnectionId: '',
+              port: defaultPortFor(strategy, values.dbEngine),
+              dbEngine: strategy === 'direct_dump' ? values.dbEngine : values.dbEngine === 'mariadb' ? 'unknown' : values.dbEngine,
+            })
+          }
+          options={(Object.keys(STRATEGY_LABEL) as BackupStrategyKind[]).map((s) => ({ value: s, label: STRATEGY_LABEL[s] }))}
+        />
       </Field>
 
-      {values.strategy === 'direct_dump' ? (
-        <Field label="Conexión de base de datos *">
+      <Field label="Conexión">
+        <SegmentedButtons
+          value={values.connectionMode}
+          onChange={(connectionMode) => onChange({ connectionMode })}
+          options={[
+            { value: 'new', label: '+ Crear conexión nueva' },
+            { value: 'existing', label: 'Usar conexión existente' },
+          ]}
+        />
+      </Field>
+
+      {values.connectionMode === 'new' ? (
+        <NewConnectionFields values={values} onChange={onChange} />
+      ) : (
+        <Field label={values.strategy === 'direct_dump' ? 'Conexión de base de datos *' : 'Transporte *'}>
           <select
             style={inputStyle}
-            value={values.databaseConnectionId}
-            onChange={(e) => {
-              const conn = clientDbConnections.find((d) => d.id === e.target.value);
-              onChange({ databaseConnectionId: e.target.value, dbEngine: conn?.engine ?? values.dbEngine });
-            }}
+            value={values.strategy === 'direct_dump' ? values.databaseConnectionId : values.transportId}
+            onChange={(e) =>
+              values.strategy === 'direct_dump'
+                ? onChange({
+                    databaseConnectionId: e.target.value,
+                    dbEngine: clientDbConnections.find((d) => d.id === e.target.value)?.engine ?? values.dbEngine,
+                  })
+                : onChange({ transportId: e.target.value })
+            }
           >
             <option value="">Seleccionar…</option>
-            {clientDbConnections.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name} ({d.engine})
+            {existingOptions.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.name}
               </option>
             ))}
           </select>
-          {values.clientId && clientDbConnections.length === 0 && (
+          {values.clientId && existingOptions.length === 0 && (
             <p className="text-xs" style={{ color: 'var(--danger)' }}>
-              Este cliente no tiene conexiones de base de datos activas. Creá una en Conexiones primero.
+              Este cliente no tiene {values.strategy === 'direct_dump' ? 'conexiones de base de datos' : 'transportes de este tipo'}{' '}
+              activas — probá "Crear conexión nueva".
             </p>
           )}
         </Field>
-      ) : (
-        <>
-          <Field label="Transporte *">
-            <select style={inputStyle} value={values.transportId} onChange={(e) => onChange({ transportId: e.target.value })}>
-              <option value="">Seleccionar…</option>
-              {(values.strategy === 'fetch_existing' ? sftpTransports : sshTransports).map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-            {values.clientId && (values.strategy === 'fetch_existing' ? sftpTransports : sshTransports).length === 0 && (
-              <p className="text-xs" style={{ color: 'var(--danger)' }}>
-                Este cliente no tiene transportes {values.strategy === 'fetch_existing' ? 'SFTP' : 'SSH'} activos. Creá uno en
-                Conexiones primero.
-              </p>
-            )}
-          </Field>
-          <Field label="Motor de base de datos (para validación)">
-            <select style={inputStyle} value={values.dbEngine} onChange={(e) => onChange({ dbEngine: e.target.value as DbEngine })}>
-              <option value="unknown">Sin especificar</option>
-              <option value="postgres">PostgreSQL</option>
-              <option value="mysql">MySQL</option>
-              <option value="mariadb">MariaDB</option>
-            </select>
-          </Field>
-        </>
+      )}
+
+      {values.strategy !== 'direct_dump' && (
+        <Field label="Motor de base de datos (para validación)">
+          <select style={inputStyle} value={values.dbEngine} onChange={(e) => onChange({ dbEngine: e.target.value as DbEngine })}>
+            <option value="unknown">Sin especificar</option>
+            <option value="postgres">PostgreSQL</option>
+            <option value="mysql">MySQL</option>
+          </select>
+        </Field>
       )}
 
       <div className="grid grid-cols-2 gap-3">
@@ -351,7 +532,54 @@ export function Tareas() {
     setCreateBusy(true);
     setCreateError(null);
     try {
-      await createTask(toCreateInput(createForm));
+      let transportId: string | undefined = createForm.strategy !== 'direct_dump' ? createForm.transportId || undefined : undefined;
+      let databaseConnectionId: string | undefined =
+        createForm.strategy === 'direct_dump' ? createForm.databaseConnectionId || undefined : undefined;
+
+      if (createForm.connectionMode === 'new') {
+        if (createForm.strategy === 'direct_dump') {
+          const conn = await createDatabaseConnection({
+            clientId: createForm.clientId,
+            name: createForm.connectionName.trim(),
+            engine: createForm.dbEngine as 'postgres' | 'mysql' | 'mariadb',
+            host: createForm.host.trim(),
+            port: Number(createForm.port),
+            databaseName: createForm.databaseName.trim(),
+            username: createForm.username.trim(),
+            password: createForm.password.trim() || undefined,
+          });
+          databaseConnectionId = conn.id;
+        } else {
+          const conn = await createTransport({
+            type: createForm.strategy === 'remote_dump' ? 'ssh' : 'sftp',
+            clientId: createForm.clientId,
+            name: createForm.connectionName.trim(),
+            host: createForm.host.trim(),
+            port: createForm.port.trim() ? Number(createForm.port) : undefined,
+            username: createForm.username.trim(),
+            privateKeyPath: createForm.privateKeyPath.trim(),
+            passphrase: createForm.passphrase.trim() || undefined,
+            remotePath: createForm.strategy === 'fetch_existing' ? createForm.remotePath.trim() : undefined,
+            remoteCommand: createForm.strategy === 'remote_dump' ? createForm.remoteCommand.trim() : undefined,
+            remoteOutputPathTemplate: createForm.strategy === 'remote_dump' ? createForm.remoteOutputPathTemplate.trim() : undefined,
+          });
+          transportId = conn.id;
+        }
+      }
+
+      await createTask({
+        clientId: createForm.clientId,
+        name: createForm.name.trim(),
+        strategy: createForm.strategy,
+        transportId,
+        databaseConnectionId,
+        dbEngine: createForm.dbEngine,
+        retentionCount: createForm.retentionCount.trim() ? Number(createForm.retentionCount) : null,
+        retentionDays: createForm.retentionDays.trim() ? Number(createForm.retentionDays) : null,
+        scheduleTime: createForm.scheduleTime.trim() || undefined,
+        scheduleEnabled: createForm.scheduleEnabled,
+      });
+
       setShowCreate(false);
       await refresh(showInactive);
     } catch (err) {
@@ -443,7 +671,7 @@ export function Tareas() {
               setShowCreate(true);
             }}
           >
-            + Nueva tarea
+            + Agregar backup
           </Button>
         </div>
       </header>
@@ -556,7 +784,7 @@ export function Tareas() {
       {tasks && tasks.length === 0 && <p style={{ color: 'var(--muted)' }}>No hay tareas configuradas todavía.</p>}
 
       {showCreate && connections && (
-        <Modal title="Nueva tarea" onClose={() => setShowCreate(false)}>
+        <Modal title="Agregar backup" onClose={() => setShowCreate(false)}>
           <CreateFields values={createForm} onChange={(patch) => setCreateForm((prev) => ({ ...prev, ...patch }))} connections={connections} />
           {createError && (
             <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>

@@ -1,10 +1,10 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { fetchRuns, type RunRow } from '../lib/runsClient';
+import { downloadRunUrl, fetchRuns, type RunRow } from '../lib/runsClient';
 import { fetchTasks, type TaskRow } from '../lib/tasksClient';
 import { formatDateTime, formatDuration, formatSize } from '../lib/format';
 import { StatusChip } from './StatusChip';
-import { IconButton } from './IconButton';
-import { EyeIcon } from './icons';
+import { IconButton, IconLinkButton } from './IconButton';
+import { DownloadIcon, EyeIcon } from './icons';
 
 const RUN_LIMIT = 200;
 
@@ -139,13 +139,18 @@ export function Historial() {
                         {formatSize(run.sizeBytes)}
                       </td>
                       <td className="px-4 py-2.5">
-                        {run.errorMessage && (
-                          <IconButton
-                            icon={<EyeIcon />}
-                            label={expanded ? 'Ocultar error' : 'Ver error'}
-                            onPress={() => setExpandedRunId(expanded ? null : run.id)}
-                          />
-                        )}
+                        <div className="flex items-center gap-1">
+                          {run.localPath && (
+                            <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                          )}
+                          {run.errorMessage && (
+                            <IconButton
+                              icon={<EyeIcon />}
+                              label={expanded ? 'Ocultar error' : 'Ver error'}
+                              onPress={() => setExpandedRunId(expanded ? null : run.id)}
+                            />
+                          )}
+                        </div>
                       </td>
                     </tr>
                     {expanded && run.errorMessage && (

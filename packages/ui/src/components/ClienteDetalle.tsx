@@ -3,12 +3,12 @@ import { Button } from '@heroui/react';
 import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
 import { fetchTasks, type TaskRow } from '../lib/tasksClient';
 import { fetchConnections, testTransport, testDatabaseConnection, type ConnectionsData } from '../lib/connectionsClient';
-import { fetchRuns, type RunRow } from '../lib/runsClient';
+import { downloadRunUrl, fetchRuns, type RunRow } from '../lib/runsClient';
 import { runTaskNow, testTaskConnection } from '../lib/statusClient';
 import type { ConnectionTestResult } from 'engine-core';
 import { StatusChip } from './StatusChip';
-import { IconButton } from './IconButton';
-import { PulseIcon } from './icons';
+import { IconButton, IconLinkButton } from './IconButton';
+import { DownloadIcon, PulseIcon } from './icons';
 import { formatRetention, formatDateTime, formatDuration, formatSize } from '../lib/format';
 import { primaryPillStyle } from '../lib/pillStyles';
 
@@ -18,10 +18,38 @@ const STRATEGY_LABEL: Record<string, string> = {
   direct_dump: 'Conexión directa a BD',
 };
 
+type Tab = 'tareas' | 'conexiones' | 'historial';
+
 interface RowActionState {
   busy?: boolean;
   testResult?: ConnectionTestResult;
   actionError?: string;
+}
+
+function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab) => void; counts: Record<Tab, number> }) {
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'tareas', label: 'Tareas' },
+    { id: 'conexiones', label: 'Conexiones' },
+    { id: 'historial', label: 'Historial' },
+  ];
+  return (
+    <div className="mb-4 flex gap-1 border-b" style={{ borderColor: 'var(--border)' }}>
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          onClick={() => onChange(tab.id)}
+          className="px-3 py-2 text-sm font-medium"
+          style={{
+            color: active === tab.id ? 'var(--foreground)' : 'var(--muted)',
+            borderBottom: active === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+          }}
+        >
+          {tab.label} ({counts[tab.id]})
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack: () => void }) {
@@ -31,6 +59,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   const [runs, setRuns] = useState<RunRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionState, setActionState] = useState<Record<string, RowActionState>>({});
+  const [activeTab, setActiveTab] = useState<Tab>('tareas');
 
   function patchAction(id: string, patch: RowActionState) {
     setActionState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
@@ -91,15 +120,14 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
 
   const clientTransports = connections?.transports.filter((t) => t.clientId === clientId) ?? [];
   const clientDbConnections = connections?.databaseConnections.filter((d) => d.clientId === clientId) ?? [];
+  const connectionRows = [
+    ...clientTransports.map((t) => ({ id: t.id, name: t.name, type: t.type.toUpperCase(), host: `${t.host}:${t.port}`, isActive: t.isActive, kind: 'transport' as const })),
+    ...clientDbConnections.map((d) => ({ id: d.id, name: d.name, type: d.engine, host: `${d.host}:${d.port}`, isActive: d.isActive, kind: 'database' as const })),
+  ];
 
   return (
     <div className="max-w-[1600px] px-10 py-8">
-      <button
-        type="button"
-        className="mb-4 text-sm hover:underline"
-        style={{ color: 'var(--muted)' }}
-        onClick={onBack}
-      >
+      <button type="button" className="mb-4 text-sm hover:underline" style={{ color: 'var(--muted)' }} onClick={onBack}>
         ← Volver a Clientes
       </button>
 
@@ -133,9 +161,14 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             </p>
           </header>
 
-          <section className="mb-8">
-            <h2 className="mb-2 text-sm font-semibold">Tareas ({tasks?.length ?? 0})</h2>
-            {tasks && tasks.length > 0 ? (
+          <TabBar
+            active={activeTab}
+            onChange={setActiveTab}
+            counts={{ tareas: tasks?.length ?? 0, conexiones: connectionRows.length, historial: runs?.length ?? 0 }}
+          />
+
+          {activeTab === 'tareas' &&
+            (tasks && tasks.length > 0 ? (
               <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
                 <table className="w-full border-collapse text-sm">
                   <thead>
@@ -177,10 +210,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   onPress={() => handleTestTask(task.id)}
                                 />
                                 {state?.testResult && (
-                                  <span
-                                    className="text-xs"
-                                    style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}
-                                  >
+                                  <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                                     {state.testResult.ok ? 'OK' : state.testResult.message}
                                   </span>
                                 )}
@@ -202,14 +232,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
               <p className="text-sm" style={{ color: 'var(--muted)' }}>
                 Este cliente no tiene tareas todavía.
               </p>
-            )}
-          </section>
+            ))}
 
-          <section className="mb-8">
-            <h2 className="mb-2 text-sm font-semibold">
-              Conexiones ({clientTransports.length + clientDbConnections.length})
-            </h2>
-            {clientTransports.length + clientDbConnections.length > 0 ? (
+          {activeTab === 'conexiones' &&
+            (connectionRows.length > 0 ? (
               <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
                 <table className="w-full border-collapse text-sm">
                   <thead>
@@ -221,10 +247,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                     </tr>
                   </thead>
                   <tbody>
-                    {[
-                      ...clientTransports.map((t) => ({ id: t.id, name: t.name, type: t.type.toUpperCase(), host: `${t.host}:${t.port}`, isActive: t.isActive, kind: 'transport' as const })),
-                      ...clientDbConnections.map((d) => ({ id: d.id, name: d.name, type: d.engine, host: `${d.host}:${d.port}`, isActive: d.isActive, kind: 'database' as const })),
-                    ].map((row) => {
+                    {connectionRows.map((row) => {
                       const state = actionState[row.id];
                       return (
                         <tr key={row.id} style={{ borderTop: '1px solid var(--separator)', opacity: row.isActive ? 1 : 0.55 }}>
@@ -245,10 +268,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   onPress={() => handleTestConnection(row.id, row.kind)}
                                 />
                                 {state?.testResult && (
-                                  <span
-                                    className="text-xs"
-                                    style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}
-                                  >
+                                  <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                                     {state.testResult.ok ? 'OK' : state.testResult.message}
                                   </span>
                                 )}
@@ -265,12 +285,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
               <p className="text-sm" style={{ color: 'var(--muted)' }}>
                 Este cliente no tiene conexiones todavía.
               </p>
-            )}
-          </section>
+            ))}
 
-          <section>
-            <h2 className="mb-2 text-sm font-semibold">Historial reciente</h2>
-            {runs && runs.length > 0 ? (
+          {activeTab === 'historial' &&
+            (runs && runs.length > 0 ? (
               <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
                 <table className="w-full border-collapse text-sm">
                   <thead>
@@ -280,6 +298,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                       <th className="px-4 py-2 font-medium">Inicio</th>
                       <th className="px-4 py-2 font-medium">Duración</th>
                       <th className="px-4 py-2 font-medium">Tamaño</th>
+                      <th className="px-4 py-2 font-medium"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -298,6 +317,11 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                         <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                           {formatSize(run.sizeBytes)}
                         </td>
+                        <td className="px-4 py-2.5">
+                          {run.localPath && (
+                            <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -307,8 +331,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
               <p className="text-sm" style={{ color: 'var(--muted)' }}>
                 Todavía no hay ejecuciones registradas para este cliente.
               </p>
-            )}
-          </section>
+            ))}
         </>
       )}
     </div>

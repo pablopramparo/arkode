@@ -21,3 +21,8 @@ export async function fetchRuns(opts: { taskId?: string; clientId?: string; limi
   }
   return res.json();
 }
+
+/** A direct download link — the file streams from the server, so this is used as a plain <a href>, never fetched via JS (a multi-GB dump has no business going through a JS Blob). */
+export function downloadRunUrl(runId: string): string {
+  return `${BASE_URL}/runs/${runId}/download`;
+}

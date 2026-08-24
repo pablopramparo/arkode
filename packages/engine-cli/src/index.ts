@@ -2,6 +2,8 @@
 import { Command } from 'commander';
 import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
+import { createReadStream, existsSync } from 'node:fs';
+import { basename } from 'node:path';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
   runBackupTask,
@@ -1118,6 +1120,23 @@ program
           return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null };
         });
         sendJson(res, 200, runs);
+        return;
+      }
+
+      const runDownloadMatch = req.method === 'GET' && pathname.match(/^\/runs\/([^/]+)\/download$/);
+      if (runDownloadMatch) {
+        const run = ctx.runsRepo.getById(runDownloadMatch[1]);
+        // localPath can point at a file retention already deleted (retention never clears the DB column, only the file
+        // on disk — see the "Retention" section in CLAUDE.md) — existsSync is the real check, not just "is the column set".
+        if (!run || !run.localPath || !existsSync(run.localPath)) {
+          sendJson(res, 404, { error: 'No hay un archivo de backup disponible para esta ejecución.' });
+          return;
+        }
+        res.writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${basename(run.localPath)}"`,
+        });
+        createReadStream(run.localPath).pipe(res);
         return;
       }
 
