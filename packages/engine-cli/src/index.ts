@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import {
   runBackupTask,
   createSftpAdapterFromTransport,
@@ -14,6 +15,7 @@ import {
   installScheduledTask,
   uninstallScheduledTask,
   scheduledTaskStatus,
+  getDashboardStatus,
   type DbEngine,
   type Transport,
   type ConnectionTestResult,
@@ -531,26 +533,40 @@ program
   .option('--json', 'output as JSON')
   .action((opts) => {
     const ctx = buildContext();
-    const rows = ctx.clientsRepo.listActive().flatMap((client) =>
-      ctx.tasksRepo.listByClient(client.id).map((task) => {
-        const latestRun = ctx.runsRepo.getLatestByTask(task.id);
-        return {
-          client: client.name,
-          task: task.name,
-          strategy: task.strategy,
-          status: latestRun?.status ?? 'NeverRun',
-          sizeBytes: latestRun?.sizeBytes ?? null,
-          checksumSha256: latestRun?.checksumSha256 ?? null,
-          finishedAt: latestRun?.finishedAt ?? null,
-        };
-      })
-    );
+    const rows = getDashboardStatus(ctx);
 
     if (opts.json) {
       console.log(JSON.stringify(rows, null, 2));
     } else {
       console.table(rows);
     }
+  });
+
+program
+  .command('serve')
+  .description(
+    'Start a read-only local HTTP server exposing dashboard status (GET /status) for the UI to poll. Dev-only for now — see CLAUDE.md.'
+  )
+  .option('--port <port>', 'default 4287', '4287')
+  .action((opts) => {
+    const ctx = buildContext();
+    const port = Number(opts.port);
+
+    const server = createServer((req, res) => {
+      res.setHeader('Access-Control-Allow-Origin', '*'); // dev-only: the UI runs on a different Vite port during development
+      if (req.method === 'GET' && req.url === '/status') {
+        const rows = getDashboardStatus(ctx);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(rows));
+        return;
+      }
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+    });
+
+    server.listen(port, '127.0.0.1', () => {
+      console.log(`Serving dashboard status at http://127.0.0.1:${port}/status (Ctrl+C to stop)`);
+    });
   });
 
 program.parseAsync(process.argv).catch((err) => {

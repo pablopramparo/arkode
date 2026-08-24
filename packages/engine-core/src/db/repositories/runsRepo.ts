@@ -75,6 +75,8 @@ export interface RunsRepo {
   markFinished(runId: string, status: 'Success' | 'Warning' | 'Failed', opts?: { errorMessage?: string; errorStack?: string }): void;
   getById(runId: string): BackupRun | null;
   getLatestByTask(taskId: string): BackupRun | null;
+  /** Latest run that actually has a file on disk (Success or Warning) — for showing size/age of the last real backup, distinct from the latest attempt's status. */
+  getLatestWithFileByTask(taskId: string): BackupRun | null;
   /** Signatures of Success runs for a task, used to avoid redundant re-downloads. */
   listSuccessfulFileSignatures(taskId: string): SuccessfulFileSignature[];
   /** Success runs for a task, newest first — the population retention operates over. */
@@ -93,6 +95,9 @@ export function createRunsRepo(db: Database): RunsRepo {
   const getStmt = db.prepare<[string], BackupRunRow>('SELECT * FROM backup_runs WHERE id = ?');
   const getLatestByTaskStmt = db.prepare<[string], BackupRunRow>(
     'SELECT * FROM backup_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1'
+  );
+  const getLatestWithFileByTaskStmt = db.prepare<[string], BackupRunRow>(
+    `SELECT * FROM backup_runs WHERE task_id = ? AND local_path IS NOT NULL ORDER BY started_at DESC LIMIT 1`
   );
   const setStatusStmt = db.prepare('UPDATE backup_runs SET status = ? WHERE id = ?');
   const markProducingStmt = db.prepare(`UPDATE backup_runs SET status = 'Producing' WHERE id = ?`);
@@ -183,6 +188,11 @@ export function createRunsRepo(db: Database): RunsRepo {
 
     getLatestByTask(taskId) {
       const row = getLatestByTaskStmt.get(taskId);
+      return row ? toDomain(row) : null;
+    },
+
+    getLatestWithFileByTask(taskId) {
+      const row = getLatestWithFileByTaskStmt.get(taskId);
       return row ? toDomain(row) : null;
     },
 

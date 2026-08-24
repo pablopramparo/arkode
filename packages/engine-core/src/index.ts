@@ -83,6 +83,9 @@ export {
 } from './scheduler/windowsTaskScheduler.js';
 export type { InstallScheduledTaskInput, ScheduledTaskStatus } from './scheduler/windowsTaskScheduler.js';
 
+export { getDashboardStatus } from './status/getDashboardStatus.js';
+export type { DashboardRow, GetDashboardStatusDeps } from './status/getDashboardStatus.js';
+
 export { runBackupTask } from './orchestrator/runBackupTask.js';
 export type { RunBackupTaskDeps, RunBackupTaskResult } from './orchestrator/runBackupTask.js';
 
