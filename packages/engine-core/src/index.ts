@@ -19,6 +19,7 @@ export type {
   CreateFetchExistingTaskInput,
   CreateRemoteDumpTaskInput,
   CreateDirectDumpTaskInput,
+  SetScheduleInput,
 } from './db/repositories/tasksRepo.js';
 
 export { createRunsRepo } from './db/repositories/runsRepo.js';
@@ -66,6 +67,20 @@ export type { RunLogger } from './logging/logger.js';
 
 export { applyRetention, resolveRetentionPolicy } from './retention/applyRetention.js';
 export type { RetentionPolicy, ApplyRetentionDeps } from './retention/applyRetention.js';
+
+export { isTaskDue } from './scheduler/isTaskDue.js';
+export { runDueTasks } from './scheduler/runDueTasks.js';
+export type { RunDueResult } from './scheduler/runDueTasks.js';
+export { buildTaskDefinitionXml } from './scheduler/taskDefinitionXml.js';
+export type { TaskDefinitionInput } from './scheduler/taskDefinitionXml.js';
+export {
+  scheduledTaskNameForBackupTask,
+  installScheduledTask,
+  uninstallScheduledTask,
+  scheduledTaskStatus,
+  redactPassword,
+} from './scheduler/windowsTaskScheduler.js';
+export type { InstallScheduledTaskInput, ScheduledTaskStatus } from './scheduler/windowsTaskScheduler.js';
 
 export { runBackupTask } from './orchestrator/runBackupTask.js';
 export type { RunBackupTaskDeps, RunBackupTaskResult } from './orchestrator/runBackupTask.js';

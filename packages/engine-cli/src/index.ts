@@ -9,10 +9,16 @@ import {
   testDatabaseConnection,
   exportConfig,
   importConfig,
+  runDueTasks,
+  scheduledTaskNameForBackupTask,
+  installScheduledTask,
+  uninstallScheduledTask,
+  scheduledTaskStatus,
   type DbEngine,
   type Transport,
   type ConnectionTestResult,
   type ConfigExport,
+  type RunBackupTaskDeps,
 } from 'engine-core';
 import { buildContext } from './context.js';
 import { confirmHostInteractively } from './confirmHost.js';
@@ -194,6 +200,32 @@ program
     console.log(JSON.stringify(task, null, 2));
   });
 
+program
+  .command('task:set-schedule')
+  .description('Set, change, or disable a task\'s daily schedule. Registering it with Windows Task Scheduler is a separate step (scheduler:install).')
+  .argument('<taskId>')
+  .option('--time <HH:MM>', '24h local time; required unless only --disable is given')
+  .option('--disable', 'disable scheduling without clearing the configured time', false)
+  .action((taskId: string, opts) => {
+    const ctx = buildContext();
+    const task = ctx.tasksRepo.getById(taskId);
+    if (!task) {
+      console.error(`Task ${taskId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!opts.time && !opts.disable) {
+      console.error('Specify --time <HH:MM> and/or --disable.');
+      process.exitCode = 1;
+      return;
+    }
+    const updated = ctx.tasksRepo.setSchedule(taskId, {
+      scheduleTime: opts.time ?? task.scheduleTime,
+      scheduleEnabled: opts.disable ? false : true,
+    });
+    console.log(JSON.stringify(updated, null, 2));
+  });
+
 function testTransportConnection(ctx: ReturnType<typeof buildContext>, transport: Transport): Promise<ConnectionTestResult> {
   const adapter =
     transport.type === 'ssh'
@@ -330,6 +362,111 @@ program
   });
 
 program
+  .command('run-due')
+  .description('Run every currently-due scheduled task (or just one, with --task). This is what a Windows Scheduled Task actually invokes.')
+  .option('--task <taskId>', 'check/run just this one task instead of every scheduled task')
+  .action(async (opts) => {
+    const ctx = buildContext();
+
+    let tasks;
+    if (opts.task) {
+      const task = ctx.tasksRepo.getById(opts.task);
+      if (!task) {
+        console.error(`Task ${opts.task} not found.`);
+        process.exitCode = 1;
+        return;
+      }
+      tasks = [task];
+    } else {
+      tasks = ctx.tasksRepo.listScheduled();
+    }
+
+    const deps: RunBackupTaskDeps = {
+      clientsRepo: ctx.clientsRepo,
+      transportsRepo: ctx.transportsRepo,
+      databaseConnectionsRepo: ctx.databaseConnectionsRepo,
+      runsRepo: ctx.runsRepo,
+      logEventsRepo: ctx.logEventsRepo,
+      knownHostsRepo: ctx.knownHostsRepo,
+      retentionDeletionsRepo: ctx.retentionDeletionsRepo,
+      secretStore: ctx.secretStore,
+      // An unattended run has no interactive terminal, so this correctly
+      // (and intentionally) rejects any host that isn't already known —
+      // never silently trusting a new host just because nobody's watching.
+      onUnknownHost: confirmHostInteractively,
+    };
+
+    const results = await runDueTasks(tasks, deps, new Date());
+    console.log(JSON.stringify(results, null, 2));
+    if (results.some((r) => r.error || r.result?.run.status === 'Failed')) process.exitCode = 1;
+  });
+
+program
+  .command('scheduler:install')
+  .description("Register a Windows Scheduled Task for a task, using its already-configured schedule (set one first via task:set-schedule).")
+  .argument('<taskId>')
+  .requiredOption(
+    '--password <password>',
+    "the current Windows account's login password — required so the unattended run can decrypt Credential Manager secrets; passed straight to schtasks.exe, never stored by this app"
+  )
+  .option('--username <domainUser>', 'defaults to the current user (USERDOMAIN\\USERNAME)')
+  .action(async (taskId: string, opts) => {
+    const ctx = buildContext();
+    const task = ctx.tasksRepo.getById(taskId);
+    if (!task) {
+      console.error(`Task ${taskId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!task.scheduleEnabled || !task.scheduleTime) {
+      console.error(`Task ${taskId} has no enabled schedule — set one first: task:set-schedule ${taskId} --time HH:MM`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const username = opts.username ?? `${process.env.USERDOMAIN}\\${process.env.USERNAME}`;
+    const taskName = scheduledTaskNameForBackupTask(taskId);
+    // Dev-time only: points at the currently-running node.exe + this script's
+    // own path. Once engine-cli is compiled to a standalone exe (packaging,
+    // not done yet), this needs to target that exe's installed path instead.
+    const scriptPath = process.argv[1];
+
+    await installScheduledTask({
+      taskName,
+      description: `Codebius Backup Manager - scheduled run for task "${task.name}"`,
+      scheduleTime: task.scheduleTime,
+      userId: username,
+      username,
+      password: opts.password,
+      command: process.execPath,
+      arguments: `"${scriptPath}" run-due --task ${taskId}`,
+    });
+
+    console.log(`Registered Windows Scheduled Task "${taskName}" for task "${task.name}" at ${task.scheduleTime} daily.`);
+  });
+
+program
+  .command('scheduler:uninstall')
+  .description("Remove a task's Windows Scheduled Task.")
+  .argument('<taskId>')
+  .action(async (taskId: string) => {
+    const taskName = scheduledTaskNameForBackupTask(taskId);
+    await uninstallScheduledTask(taskName);
+    console.log(`Removed Windows Scheduled Task "${taskName}".`);
+  });
+
+program
+  .command('scheduler:status')
+  .description("Check whether a task's Windows Scheduled Task is registered.")
+  .argument('<taskId>')
+  .action(async (taskId: string) => {
+    const taskName = scheduledTaskNameForBackupTask(taskId);
+    const status = await scheduledTaskStatus(taskName);
+    console.log(JSON.stringify(status, null, 2));
+    if (!status.exists) process.exitCode = 1;
+  });
+
+program
   .command('retention:history')
   .description('List backups retention has deleted for a task.')
   .argument('<taskId>')
@@ -416,4 +553,11 @@ program
     }
   });
 
-program.parseAsync(process.argv);
+program.parseAsync(process.argv).catch((err) => {
+  // A clean one-line error instead of a raw stack trace for anything an
+  // individual command didn't already catch itself (e.g. a schtasks.exe
+  // failure) — this is a CLI meant to be scripted/read by a human, not a
+  // stack-trace dump.
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exitCode = 1;
+});

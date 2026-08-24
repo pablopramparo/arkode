@@ -70,12 +70,22 @@ export interface CreateDirectDumpTaskInput {
   retentionDays?: number | null;
 }
 
+export interface SetScheduleInput {
+  scheduleTime: string | null;
+  scheduleEnabled: boolean;
+}
+
+const SCHEDULE_TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export interface TasksRepo {
   createFetchExisting(input: CreateFetchExistingTaskInput): BackupTask;
   createRemoteDump(input: CreateRemoteDumpTaskInput): BackupTask;
   createDirectDump(input: CreateDirectDumpTaskInput): BackupTask;
   getById(id: string): BackupTask | null;
   listByClient(clientId: string): BackupTask[];
+  /** Every active task with a schedule configured and enabled — what run-due iterates over. */
+  listScheduled(): BackupTask[];
+  setSchedule(taskId: string, input: SetScheduleInput): BackupTask;
 }
 
 export function createTasksRepo(
@@ -92,6 +102,14 @@ export function createTasksRepo(
   const getByIdStmt = db.prepare<[string], BackupTaskRow>('SELECT * FROM backup_tasks WHERE id = ?');
   const listByClientStmt = db.prepare<[string], BackupTaskRow>(
     'SELECT * FROM backup_tasks WHERE client_id = ? ORDER BY name'
+  );
+  const listScheduledStmt = db.prepare<[], BackupTaskRow>(
+    `SELECT * FROM backup_tasks WHERE is_active = 1 AND schedule_enabled = 1 AND schedule_time IS NOT NULL`
+  );
+  const setScheduleStmt = db.prepare(
+    `UPDATE backup_tasks
+     SET schedule_time = @scheduleTime, schedule_enabled = @scheduleEnabled, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE id = @taskId`
   );
 
   function insertTask(
@@ -168,6 +186,27 @@ export function createTasksRepo(
 
     listByClient(clientId) {
       return listByClientStmt.all(clientId).map(toDomain);
+    },
+
+    listScheduled() {
+      return listScheduledStmt.all().map(toDomain);
+    },
+
+    setSchedule(taskId, input) {
+      if (input.scheduleTime !== null && !SCHEDULE_TIME_FORMAT.test(input.scheduleTime)) {
+        throw new Error(`Invalid schedule time "${input.scheduleTime}" — expected 24h "HH:MM".`);
+      }
+      const existing = getByIdStmt.get(taskId);
+      if (!existing) throw new Error(`Task ${taskId} not found.`);
+
+      setScheduleStmt.run({
+        taskId,
+        scheduleTime: input.scheduleTime,
+        scheduleEnabled: input.scheduleEnabled ? 1 : 0,
+      });
+      const row = getByIdStmt.get(taskId);
+      if (!row) throw new Error(`Failed to read back task ${taskId} after updating its schedule.`);
+      return toDomain(row);
     },
   };
 }
