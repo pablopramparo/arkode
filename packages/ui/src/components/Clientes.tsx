@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
-import { createClient, deactivateClient, fetchClients, updateClient, type ClientWithTaskCount } from '../lib/clientsClient';
+import {
+  createClient,
+  deactivateClient,
+  fetchClients,
+  reactivateClient,
+  updateClient,
+  type ClientWithTaskCount,
+} from '../lib/clientsClient';
 import { formatRetention } from '../lib/format';
 
 interface ClientFormValues {
@@ -104,10 +111,12 @@ export function Clientes() {
   const [editError, setEditError] = useState<string | null>(null);
 
   const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
+  const [reactivatingId, setReactivatingId] = useState<string | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (includeInactive: boolean) => {
     try {
-      const data = await fetchClients();
+      const data = await fetchClients({ includeInactive });
       setClients(data);
       setError(null);
     } catch (err) {
@@ -116,8 +125,8 @@ export function Clientes() {
   }, []);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    refresh(showInactive);
+  }, [refresh, showInactive]);
 
   async function handleCreate() {
     setCreateBusy(true);
@@ -126,7 +135,7 @@ export function Clientes() {
       await createClient(toInput(createForm));
       setShowCreate(false);
       setCreateForm(EMPTY_FORM);
-      await refresh();
+      await refresh(showInactive);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -147,7 +156,7 @@ export function Clientes() {
     try {
       await updateClient(editingId, toInput(editForm));
       setEditingId(null);
-      await refresh();
+      await refresh(showInactive);
     } catch (err) {
       setEditError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -162,11 +171,23 @@ export function Clientes() {
     setDeactivatingId(client.id);
     try {
       await deactivateClient(client.id);
-      await refresh();
+      await refresh(showInactive);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeactivatingId(null);
+    }
+  }
+
+  async function handleReactivate(client: ClientWithTaskCount) {
+    setReactivatingId(client.id);
+    try {
+      await reactivateClient(client.id);
+      await refresh(showInactive);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReactivatingId(null);
     }
   }
 
@@ -176,12 +197,21 @@ export function Clientes() {
         <div>
           <h1 className="text-xl font-semibold">Clientes</h1>
           <p className="text-sm" style={{ color: 'var(--muted)' }}>
-            {clients == null ? 'Cargando…' : `${clients.length} cliente${clients.length === 1 ? '' : 's'} activo${clients.length === 1 ? '' : 's'}`}
+            {clients == null
+              ? 'Cargando…'
+              : showInactive
+                ? `${clients.filter((c) => c.isActive).length} activo(s), ${clients.filter((c) => !c.isActive).length} inactivo(s)`
+                : `${clients.length} cliente${clients.length === 1 ? '' : 's'} activo${clients.length === 1 ? '' : 's'}`}
           </p>
         </div>
-        <Button size="sm" variant="secondary" onPress={() => setShowCreate((v) => !v)}>
-          {showCreate ? 'Cancelar' : '+ Nuevo cliente'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="ghost" onPress={() => setShowInactive((v) => !v)}>
+            {showInactive ? 'Ocultar inactivos' : 'Mostrar inactivos'}
+          </Button>
+          <Button size="sm" variant="secondary" onPress={() => setShowCreate((v) => !v)}>
+            {showCreate ? 'Cancelar' : '+ Nuevo cliente'}
+          </Button>
+        </div>
       </header>
 
       {error && (
@@ -234,7 +264,13 @@ export function Clientes() {
               {clients.map((client) => {
                 const isEditing = editingId === client.id;
                 return (
-                  <tr key={client.id} style={{ borderTop: '1px solid var(--separator)' }}>
+                  <tr
+                    key={client.id}
+                    style={{
+                      borderTop: '1px solid var(--separator)',
+                      opacity: client.isActive ? 1 : 0.55,
+                    }}
+                  >
                     {isEditing ? (
                       <td className="px-4 py-2.5" colSpan={4}>
                         <ClientFields values={editForm} onChange={(patch) => setEditForm((prev) => ({ ...prev, ...patch }))} />
@@ -246,7 +282,14 @@ export function Clientes() {
                       </td>
                     ) : (
                       <>
-                        <td className="px-4 py-2.5 font-medium">{client.name}</td>
+                        <td className="px-4 py-2.5 font-medium">
+                          {client.name}
+                          {!client.isActive && (
+                            <span className="ml-2 text-xs font-normal" style={{ color: 'var(--muted)' }}>
+                              (inactivo)
+                            </span>
+                          )}
+                        </td>
                         <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                           {client.description ?? '—'}
                         </td>
@@ -272,7 +315,7 @@ export function Clientes() {
                             {editBusy ? 'Guardando…' : 'Guardar'}
                           </Button>
                         </div>
-                      ) : (
+                      ) : client.isActive ? (
                         <div className="flex items-center gap-2">
                           <Button size="sm" variant="ghost" onPress={() => startEdit(client)}>
                             Editar
@@ -286,6 +329,15 @@ export function Clientes() {
                             {deactivatingId === client.id ? 'Desactivando…' : 'Desactivar'}
                           </Button>
                         </div>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          isDisabled={reactivatingId === client.id}
+                          onPress={() => handleReactivate(client)}
+                        >
+                          {reactivatingId === client.id ? 'Reactivando…' : 'Reactivar'}
+                        </Button>
                       )}
                     </td>
                   </tr>

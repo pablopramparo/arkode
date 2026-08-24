@@ -48,9 +48,12 @@ export interface ClientsRepo {
   create(input: CreateClientInput): Client;
   update(id: string, patch: UpdateClientInput): Client;
   deactivate(id: string): void;
+  reactivate(id: string): void;
   getById(id: string): Client | null;
   getByName(name: string): Client | null;
   listActive(): Client[];
+  /** Active and inactive clients together, still name-ordered — for a "show inactive" view. Not used by the dashboard or retention/scheduling, which must only ever see active clients. */
+  listAll(): Client[];
 }
 
 function friendlyUniqueNameError(err: unknown, name: string): never {
@@ -68,6 +71,7 @@ export function createClientsRepo(db: Database): ClientsRepo {
   const getByIdStmt = db.prepare<[string], ClientRow>('SELECT * FROM clients WHERE id = ?');
   const getByNameStmt = db.prepare<[string], ClientRow>('SELECT * FROM clients WHERE name = ?');
   const listActiveStmt = db.prepare<[], ClientRow>('SELECT * FROM clients WHERE is_active = 1 ORDER BY name');
+  const listAllStmt = db.prepare<[], ClientRow>('SELECT * FROM clients ORDER BY name');
   const updateStmt = db.prepare(
     `UPDATE clients
      SET name = @name, description = @description, local_base_path = @localBasePath,
@@ -77,6 +81,9 @@ export function createClientsRepo(db: Database): ClientsRepo {
   );
   const deactivateStmt = db.prepare(
     `UPDATE clients SET is_active = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
+  );
+  const reactivateStmt = db.prepare(
+    `UPDATE clients SET is_active = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
   );
 
   return {
@@ -126,6 +133,12 @@ export function createClientsRepo(db: Database): ClientsRepo {
       deactivateStmt.run(id);
     },
 
+    reactivate(id) {
+      const current = getByIdStmt.get(id);
+      if (!current) throw new Error(`Client ${id} not found.`);
+      reactivateStmt.run(id);
+    },
+
     getById(id) {
       const row = getByIdStmt.get(id);
       return row ? toDomain(row) : null;
@@ -138,6 +151,10 @@ export function createClientsRepo(db: Database): ClientsRepo {
 
     listActive() {
       return listActiveStmt.all().map(toDomain);
+    },
+
+    listAll() {
+      return listAllStmt.all().map(toDomain);
     },
   };
 }

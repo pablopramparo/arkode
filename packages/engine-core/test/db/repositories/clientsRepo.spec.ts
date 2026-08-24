@@ -69,4 +69,30 @@ describe('clientsRepo', () => {
     const ctx = createTestContext();
     expect(() => ctx.clientsRepo.deactivate('nonexistent')).toThrow(/not found/i);
   });
+
+  it('reactivate() restores a deactivated client to listActive()', () => {
+    const ctx = createTestContext();
+    const client = ctx.clientsRepo.create({ name: 'Winners', localBasePath: 'D:/Backups/Winners' });
+    ctx.clientsRepo.deactivate(client.id);
+
+    ctx.clientsRepo.reactivate(client.id);
+
+    expect(ctx.clientsRepo.listActive().map((c) => c.id)).toContain(client.id);
+    expect(ctx.clientsRepo.getById(client.id)).toMatchObject({ isActive: true });
+  });
+
+  it('throws a clean error when reactivating a nonexistent client', () => {
+    const ctx = createTestContext();
+    expect(() => ctx.clientsRepo.reactivate('nonexistent')).toThrow(/not found/i);
+  });
+
+  it('listAll() includes both active and inactive clients; listActive() only active', () => {
+    const ctx = createTestContext();
+    const active = ctx.clientsRepo.create({ name: 'Winners', localBasePath: 'D:/Backups/Winners' });
+    const inactive = ctx.clientsRepo.create({ name: 'Compagnucci', localBasePath: 'D:/Backups/Compagnucci' });
+    ctx.clientsRepo.deactivate(inactive.id);
+
+    expect(ctx.clientsRepo.listAll().map((c) => c.id).sort()).toEqual([active.id, inactive.id].sort());
+    expect(ctx.clientsRepo.listActive().map((c) => c.id)).toEqual([active.id]);
+  });
 });

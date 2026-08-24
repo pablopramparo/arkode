@@ -21,8 +21,9 @@ async function handleJson<T>(res: Response): Promise<T> {
   return body;
 }
 
-export async function fetchClients(): Promise<ClientWithTaskCount[]> {
-  return handleJson(await fetch(`${BASE_URL}/clients`));
+export async function fetchClients(opts: { includeInactive?: boolean } = {}): Promise<ClientWithTaskCount[]> {
+  const query = opts.includeInactive ? '?includeInactive=true' : '';
+  return handleJson(await fetch(`${BASE_URL}/clients${query}`));
 }
 
 export async function createClient(input: ClientInput): Promise<Client> {
@@ -47,6 +48,10 @@ export async function updateClient(id: string, patch: Partial<ClientInput>): Pro
 
 export async function deactivateClient(id: string): Promise<void> {
   await handleJson(await fetch(`${BASE_URL}/clients/${id}/deactivate`, { method: 'POST' }));
+}
+
+export async function reactivateClient(id: string): Promise<void> {
+  await handleJson(await fetch(`${BASE_URL}/clients/${id}/reactivate`, { method: 'POST' }));
 }
 
 export type { Client };

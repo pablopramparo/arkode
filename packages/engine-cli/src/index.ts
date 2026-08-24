@@ -58,10 +58,11 @@ program
 
 program
   .command('client:list')
-  .description('List active clients.')
-  .action(() => {
+  .description('List clients (active only by default).')
+  .option('--all', 'include deactivated clients too', false)
+  .action((opts) => {
     const ctx = buildContext();
-    console.log(JSON.stringify(ctx.clientsRepo.listActive(), null, 2));
+    console.log(JSON.stringify(opts.all ? ctx.clientsRepo.listAll() : ctx.clientsRepo.listActive(), null, 2));
   });
 
 program
@@ -94,6 +95,16 @@ program
     const ctx = buildContext();
     ctx.clientsRepo.deactivate(clientId);
     console.log(`Deactivated client ${clientId}.`);
+  });
+
+program
+  .command('client:reactivate')
+  .description('Reactivate a previously deactivated client.')
+  .argument('<clientId>')
+  .action((clientId: string) => {
+    const ctx = buildContext();
+    ctx.clientsRepo.reactivate(clientId);
+    console.log(`Reactivated client ${clientId}.`);
   });
 
 function resolveSecretRef(ctx: ReturnType<typeof buildContext>, value: string | undefined, refPrefix: string): string | null {
@@ -630,12 +641,15 @@ program
         return;
       }
 
-      if (req.method === 'GET' && req.url === '/status') {
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      const pathname = url.pathname;
+
+      if (req.method === 'GET' && pathname === '/status') {
         sendJson(res, 200, getDashboardStatus(ctx));
         return;
       }
 
-      const actionMatch = req.method === 'POST' && req.url?.match(/^\/tasks\/([^/]+)\/(run|test-connection)$/);
+      const actionMatch = req.method === 'POST' && pathname.match(/^\/tasks\/([^/]+)\/(run|test-connection)$/);
       if (actionMatch) {
         const [, taskId, action] = actionMatch;
         const task = ctx.tasksRepo.getById(taskId);
@@ -657,15 +671,17 @@ program
         return;
       }
 
-      if (req.method === 'GET' && req.url === '/clients') {
-        const clients = ctx.clientsRepo
-          .listActive()
-          .map((client) => ({ ...client, taskCount: ctx.tasksRepo.listByClient(client.id).length }));
+      if (req.method === 'GET' && pathname === '/clients') {
+        const includeInactive = url.searchParams.get('includeInactive') === 'true';
+        const clients = (includeInactive ? ctx.clientsRepo.listAll() : ctx.clientsRepo.listActive()).map((client) => ({
+          ...client,
+          taskCount: ctx.tasksRepo.listByClient(client.id).length,
+        }));
         sendJson(res, 200, clients);
         return;
       }
 
-      if (req.method === 'POST' && req.url === '/clients') {
+      if (req.method === 'POST' && pathname === '/clients') {
         try {
           const body = await readJsonBody(req);
           if (!body.name || !body.localBasePath) {
@@ -686,10 +702,12 @@ program
         return;
       }
 
-      const deactivateMatch = req.method === 'POST' && req.url?.match(/^\/clients\/([^/]+)\/deactivate$/);
-      if (deactivateMatch) {
+      const setActiveMatch = req.method === 'POST' && pathname.match(/^\/clients\/([^/]+)\/(deactivate|reactivate)$/);
+      if (setActiveMatch) {
         try {
-          ctx.clientsRepo.deactivate(deactivateMatch[1]);
+          const [, clientId, action] = setActiveMatch;
+          if (action === 'deactivate') ctx.clientsRepo.deactivate(clientId);
+          else ctx.clientsRepo.reactivate(clientId);
           sendJson(res, 200, { ok: true });
         } catch (err) {
           sendRepoError(res, err);
@@ -697,7 +715,7 @@ program
         return;
       }
 
-      const clientIdMatch = req.method === 'PATCH' && req.url?.match(/^\/clients\/([^/]+)$/);
+      const clientIdMatch = req.method === 'PATCH' && pathname.match(/^\/clients\/([^/]+)$/);
       if (clientIdMatch) {
         try {
           const body = await readJsonBody(req);
