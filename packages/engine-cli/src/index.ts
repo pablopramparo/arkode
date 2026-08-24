@@ -2,7 +2,7 @@
 import { Command } from 'commander';
 import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
-import { createServer, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
   runBackupTask,
   createSftpAdapterFromTransport,
@@ -54,6 +54,46 @@ program
       retentionDays: opts.retentionDays != null ? Number(opts.retentionDays) : null,
     });
     console.log(JSON.stringify(client, null, 2));
+  });
+
+program
+  .command('client:list')
+  .description('List active clients.')
+  .action(() => {
+    const ctx = buildContext();
+    console.log(JSON.stringify(ctx.clientsRepo.listActive(), null, 2));
+  });
+
+program
+  .command('client:update')
+  .description("Update a client's fields. Only the flags you pass are changed — everything else is left as-is.")
+  .argument('<clientId>')
+  .option('--name <name>')
+  .option('--description <description>')
+  .option('--clear-description', 'clear the description instead of setting one', false)
+  .option('--local-base-path <path>')
+  .option('--retention-count <n>')
+  .option('--retention-days <n>')
+  .action((clientId: string, opts) => {
+    const ctx = buildContext();
+    const client = ctx.clientsRepo.update(clientId, {
+      name: opts.name,
+      description: opts.clearDescription ? null : opts.description,
+      localBasePath: opts.localBasePath,
+      retentionCount: opts.retentionCount != null ? Number(opts.retentionCount) : undefined,
+      retentionDays: opts.retentionDays != null ? Number(opts.retentionDays) : undefined,
+    });
+    console.log(JSON.stringify(client, null, 2));
+  });
+
+program
+  .command('client:deactivate')
+  .description('Deactivate a client. Its tasks stop appearing on the dashboard and in scheduling; nothing is deleted.')
+  .argument('<clientId>')
+  .action((clientId: string) => {
+    const ctx = buildContext();
+    ctx.clientsRepo.deactivate(clientId);
+    console.log(`Deactivated client ${clientId}.`);
   });
 
 function resolveSecretRef(ctx: ReturnType<typeof buildContext>, value: string | undefined, refPrefix: string): string | null {
@@ -556,8 +596,39 @@ program
       res.end(JSON.stringify(body));
     }
 
+    function readJsonBody(req: IncomingMessage): Promise<any> {
+      return new Promise((resolve, reject) => {
+        let data = '';
+        req.on('data', (chunk) => (data += chunk));
+        req.on('end', () => {
+          if (!data) return resolve({});
+          try {
+            resolve(JSON.parse(data));
+          } catch {
+            reject(new Error('Invalid JSON body.'));
+          }
+        });
+        req.on('error', reject);
+      });
+    }
+
+    // clientsRepo throws a plain Error for "not found" and duplicate-name — this is the
+    // one place both meanings need distinct HTTP statuses (client actions elsewhere never confuse the two).
+    function sendRepoError(res: ServerResponse, err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      sendJson(res, /not found/i.test(message) ? 404 : 400, { error: message });
+    }
+
     const server = createServer(async (req, res) => {
       res.setHeader('Access-Control-Allow-Origin', '*'); // dev-only: the UI runs on a different Vite port during development
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
 
       if (req.method === 'GET' && req.url === '/status') {
         sendJson(res, 200, getDashboardStatus(ctx));
@@ -582,6 +653,58 @@ program
           }
         } catch (err) {
           sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'GET' && req.url === '/clients') {
+        const clients = ctx.clientsRepo
+          .listActive()
+          .map((client) => ({ ...client, taskCount: ctx.tasksRepo.listByClient(client.id).length }));
+        sendJson(res, 200, clients);
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/clients') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.name || !body.localBasePath) {
+            sendJson(res, 400, { error: 'name and localBasePath are required.' });
+            return;
+          }
+          const client = ctx.clientsRepo.create({
+            name: body.name,
+            description: body.description ?? null,
+            localBasePath: body.localBasePath,
+            retentionCount: body.retentionCount ?? null,
+            retentionDays: body.retentionDays ?? null,
+          });
+          sendJson(res, 201, client);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const deactivateMatch = req.method === 'POST' && req.url?.match(/^\/clients\/([^/]+)\/deactivate$/);
+      if (deactivateMatch) {
+        try {
+          ctx.clientsRepo.deactivate(deactivateMatch[1]);
+          sendJson(res, 200, { ok: true });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const clientIdMatch = req.method === 'PATCH' && req.url?.match(/^\/clients\/([^/]+)$/);
+      if (clientIdMatch) {
+        try {
+          const body = await readJsonBody(req);
+          const client = ctx.clientsRepo.update(clientIdMatch[1], body);
+          sendJson(res, 200, client);
+        } catch (err) {
+          sendRepoError(res, err);
         }
         return;
       }

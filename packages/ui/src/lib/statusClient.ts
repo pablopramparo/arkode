@@ -17,10 +17,11 @@ export async function fetchDashboardStatus(): Promise<DashboardRow[]> {
 async function postTaskAction<T>(taskId: string, action: 'run' | 'test-connection'): Promise<T> {
   const res = await fetch(`${BASE_URL}/tasks/${taskId}/${action}`, { method: 'POST' });
   const body = await res.json();
-  if (res.status >= 500 || res.status === 404) {
+  // 404 (unknown task) and 500 (unexpected exception) are real request-level errors.
+  // 502 from test-connection is an expected "connection failed" result, not a request error — body is still the ConnectionTestResult shape.
+  if (res.status === 404 || res.status === 500) {
     throw new Error(body.error ?? `Request failed: ${res.status}`);
   }
-  // 502 from test-connection is an expected "connection failed" result, not a request error — body is still the ConnectionTestResult shape.
   return body;
 }
 

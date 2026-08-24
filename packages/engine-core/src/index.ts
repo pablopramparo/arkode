@@ -5,7 +5,7 @@ export { getDb, closeDb } from './db/connection.js';
 export { runMigrations } from './db/migrate.js';
 
 export { createClientsRepo } from './db/repositories/clientsRepo.js';
-export type { ClientsRepo, CreateClientInput } from './db/repositories/clientsRepo.js';
+export type { ClientsRepo, CreateClientInput, UpdateClientInput } from './db/repositories/clientsRepo.js';
 
 export { createTransportsRepo } from './db/repositories/transportsRepo.js';
 export type { TransportsRepo, CreateSftpTransportInput, CreateSshTransportInput } from './db/repositories/transportsRepo.js';

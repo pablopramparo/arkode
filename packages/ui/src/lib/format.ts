@@ -19,3 +19,11 @@ export function ageInHours(isoTimestamp: string | null, now: Date = new Date()):
   if (isoTimestamp == null) return null;
   return (now.getTime() - new Date(isoTimestamp).getTime()) / (1000 * 60 * 60);
 }
+
+/** "10 backups / 30 días", "10 backups", "—" if neither policy is set. */
+export function formatRetention(count: number | null, days: number | null): string {
+  const parts: string[] = [];
+  if (count != null) parts.push(`${count} backups`);
+  if (days != null) parts.push(`${days} días`);
+  return parts.length > 0 ? parts.join(' / ') : '—';
+}
