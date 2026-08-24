@@ -37,11 +37,15 @@ program
     console.log(JSON.stringify(client, null, 2));
   });
 
-function resolvePassphraseSecretRef(ctx: ReturnType<typeof buildContext>, passphrase: string | undefined): string | null {
-  if (!passphrase) return null;
-  const ref = `transport:${randomUUID()}:passphrase`;
-  ctx.secretStore.set(ref, passphrase);
+function resolveSecretRef(ctx: ReturnType<typeof buildContext>, value: string | undefined, refPrefix: string): string | null {
+  if (!value) return null;
+  const ref = `${refPrefix}:${randomUUID()}`;
+  ctx.secretStore.set(ref, value);
   return ref;
+}
+
+function resolvePassphraseSecretRef(ctx: ReturnType<typeof buildContext>, passphrase: string | undefined): string | null {
+  return resolveSecretRef(ctx, passphrase, 'transport:passphrase');
 }
 
 program
@@ -106,25 +110,70 @@ program
   });
 
 program
-  .command('task:create')
-  .description('Create a backup task (fetch_existing or remote_dump, matching the transport\'s type).')
+  .command('database-connection:create')
+  .description('Create a direct DB connection for a client (direct_dump strategy).')
   .requiredOption('--client <clientId>')
-  .requiredOption('--transport <transportId>')
   .requiredOption('--name <name>')
-  .option('--strategy <strategy>', 'fetch_existing | remote_dump', 'fetch_existing')
+  .requiredOption('--engine <engine>', 'postgres | mysql')
+  .requiredOption('--host <host>')
+  .requiredOption('--port <port>')
+  .requiredOption('--database <databaseName>')
+  .requiredOption('--username <username>')
+  .option('--password <password>', 'DB password — stored via Windows Credential Manager, never in SQLite')
+  .option('--ssl-mode <sslMode>', 'disable | require | verify-full')
+  .action((opts) => {
+    const ctx = buildContext();
+    const connection = ctx.databaseConnectionsRepo.create({
+      clientId: opts.client,
+      name: opts.name,
+      engine: opts.engine,
+      host: opts.host,
+      port: Number(opts.port),
+      databaseName: opts.database,
+      username: opts.username,
+      passwordSecretRef: resolveSecretRef(ctx, opts.password, 'databaseConnection:password'),
+      sslMode: opts.sslMode ?? null,
+    });
+    console.log(JSON.stringify(connection, null, 2));
+  });
+
+program
+  .command('task:create')
+  .description('Create a backup task (strategy determined by --strategy, matching the transport/database-connection type).')
+  .requiredOption('--client <clientId>')
+  .requiredOption('--name <name>')
+  .option('--strategy <strategy>', 'fetch_existing | remote_dump | direct_dump', 'fetch_existing')
+  .option('--transport <transportId>', 'required for fetch_existing/remote_dump')
+  .option('--database-connection <databaseConnectionId>', 'required for direct_dump')
   .option('--db-engine <engine>', 'postgres | mysql | unknown', 'unknown')
   .action((opts) => {
     const ctx = buildContext();
-    const input = {
-      clientId: opts.client,
-      transportId: opts.transport,
-      name: opts.name,
-      dbEngine: opts.dbEngine as DbEngine,
-    };
+    const dbEngine = opts.dbEngine as DbEngine;
+
+    if (opts.strategy === 'direct_dump') {
+      if (!opts.databaseConnection) {
+        console.error('direct_dump tasks require --database-connection <id>.');
+        process.exitCode = 1;
+        return;
+      }
+      const task = ctx.tasksRepo.createDirectDump({
+        clientId: opts.client,
+        databaseConnectionId: opts.databaseConnection,
+        name: opts.name,
+        dbEngine,
+      });
+      console.log(JSON.stringify(task, null, 2));
+      return;
+    }
+
+    if (!opts.transport) {
+      console.error(`${opts.strategy} tasks require --transport <id>.`);
+      process.exitCode = 1;
+      return;
+    }
+    const input = { clientId: opts.client, transportId: opts.transport, name: opts.name, dbEngine };
     const task =
-      opts.strategy === 'remote_dump'
-        ? ctx.tasksRepo.createRemoteDump(input)
-        : ctx.tasksRepo.createFetchExisting(input);
+      opts.strategy === 'remote_dump' ? ctx.tasksRepo.createRemoteDump(input) : ctx.tasksRepo.createFetchExisting(input);
     console.log(JSON.stringify(task, null, 2));
   });
 
@@ -144,6 +193,7 @@ program
     const result = await runBackupTask(task, {
       clientsRepo: ctx.clientsRepo,
       transportsRepo: ctx.transportsRepo,
+      databaseConnectionsRepo: ctx.databaseConnectionsRepo,
       runsRepo: ctx.runsRepo,
       logEventsRepo: ctx.logEventsRepo,
       knownHostsRepo: ctx.knownHostsRepo,
@@ -168,7 +218,11 @@ program
       return;
     }
     if (!task.transportId) {
-      console.error(`Task ${taskId} has no transport configured (strategy: ${task.strategy}).`);
+      console.error(
+        task.strategy === 'direct_dump'
+          ? `Task ${taskId} uses direct_dump — connection testing isn't implemented for database connections yet (only for SFTP/SSH transports).`
+          : `Task ${taskId} has no transport configured (strategy: ${task.strategy}).`
+      );
       process.exitCode = 1;
       return;
     }

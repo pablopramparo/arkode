@@ -1,10 +1,9 @@
 import type { DatabaseEngine } from '../types.js';
 
 /**
- * NOT IMPLEMENTED — these interfaces exist only to shape the direct_dump
- * strategy's future dependency so the schema/orchestrator don't need to
- * change again when it's built. See §1/§11 of the architecture plan for why
- * this needs real DB credentials (unlike fetch_existing/remote_dump).
+ * Shapes the direct_dump strategy's dependency on real DB credentials
+ * (unlike fetch_existing/remote_dump, which never need them). See
+ * postgresDumpClient.ts / mysqlDumpClient.ts for the implementations.
  */
 export interface DatabaseConnectionConfig {
   engine: DatabaseEngine;

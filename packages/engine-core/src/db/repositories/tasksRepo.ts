@@ -2,6 +2,7 @@ import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { BackupTask, DbEngine } from '../../types.js';
 import type { TransportsRepo } from './transportsRepo.js';
+import type { DatabaseConnectionsRepo } from './databaseConnectionsRepo.js';
 
 interface BackupTaskRow {
   id: string;
@@ -55,22 +56,56 @@ export interface CreateRemoteDumpTaskInput {
   scheduleTime?: string | null;
 }
 
+export interface CreateDirectDumpTaskInput {
+  clientId: string;
+  databaseConnectionId: string;
+  name: string;
+  dbEngine: DbEngine;
+  scheduleTime?: string | null;
+}
+
 export interface TasksRepo {
   createFetchExisting(input: CreateFetchExistingTaskInput): BackupTask;
   createRemoteDump(input: CreateRemoteDumpTaskInput): BackupTask;
+  createDirectDump(input: CreateDirectDumpTaskInput): BackupTask;
   getById(id: string): BackupTask | null;
   listByClient(clientId: string): BackupTask[];
 }
 
-export function createTasksRepo(db: Database, transportsRepo: TransportsRepo): TasksRepo {
+export function createTasksRepo(
+  db: Database,
+  transportsRepo: TransportsRepo,
+  databaseConnectionsRepo: DatabaseConnectionsRepo
+): TasksRepo {
   const insertStmt = db.prepare(
-    `INSERT INTO backup_tasks (id, client_id, strategy, transport_id, name, db_engine)
-     VALUES (@id, @clientId, @strategy, @transportId, @name, @dbEngine)`
+    `INSERT INTO backup_tasks (id, client_id, strategy, transport_id, database_connection_id, name, db_engine)
+     VALUES (@id, @clientId, @strategy, @transportId, @databaseConnectionId, @name, @dbEngine)`
   );
   const getByIdStmt = db.prepare<[string], BackupTaskRow>('SELECT * FROM backup_tasks WHERE id = ?');
   const listByClientStmt = db.prepare<[string], BackupTaskRow>(
     'SELECT * FROM backup_tasks WHERE client_id = ? ORDER BY name'
   );
+
+  function insertTask(
+    strategy: BackupTask['strategy'],
+    input: { clientId: string; name: string; dbEngine: DbEngine },
+    transportId: string | null,
+    databaseConnectionId: string | null
+  ): BackupTask {
+    const id = randomUUID();
+    insertStmt.run({
+      id,
+      clientId: input.clientId,
+      strategy,
+      transportId,
+      databaseConnectionId,
+      name: input.name,
+      dbEngine: input.dbEngine,
+    });
+    const row = getByIdStmt.get(id);
+    if (!row) throw new Error(`Failed to read back created backup task ${id}`);
+    return toDomain(row);
+  }
 
   function insertTransportBackedTask(
     strategy: 'fetch_existing' | 'remote_dump',
@@ -89,18 +124,7 @@ export function createTasksRepo(db: Database, transportsRepo: TransportsRepo): T
       );
     }
 
-    const id = randomUUID();
-    insertStmt.run({
-      id,
-      clientId: input.clientId,
-      strategy,
-      transportId: input.transportId,
-      name: input.name,
-      dbEngine: input.dbEngine,
-    });
-    const row = getByIdStmt.get(id);
-    if (!row) throw new Error(`Failed to read back created backup task ${id}`);
-    return toDomain(row);
+    return insertTask(strategy, input, input.transportId, null);
   }
 
   return {
@@ -110,6 +134,15 @@ export function createTasksRepo(db: Database, transportsRepo: TransportsRepo): T
 
     createRemoteDump(input) {
       return insertTransportBackedTask('remote_dump', 'ssh', input);
+    },
+
+    createDirectDump(input) {
+      const databaseConnection = databaseConnectionsRepo.getById(input.databaseConnectionId);
+      if (!databaseConnection) {
+        throw new Error(`Database connection ${input.databaseConnectionId} not found.`);
+      }
+
+      return insertTask('direct_dump', input, null, input.databaseConnectionId);
     },
 
     getById(id) {

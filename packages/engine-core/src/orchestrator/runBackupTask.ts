@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { BackupRun, BackupTask, Client, DbEngine } from '../types.js';
 import type { ClientsRepo } from '../db/repositories/clientsRepo.js';
 import type { TransportsRepo } from '../db/repositories/transportsRepo.js';
+import type { DatabaseConnectionsRepo } from '../db/repositories/databaseConnectionsRepo.js';
 import type { RunsRepo } from '../db/repositories/runsRepo.js';
 import type { LogEventsRepo } from '../db/repositories/logEventsRepo.js';
 import type { KnownHostsRepo } from '../db/repositories/knownHostsRepo.js';
@@ -24,6 +25,7 @@ const ORPHANED_PART_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 export interface RunBackupTaskDeps {
   clientsRepo: ClientsRepo;
   transportsRepo: TransportsRepo;
+  databaseConnectionsRepo: DatabaseConnectionsRepo;
   runsRepo: RunsRepo;
   logEventsRepo: LogEventsRepo;
   knownHostsRepo: KnownHostsRepo;
@@ -145,8 +147,15 @@ function resolveExecutor(task: BackupTask, deps: RunBackupTaskDeps): BackupStrat
       }
       return createRemoteDumpExecutor(transport, deps.secretStore, deps.knownHostsRepo, deps.onUnknownHost);
     }
-    case 'direct_dump':
-      return createDirectDumpExecutor();
+    case 'direct_dump': {
+      const databaseConnection = task.databaseConnectionId
+        ? deps.databaseConnectionsRepo.getById(task.databaseConnectionId)
+        : null;
+      if (!databaseConnection) {
+        throw new Error(`Task ${task.id} has strategy direct_dump but no valid database connection configured.`);
+      }
+      return createDirectDumpExecutor(databaseConnection, deps.secretStore);
+    }
   }
 }
 

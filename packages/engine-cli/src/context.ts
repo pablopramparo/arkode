@@ -19,7 +19,7 @@ export function buildContext() {
   const clientsRepo = createClientsRepo(db);
   const transportsRepo = createTransportsRepo(db);
   const databaseConnectionsRepo = createDatabaseConnectionsRepo(db);
-  const tasksRepo = createTasksRepo(db, transportsRepo);
+  const tasksRepo = createTasksRepo(db, transportsRepo, databaseConnectionsRepo);
   const runsRepo = createRunsRepo(db);
   const knownHostsRepo = createKnownHostsRepo(db);
   const logEventsRepo = createLogEventsRepo(db);

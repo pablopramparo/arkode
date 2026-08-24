@@ -14,7 +14,12 @@ export { createDatabaseConnectionsRepo } from './db/repositories/databaseConnect
 export type { DatabaseConnectionsRepo, CreateDatabaseConnectionInput } from './db/repositories/databaseConnectionsRepo.js';
 
 export { createTasksRepo } from './db/repositories/tasksRepo.js';
-export type { TasksRepo, CreateFetchExistingTaskInput, CreateRemoteDumpTaskInput } from './db/repositories/tasksRepo.js';
+export type {
+  TasksRepo,
+  CreateFetchExistingTaskInput,
+  CreateRemoteDumpTaskInput,
+  CreateDirectDumpTaskInput,
+} from './db/repositories/tasksRepo.js';
 
 export { createRunsRepo } from './db/repositories/runsRepo.js';
 export type { RunsRepo, CreateRunInput, SuccessfulFileSignature } from './db/repositories/runsRepo.js';
@@ -38,6 +43,8 @@ export { buildHostVerifier } from './transports/hostKeyVerification.js';
 export { resolveOutputPathTemplate } from './transports/outputPathTemplate.js';
 
 export * from './databaseConnections/types.js';
+export { createPostgresDumpClient } from './databaseConnections/postgresDumpClient.js';
+export { createMysqlDumpClient } from './databaseConnections/mysqlDumpClient.js';
 
 export * from './strategies/types.js';
 export { createFetchExistingExecutor } from './strategies/fetchExistingExecutor.js';
