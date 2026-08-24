@@ -3,6 +3,7 @@ import { Dashboard } from './components/Dashboard';
 import { Clientes } from './components/Clientes';
 import { Conexiones } from './components/Conexiones';
 import { Tareas } from './components/Tareas';
+import { Historial } from './components/Historial';
 import { AppShell, type Screen } from './components/AppShell';
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
       {screen === 'clientes' && <Clientes />}
       {screen === 'conexiones' && <Conexiones />}
       {screen === 'tareas' && <Tareas />}
+      {screen === 'historial' && <Historial />}
     </AppShell>
   );
 }

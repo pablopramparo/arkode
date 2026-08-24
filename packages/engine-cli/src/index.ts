@@ -664,6 +664,18 @@ program
   });
 
 program
+  .command('run:list')
+  .description('List past backup runs (any status), newest first — optionally filtered by task or client.')
+  .option('--task <taskId>')
+  .option('--client <clientId>')
+  .option('--limit <n>', 'default 200', '200')
+  .action((opts) => {
+    const ctx = buildContext();
+    const runs = ctx.runsRepo.listRecent({ taskId: opts.task, clientId: opts.client, limit: Number(opts.limit) });
+    console.log(JSON.stringify(runs, null, 2));
+  });
+
+program
   .command('config:export')
   .description('Export one, several, or all clients\' configuration to JSON. Never includes secrets (SSH passphrases, DB passwords) — see config:import.')
   .option('--client <clientId>', 'repeatable: export just this client', (value, previous: string[]) => [...previous, value], [] as string[])
@@ -1061,6 +1073,19 @@ program
             })
         );
         sendJson(res, 200, tasks);
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/runs') {
+        const taskId = url.searchParams.get('taskId') ?? undefined;
+        const clientId = url.searchParams.get('clientId') ?? undefined;
+        const limitParam = url.searchParams.get('limit');
+        const runs = ctx.runsRepo.listRecent({ taskId, clientId, limit: limitParam ? Number(limitParam) : undefined }).map((run) => {
+          const client = ctx.clientsRepo.getById(run.clientId);
+          const task = ctx.tasksRepo.getById(run.taskId);
+          return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null };
+        });
+        sendJson(res, 200, runs);
         return;
       }
 

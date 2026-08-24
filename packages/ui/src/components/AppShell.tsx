@@ -9,7 +9,7 @@ import {
 } from "./icons";
 import arkodeLogo from "../assets/arkode-logo-completo.png";
 
-export type Screen = "dashboard" | "clientes" | "conexiones" | "tareas";
+export type Screen = "dashboard" | "clientes" | "conexiones" | "tareas" | "historial";
 
 interface NavItem {
   id: Screen | string;
@@ -30,7 +30,7 @@ const NAV_ITEMS: NavItem[] = [
     id: "historial",
     label: "Historial",
     icon: <ClipboardIcon />,
-    enabled: false,
+    enabled: true,
   },
   { id: "logs", label: "Logs", icon: <DocumentIcon />, enabled: false },
   {

@@ -27,3 +27,26 @@ export function formatRetention(count: number | null, days: number | null): stri
   if (days != null) parts.push(`${days} días`);
   return parts.length > 0 ? parts.join(' / ') : '—';
 }
+
+/** "45 s", "3 min", "1 h 12 min" — a still-running attempt (no duration yet) shows as "—". */
+export function formatDuration(durationMs: number | null): string {
+  if (durationMs == null) return '—';
+  const totalSeconds = Math.round(durationMs / 1000);
+  if (totalSeconds < 60) return `${totalSeconds} s`;
+  const totalMinutes = Math.round(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes} min`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
+}
+
+/** "24/8, 09:15" — a compact absolute timestamp for a history table (age alone isn't enough once you're looking at many rows). */
+export function formatDateTime(isoTimestamp: string | null): string {
+  if (isoTimestamp == null) return '—';
+  return new Date(isoTimestamp).toLocaleString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}

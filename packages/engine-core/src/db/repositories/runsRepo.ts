@@ -83,6 +83,8 @@ export interface RunsRepo {
   listSuccessfulRuns(taskId: string): BackupRun[];
   /** In-progress runs (Running/Producing/Validating) whose recorded pid may no longer be alive. */
   listInProgress(taskId?: string): BackupRun[];
+  /** Every run (any status), newest first, optionally filtered — for a Historial view. Capped by `limit` (default 200) so a long-lived install never loads its entire history in one request. */
+  listRecent(opts?: { taskId?: string; clientId?: string; limit?: number }): BackupRun[];
 }
 
 export function createRunsRepo(db: Database): RunsRepo {
@@ -137,6 +139,13 @@ export function createRunsRepo(db: Database): RunsRepo {
   );
   const inProgressAllStmt = db.prepare<[], BackupRunRow>(
     `SELECT * FROM backup_runs WHERE status IN ('Running','Producing','Validating')`
+  );
+  const listRecentStmt = db.prepare<{ taskId: string | null; clientId: string | null; limit: number }, BackupRunRow>(
+    `SELECT * FROM backup_runs
+     WHERE (@taskId IS NULL OR task_id = @taskId)
+       AND (@clientId IS NULL OR client_id = @clientId)
+     ORDER BY started_at DESC
+     LIMIT @limit`
   );
 
   return {
@@ -208,6 +217,15 @@ export function createRunsRepo(db: Database): RunsRepo {
 
     listInProgress(taskId) {
       const rows = taskId ? inProgressStmt.all(taskId) : inProgressAllStmt.all();
+      return rows.map(toDomain);
+    },
+
+    listRecent(opts) {
+      const rows = listRecentStmt.all({
+        taskId: opts?.taskId ?? null,
+        clientId: opts?.clientId ?? null,
+        limit: opts?.limit ?? 200,
+      });
       return rows.map(toDomain);
     },
   };
