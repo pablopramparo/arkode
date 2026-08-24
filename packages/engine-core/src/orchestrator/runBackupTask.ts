@@ -34,6 +34,14 @@ export interface RunBackupTaskDeps {
   retentionDeletionsRepo: RetentionDeletionsRepo;
   secretStore: SecretStore;
   onUnknownHost?: (presented: { keyType: string; fingerprintSha256: string }) => Promise<boolean>;
+  /**
+   * Overrides how the strategy executor is resolved. Production code never
+   * sets this — it exists so tests can inject a fake BackupStrategyExecutor
+   * and exercise the orchestrator's own logic (locking, checksum fallback,
+   * retention wiring, status transitions) without a real transport or
+   * database connection.
+   */
+  resolveExecutorOverride?: (task: BackupTask, deps: RunBackupTaskDeps) => BackupStrategyExecutor;
 }
 
 export interface RunBackupTaskResult {
@@ -226,7 +234,7 @@ export async function runBackupTask(task: BackupTask, deps: RunBackupTaskDeps): 
     deps.runsRepo.markProducing(run.id);
     logger.log('info', 'produce', `Producing dump via ${task.strategy}.`);
 
-    const executor = resolveExecutor(task, deps);
+    const executor = deps.resolveExecutorOverride ? deps.resolveExecutorOverride(task, deps) : resolveExecutor(task, deps);
     const produced = await executor.produce({ task, client, targetDir });
 
     logger.log('info', 'download', `Produced ${produced.fileName} (${produced.sizeBytes} bytes) at ${produced.localTempPath}.`);

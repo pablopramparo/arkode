@@ -16,10 +16,14 @@ export function createPostgresCustomValidator(pgRestorePath: string | undefined 
     engine: 'postgres',
     async validate(localFilePath: string): Promise<ValidationResult> {
       if (!pgRestorePath) {
-        return {
-          valid: false,
-          warnings: ['PG_RESTORE_PATH is not configured — cannot structurally validate the dump.'],
-        };
+        const details = 'PG_RESTORE_PATH is not configured — cannot structurally validate the dump.';
+        // Populated in both fields: `details` is what the orchestrator
+        // surfaces as backup_runs.error_message on a Failed run, `warnings`
+        // is what a future Warning-outcome UI would read — this is the only
+        // failure branch here that was missing `details`, which meant a
+        // Failed run recorded a generic "Validation failed." instead of the
+        // actual reason.
+        return { valid: false, warnings: [details], details };
       }
 
       try {
