@@ -1,17 +1,35 @@
-import type { DashboardRow } from 'engine-core';
+import type { BackupRun, ConnectionTestResult, DashboardRow } from 'engine-core';
 
-// Dev-time only: talks to `engine-cli serve`'s read-only /status endpoint
-// directly over HTTP. Once the Tauri shell exists, this should be replaced
-// with either the same server reached through the shell's sidecar, or
-// one-shot subprocess calls via tauri-plugin-shell — see CLAUDE.md.
-const STATUS_URL = 'http://127.0.0.1:4287/status';
+// Dev-time only: talks to `engine-cli serve` directly over HTTP. Once the
+// Tauri shell exists, this should be replaced with either the same server
+// reached through the shell's sidecar, or one-shot subprocess calls via
+// tauri-plugin-shell — see CLAUDE.md.
+const BASE_URL = 'http://127.0.0.1:4287';
 
 export async function fetchDashboardStatus(): Promise<DashboardRow[]> {
-  const res = await fetch(STATUS_URL);
+  const res = await fetch(`${BASE_URL}/status`);
   if (!res.ok) {
     throw new Error(`Status request failed: ${res.status} ${res.statusText}`);
   }
   return res.json();
 }
 
-export type { DashboardRow };
+async function postTaskAction<T>(taskId: string, action: 'run' | 'test-connection'): Promise<T> {
+  const res = await fetch(`${BASE_URL}/tasks/${taskId}/${action}`, { method: 'POST' });
+  const body = await res.json();
+  if (res.status >= 500 || res.status === 404) {
+    throw new Error(body.error ?? `Request failed: ${res.status}`);
+  }
+  // 502 from test-connection is an expected "connection failed" result, not a request error — body is still the ConnectionTestResult shape.
+  return body;
+}
+
+export function runTaskNow(taskId: string): Promise<BackupRun> {
+  return postTaskAction<BackupRun>(taskId, 'run');
+}
+
+export function testTaskConnection(taskId: string): Promise<ConnectionTestResult> {
+  return postTaskAction<ConnectionTestResult>(taskId, 'test-connection');
+}
+
+export type { DashboardRow, BackupRun, ConnectionTestResult };

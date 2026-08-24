@@ -2,7 +2,7 @@
 import { Command } from 'commander';
 import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { createServer, type ServerResponse } from 'node:http';
 import {
   runBackupTask,
   createSftpAdapterFromTransport,
@@ -311,21 +311,38 @@ program
       return;
     }
 
-    const result = await runBackupTask(task, {
-      clientsRepo: ctx.clientsRepo,
-      transportsRepo: ctx.transportsRepo,
-      databaseConnectionsRepo: ctx.databaseConnectionsRepo,
-      runsRepo: ctx.runsRepo,
-      logEventsRepo: ctx.logEventsRepo,
-      knownHostsRepo: ctx.knownHostsRepo,
-      retentionDeletionsRepo: ctx.retentionDeletionsRepo,
-      secretStore: ctx.secretStore,
-      onUnknownHost: confirmHostInteractively,
-    });
+    const result = await runTaskNow(ctx, task);
 
     console.log(JSON.stringify(result.run, null, 2));
     if (result.run.status === 'Failed') process.exitCode = 1;
   });
+
+/** Shared by the `task:test-connection` CLI command and the `serve` HTTP endpoint. Throws if the task or its transport/database connection can't be resolved. */
+async function testTaskConnection(ctx: ReturnType<typeof buildContext>, task: NonNullable<ReturnType<typeof ctx.tasksRepo.getById>>): Promise<ConnectionTestResult> {
+  if (task.strategy === 'direct_dump') {
+    const connection = task.databaseConnectionId ? ctx.databaseConnectionsRepo.getById(task.databaseConnectionId) : null;
+    if (!connection) throw new Error(`Task ${task.id} has no valid database connection configured.`);
+    return testDatabaseConnection(connection, ctx.secretStore);
+  }
+  const transport = task.transportId ? ctx.transportsRepo.getById(task.transportId) : null;
+  if (!transport) throw new Error(`Task ${task.id} has no valid transport configured.`);
+  return testTransportConnection(ctx, transport);
+}
+
+/** Shared by the `task:run` CLI command and the `serve` HTTP endpoint. */
+function runTaskNow(ctx: ReturnType<typeof buildContext>, task: NonNullable<ReturnType<typeof ctx.tasksRepo.getById>>) {
+  return runBackupTask(task, {
+    clientsRepo: ctx.clientsRepo,
+    transportsRepo: ctx.transportsRepo,
+    databaseConnectionsRepo: ctx.databaseConnectionsRepo,
+    runsRepo: ctx.runsRepo,
+    logEventsRepo: ctx.logEventsRepo,
+    knownHostsRepo: ctx.knownHostsRepo,
+    retentionDeletionsRepo: ctx.retentionDeletionsRepo,
+    secretStore: ctx.secretStore,
+    onUnknownHost: confirmHostInteractively,
+  });
+}
 
 program
   .command('task:test-connection')
@@ -340,25 +357,7 @@ program
       return;
     }
 
-    let result: ConnectionTestResult;
-    if (task.strategy === 'direct_dump') {
-      const connection = task.databaseConnectionId ? ctx.databaseConnectionsRepo.getById(task.databaseConnectionId) : null;
-      if (!connection) {
-        console.error(`Task ${taskId} has no valid database connection configured.`);
-        process.exitCode = 1;
-        return;
-      }
-      result = await testDatabaseConnection(connection, ctx.secretStore);
-    } else {
-      const transport = task.transportId ? ctx.transportsRepo.getById(task.transportId) : null;
-      if (!transport) {
-        console.error(`Task ${taskId} has no valid transport configured.`);
-        process.exitCode = 1;
-        return;
-      }
-      result = await testTransportConnection(ctx, transport);
-    }
-
+    const result = await testTaskConnection(ctx, task);
     console.log(JSON.stringify(result, null, 2));
     if (!result.ok) process.exitCode = 1;
   });
@@ -545,23 +544,49 @@ program
 program
   .command('serve')
   .description(
-    'Start a read-only local HTTP server exposing dashboard status (GET /status) for the UI to poll. Dev-only for now — see CLAUDE.md.'
+    'Start a local HTTP server exposing dashboard status (GET /status) and per-task actions (run now, test connection) for the UI. Dev-only for now — see CLAUDE.md.'
   )
   .option('--port <port>', 'default 4287', '4287')
   .action((opts) => {
     const ctx = buildContext();
     const port = Number(opts.port);
 
-    const server = createServer((req, res) => {
+    function sendJson(res: ServerResponse, status: number, body: unknown) {
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    }
+
+    const server = createServer(async (req, res) => {
       res.setHeader('Access-Control-Allow-Origin', '*'); // dev-only: the UI runs on a different Vite port during development
+
       if (req.method === 'GET' && req.url === '/status') {
-        const rows = getDashboardStatus(ctx);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(rows));
+        sendJson(res, 200, getDashboardStatus(ctx));
         return;
       }
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'not found' }));
+
+      const actionMatch = req.method === 'POST' && req.url?.match(/^\/tasks\/([^/]+)\/(run|test-connection)$/);
+      if (actionMatch) {
+        const [, taskId, action] = actionMatch;
+        const task = ctx.tasksRepo.getById(taskId);
+        if (!task) {
+          sendJson(res, 404, { error: `Task ${taskId} not found.` });
+          return;
+        }
+        try {
+          if (action === 'run') {
+            const result = await runTaskNow(ctx, task);
+            sendJson(res, 200, result.run);
+          } else {
+            const result = await testTaskConnection(ctx, task);
+            sendJson(res, result.ok ? 200 : 502, result);
+          }
+        } catch (err) {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      sendJson(res, 404, { error: 'not found' });
     });
 
     server.listen(port, '127.0.0.1', () => {

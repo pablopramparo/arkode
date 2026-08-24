@@ -23,6 +23,8 @@ export interface DashboardRow {
   lastGoodBackupAt: string | null;
   /** When the latest attempt (regardless of outcome) finished, for "last checked". */
   latestAttemptAt: string | null;
+  /** The latest attempt's error message, if it failed — null otherwise (including for a never-run task). */
+  latestErrorMessage: string | null;
 }
 
 export interface GetDashboardStatusDeps {
@@ -47,6 +49,7 @@ export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[]
         checksumSha256: latestGoodRun?.checksumSha256 ?? null,
         lastGoodBackupAt: latestGoodRun?.downloadedAt ?? null,
         latestAttemptAt: latestRun?.finishedAt ?? null,
+        latestErrorMessage: latestRun?.errorMessage ?? null,
       };
     })
   );

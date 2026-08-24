@@ -28,13 +28,13 @@ function insertRun(
   clientId: string,
   status: string,
   hoursAgo: number,
-  opts: { sizeBytes?: number | null } = {}
+  opts: { sizeBytes?: number | null; errorMessage?: string | null } = {}
 ) {
   const id = randomUUID();
   ctx.db
     .prepare(
-      `INSERT INTO backup_runs (id, task_id, client_id, strategy, status, started_at, finished_at, downloaded_at, local_path, size_bytes, pid)
-       VALUES (?, ?, ?, 'fetch_existing', ?, datetime('now', '-' || ? || ' hours'), datetime('now', '-' || ? || ' hours'), datetime('now', '-' || ? || ' hours'), ?, ?, 1)`
+      `INSERT INTO backup_runs (id, task_id, client_id, strategy, status, started_at, finished_at, downloaded_at, local_path, size_bytes, error_message, pid)
+       VALUES (?, ?, ?, 'fetch_existing', ?, datetime('now', '-' || ? || ' hours'), datetime('now', '-' || ? || ' hours'), datetime('now', '-' || ? || ' hours'), ?, ?, ?, 1)`
     )
     .run(
       id,
@@ -45,7 +45,8 @@ function insertRun(
       hoursAgo,
       hoursAgo,
       opts.sizeBytes !== undefined && opts.sizeBytes !== null ? '/fake.dump' : null,
-      opts.sizeBytes ?? null
+      opts.sizeBytes ?? null,
+      opts.errorMessage ?? null
     );
 }
 
@@ -64,13 +65,14 @@ describe('getDashboardStatus', () => {
     const ctx = createTestContext();
     const { task, client } = seedTask(ctx);
     insertRun(ctx, task.id, client.id, 'Success', 35, { sizeBytes: 1_258_291_200 });
-    insertRun(ctx, task.id, client.id, 'Failed', 2, { sizeBytes: null });
+    insertRun(ctx, task.id, client.id, 'Failed', 2, { sizeBytes: null, errorMessage: 'ECONNREFUSED 10.0.0.5:22' });
 
     const rows = getDashboardStatus(ctx);
 
     expect(rows[0].status).toBe('Failed'); // the fresh failure must be visible, not hidden behind the old success
     expect(rows[0].sizeBytes).toBe(1_258_291_200); // but the last real backup's data is still surfaced
     expect(rows[0].lastGoodBackupAt).not.toBeNull();
+    expect(rows[0].latestErrorMessage).toBe('ECONNREFUSED 10.0.0.5:22');
   });
 
   it('reports a healthy Success task with matching size and recent lastGoodBackupAt', () => {
@@ -82,6 +84,7 @@ describe('getDashboardStatus', () => {
 
     expect(rows[0].status).toBe('Success');
     expect(rows[0].sizeBytes).toBe(148_897_792);
+    expect(rows[0].latestErrorMessage).toBeNull();
   });
 
   it('only includes tasks belonging to active clients', () => {

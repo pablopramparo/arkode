@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
-import { fetchDashboardStatus, type DashboardRow } from '../lib/statusClient';
+import { fetchDashboardStatus, runTaskNow, testTaskConnection, type ConnectionTestResult, type DashboardRow } from '../lib/statusClient';
 import { formatAge, formatSize, ageInHours } from '../lib/format';
 import { StatusChip } from './StatusChip';
 
@@ -14,10 +14,18 @@ function isProblemRow(row: DashboardRow): boolean {
   return hours != null && hours > STALE_THRESHOLD_HOURS;
 }
 
+interface RowActionState {
+  busy?: 'run' | 'test';
+  testResult?: ConnectionTestResult;
+  actionError?: string;
+  errorExpanded?: boolean;
+}
+
 export function Dashboard() {
   const [rows, setRows] = useState<DashboardRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
+  const [actionState, setActionState] = useState<Record<string, RowActionState>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -39,6 +47,38 @@ export function Dashboard() {
     const interval = setInterval(refresh, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  function patchAction(taskId: string, patch: RowActionState) {
+    setActionState((prev) => ({ ...prev, [taskId]: { ...prev[taskId], ...patch } }));
+  }
+
+  async function handleRun(taskId: string) {
+    patchAction(taskId, { busy: 'run', actionError: undefined, testResult: undefined });
+    try {
+      await runTaskNow(taskId);
+      patchAction(taskId, { busy: undefined });
+      await refresh();
+    } catch (err) {
+      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function handleTest(taskId: string) {
+    patchAction(taskId, { busy: 'test', actionError: undefined, testResult: undefined });
+    try {
+      const result = await testTaskConnection(taskId);
+      patchAction(taskId, { busy: undefined, testResult: result });
+    } catch (err) {
+      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  function toggleError(taskId: string) {
+    setActionState((prev) => ({
+      ...prev,
+      [taskId]: { ...prev[taskId], errorExpanded: !prev[taskId]?.errorExpanded },
+    }));
+  }
 
   const problemCount = rows?.filter(isProblemRow).length ?? 0;
 
@@ -84,42 +124,88 @@ export function Dashboard() {
                 <th className="px-4 py-2 font-medium">Tamaño</th>
                 <th className="px-4 py-2 font-medium">Estado</th>
                 <th className="px-4 py-2 font-medium">Antigüedad</th>
+                <th className="px-4 py-2 font-medium">Acciones</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => {
                 const problem = isProblemRow(row);
+                const state = actionState[row.taskId];
+                const hasDetail = Boolean(state?.testResult || state?.actionError || (state?.errorExpanded && row.latestErrorMessage));
                 return (
-                  <tr
-                    key={row.taskId}
-                    style={{
-                      borderTop: '1px solid var(--separator)',
-                      borderLeft: problem ? '3px solid var(--danger)' : '3px solid transparent',
-                      backgroundColor: problem ? 'color-mix(in oklab, var(--danger) 6%, transparent)' : undefined,
-                    }}
-                  >
-                    <td className="px-4 py-2.5 font-medium">{row.client}</td>
-                    <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                      {row.task}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      {row.lastGoodBackupAt
-                        ? new Date(row.lastGoodBackupAt).toLocaleString('es-AR', {
-                            day: '2-digit',
-                            month: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })
-                        : '—'}
-                    </td>
-                    <td className="px-4 py-2.5">{formatSize(row.sizeBytes)}</td>
-                    <td className="px-4 py-2.5">
-                      <StatusChip status={row.status} />
-                    </td>
-                    <td className="px-4 py-2.5" style={{ color: problem ? 'var(--danger)' : undefined, fontWeight: problem ? 600 : undefined }}>
-                      {formatAge(row.lastGoodBackupAt)}
-                    </td>
-                  </tr>
+                  <Fragment key={row.taskId}>
+                    <tr
+                      style={{
+                        borderTop: '1px solid var(--separator)',
+                        borderLeft: problem ? '3px solid var(--danger)' : '3px solid transparent',
+                        backgroundColor: problem ? 'color-mix(in oklab, var(--danger) 6%, transparent)' : undefined,
+                      }}
+                    >
+                      <td className="px-4 py-2.5 font-medium">{row.client}</td>
+                      <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                        {row.task}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {row.lastGoodBackupAt
+                          ? new Date(row.lastGoodBackupAt).toLocaleString('es-AR', {
+                              day: '2-digit',
+                              month: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : '—'}
+                      </td>
+                      <td className="px-4 py-2.5">{formatSize(row.sizeBytes)}</td>
+                      <td className="px-4 py-2.5">
+                        <StatusChip status={row.status} />
+                      </td>
+                      <td className="px-4 py-2.5" style={{ color: problem ? 'var(--danger)' : undefined, fontWeight: problem ? 600 : undefined }}>
+                        {formatAge(row.lastGoodBackupAt)}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            isDisabled={Boolean(state?.busy)}
+                            onPress={() => handleRun(row.taskId)}
+                          >
+                            {state?.busy === 'run' ? 'Ejecutando…' : 'Ejecutar ahora'}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            isDisabled={Boolean(state?.busy)}
+                            onPress={() => handleTest(row.taskId)}
+                          >
+                            {state?.busy === 'test' ? 'Probando…' : 'Probar conexión'}
+                          </Button>
+                          {row.status === 'Failed' && row.latestErrorMessage && (
+                            <Button size="sm" variant="ghost" onPress={() => toggleError(row.taskId)}>
+                              {state?.errorExpanded ? 'Ocultar error' : 'Ver error'}
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                    {hasDetail && (
+                      <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
+                        <td colSpan={7} className="px-4 py-2 text-xs">
+                          {state?.actionError && <span style={{ color: 'var(--danger)' }}>Error: {state.actionError}</span>}
+                          {state?.testResult && (
+                            <span style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
+                              {state.testResult.ok ? 'Conexión OK' : 'Conexión fallida'}
+                              {state.testResult.message ? ` — ${state.testResult.message}` : ''}
+                              {state.testResult.latencyMs != null ? ` (${state.testResult.latencyMs} ms)` : ''}
+                            </span>
+                          )}
+                          {!state?.actionError && !state?.testResult && state?.errorExpanded && row.latestErrorMessage && (
+                            <span style={{ color: 'var(--danger)', fontFamily: 'monospace' }}>{row.latestErrorMessage}</span>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
