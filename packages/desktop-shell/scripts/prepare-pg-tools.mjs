@@ -13,7 +13,7 @@
 // doesn't re-download 344MB every time — only the first run, or after
 // bumping PG_VERSION below, touches the network.
 import { execFileSync } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, readdirSync, copyFileSync, rmSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readdirSync, copyFileSync, rmSync, statSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,13 +33,49 @@ async function ensureCache() {
     return;
   }
 
-  console.log(`Downloading PostgreSQL ${PG_VERSION} Windows binaries from EDB (~344MB, only bin/ is kept)...`);
   const zipPath = join(cacheDir, 'download.zip');
   mkdirSync(cacheDir, { recursive: true });
 
-  const res = await fetch(ZIP_URL);
-  if (!res.ok || !res.body) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
-  await pipeline(res.body, createWriteStream(zipPath));
+  // The real zip is ~344MB. A response well under that (an anti-bot/CDN
+  // block page, a redirect EDB serves for datacenter/cloud-runner IP ranges,
+  // a transient truncated transfer, etc.) still comes back as an HTTP 200
+  // with a body — silently writing that out and only failing two steps
+  // later inside `tar` (a cryptic "--strip-components=1: Not found in
+  // archive") is exactly what happened on this pipeline's first real CI
+  // run. Checking the actual byte count against a sane floor here fails
+  // fast with a diagnosable reason instead. A couple of retries covers a
+  // one-off transient blip; a real block/redirect will fail the same way
+  // every time and surface clearly rather than after several minutes.
+  const MIN_EXPECTED_BYTES = 250 * 1024 * 1024; // real zip is ~344MB; well under that means something's wrong
+  const MAX_ATTEMPTS = 3;
+
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    console.log(`Downloading PostgreSQL ${PG_VERSION} Windows binaries from EDB (~344MB, only bin/ is kept)... (attempt ${attempt}/${MAX_ATTEMPTS})`);
+    try {
+      const res = await fetch(ZIP_URL);
+      const contentLength = res.headers.get('content-length');
+      console.log(`  HTTP ${res.status} ${res.statusText}, content-type=${res.headers.get('content-type')}, content-length=${contentLength ?? 'unknown'}`);
+      if (!res.ok || !res.body) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
+      await pipeline(res.body, createWriteStream(zipPath));
+
+      const actualBytes = statSync(zipPath).size;
+      console.log(`  Downloaded ${actualBytes} bytes.`);
+      if (actualBytes < MIN_EXPECTED_BYTES) {
+        throw new Error(
+          `Downloaded file is only ${actualBytes} bytes, expected at least ${MIN_EXPECTED_BYTES} (~250MB) for the real EDB zip. ` +
+            `This usually means EDB served something other than the real file (a block/redirect page for this network, a transient truncated transfer, etc.), not a real PostgreSQL distribution.`,
+        );
+      }
+      lastError = undefined;
+      break;
+    } catch (err) {
+      lastError = err;
+      rmSync(zipPath, { force: true });
+      console.error(`  Attempt ${attempt} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (lastError) throw lastError;
 
   console.log('Extracting bin/ (pg_dump, pg_restore, psql, and their DLLs)...');
   mkdirSync(cacheBinDir, { recursive: true });
