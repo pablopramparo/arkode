@@ -24,6 +24,8 @@ import {
   getSystemInfo,
   copyPrivateKeyIntoAppStorage,
   createPostgresToolRegistry,
+  downloadTool,
+  vendoredToolsDir,
   createMysqlToolRegistry,
   createMariaDbToolRegistry,
   testDirectDumpCompatibility,
@@ -1000,6 +1002,22 @@ program
   });
 
 program
+  .command('pg-tools:download')
+  .description(
+    'Download a real pg_dump/pg_restore/psql set from EnterpriseDB and register it for a PostgreSQL major version, instead of pointing pg-tools:register at a manually-installed copy. Needs the *exact* EDB release version (major.minor-buildrevision, e.g. "18.6-1") to build a real download URL -- this is not guessed from the major version alone.'
+  )
+  .requiredOption('--pg-version <majorVersion>', 'the major version to register the result under, e.g. "18"')
+  .requiredOption('--exact-version <exactVersion>', 'EDB\'s exact release version, e.g. "18.6-1" -- see enterprisedb.com/download-postgresql-binaries')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    const destDir = vendoredToolsDir('postgres', opts.pgVersion);
+    console.log(`Downloading PostgreSQL ${opts.exactVersion} client tools...`);
+    const paths = (await downloadTool({ engine: 'postgres', exactVersion: opts.exactVersion, destDir })) as { pgDumpPath: string; pgRestorePath: string };
+    createPostgresToolRegistry(ctx.settingsRepo).register(opts.pgVersion, paths);
+    console.log(`Downloaded and registered PostgreSQL ${opts.pgVersion}: ${paths.pgDumpPath}`);
+  });
+
+program
   .command('mysql-tools:register')
   .description(
     'Register a mysqldump path for a specific MySQL major.minor version (e.g. "8.0", "9.1"), so direct_dump picks a version-matched mysqldump instead of always using MYSQLDUMP_PATH. Requires MYSQL_CLI_PATH to be set for version-aware selection to actually kick in — see CLAUDE.md.'
@@ -1065,6 +1083,22 @@ program
     const registry = createMariaDbToolRegistry(ctx.settingsRepo);
     registry.unregister(opts.mariadbVersion);
     console.log(`Unregistered MariaDB ${opts.mariadbVersion} (if it was registered).`);
+  });
+
+program
+  .command('mariadb-tools:download')
+  .description(
+    "Download a real mariadb-dump from MariaDB's own archive and register it for a MariaDB major.minor version, instead of pointing mariadb-tools:register at a manually-installed copy. Needs the *exact* release version (major.minor.patch, e.g. \"11.5.2\") to build a real download URL."
+  )
+  .requiredOption('--mariadb-version <majorMinorVersion>', 'the major.minor version to register the result under, e.g. "11.5"')
+  .requiredOption('--exact-version <exactVersion>', 'MariaDB\'s exact release version, e.g. "11.5.2" -- see archive.mariadb.org')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    const destDir = vendoredToolsDir('mariadb', opts.mariadbVersion);
+    console.log(`Downloading MariaDB ${opts.exactVersion} client tools...`);
+    const paths = (await downloadTool({ engine: 'mariadb', exactVersion: opts.exactVersion, destDir })) as { mariaDbDumpPath: string };
+    createMariaDbToolRegistry(ctx.settingsRepo).register(opts.mariadbVersion, paths);
+    console.log(`Downloaded and registered MariaDB ${opts.mariadbVersion}: ${paths.mariaDbDumpPath}`);
   });
 
 program
@@ -1572,6 +1606,29 @@ program
           sendJson(res, 200, { ok: true });
         } catch (err) {
           sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      const toolRegistryDownloadMatch = req.method === 'POST' && pathname.match(/^\/tool-registry\/(postgres|mariadb)\/download$/);
+      if (toolRegistryDownloadMatch) {
+        try {
+          const [, engine] = toolRegistryDownloadMatch as [string, 'postgres' | 'mariadb'];
+          const body = await readJsonBody(req);
+          if (!body.version || !body.exactVersion) {
+            sendJson(res, 400, { error: 'version (registry key, e.g. "18") and exactVersion (e.g. "18.6-1") are both required.' });
+            return;
+          }
+          const destDir = vendoredToolsDir(engine, body.version);
+          const paths = await downloadTool({ engine, exactVersion: body.exactVersion, destDir });
+          if (engine === 'postgres') {
+            createPostgresToolRegistry(ctx.settingsRepo).register(body.version, paths as { pgDumpPath: string; pgRestorePath: string });
+          } else {
+            createMariaDbToolRegistry(ctx.settingsRepo).register(body.version, paths as { mariaDbDumpPath: string });
+          }
+          sendJson(res, 200, { ok: true, paths });
+        } catch (err) {
+          sendJson(res, 502, { error: err instanceof Error ? err.message : String(err) });
         }
         return;
       }

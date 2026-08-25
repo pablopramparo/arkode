@@ -73,6 +73,8 @@ export { createMariaDbToolRegistry, extractMariaDbMajorMinorVersion } from './da
 export type { MariaDbToolRegistry, MariaDbToolPaths } from './databaseConnections/mariaDbToolRegistry.js';
 export { testDirectDumpCompatibility } from './databaseConnections/testDirectDumpCompatibility.js';
 export type { DirectDumpCompatibilityResult, ToolCompatibility } from './databaseConnections/testDirectDumpCompatibility.js';
+export { downloadTool } from './databaseConnections/downloadTool.js';
+export type { DownloadableEngine, DownloadToolInput } from './databaseConnections/downloadTool.js';
 
 export * from './strategies/types.js';
 export { createFetchExistingExecutor } from './strategies/fetchExistingExecutor.js';

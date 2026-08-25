@@ -14,6 +14,7 @@ import {
   fetchToolRegistry,
   registerTool,
   unregisterTool,
+  downloadTool,
   type ToolRegistryData,
   type ToolRegistryEngine,
 } from '../lib/configClient';
@@ -50,6 +51,8 @@ function ToolRegistrySection({
   rows,
   onRegister,
   onUnregister,
+  onDownload,
+  exactVersionHint,
 }: {
   title: string;
   description: string;
@@ -57,13 +60,22 @@ function ToolRegistrySection({
   rows: Record<string, Record<string, string>>;
   onRegister: (version: string, values: Record<string, string>) => Promise<void>;
   onUnregister: (version: string) => Promise<void>;
+  /** postgres/mariadb only — see downloadTool.ts's own doc comment for why mysql is excluded from auto-download entirely. */
+  onDownload?: (version: string, exactVersion: string) => Promise<void>;
+  /** Placeholder text for the "exact version" field, shown only when onDownload is set. */
+  exactVersionHint?: string;
 }) {
+  const [mode, setMode] = useState<'path' | 'download'>('path');
   const [version, setVersion] = useState('');
+  const [exactVersion, setExactVersion] = useState('');
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSubmit = version.trim().length > 0 && fields.every((f) => (values[f.key] ?? '').trim().length > 0);
+  const canSubmit =
+    mode === 'download'
+      ? version.trim().length > 0 && exactVersion.trim().length > 0
+      : version.trim().length > 0 && fields.every((f) => (values[f.key] ?? '').trim().length > 0);
 
   async function handlePick(fieldKey: string) {
     const selected = await openDialog({
@@ -78,9 +90,14 @@ function ToolRegistrySection({
     setBusy(true);
     setError(null);
     try {
-      await onRegister(version.trim(), values);
+      if (mode === 'download') {
+        await onDownload!(version.trim(), exactVersion.trim());
+        setExactVersion('');
+      } else {
+        await onRegister(version.trim(), values);
+        setValues({});
+      }
       setVersion('');
-      setValues({});
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -137,6 +154,30 @@ function ToolRegistrySection({
         </table>
       )}
 
+      {onDownload && (
+        <div className="mb-2 flex gap-2">
+          {(
+            [
+              { value: 'path' as const, label: 'Ruta local' },
+              { value: 'download' as const, label: 'Descargar automáticamente' },
+            ]
+          ).map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setMode(opt.value)}
+              className="rounded-full px-3 py-1 text-xs font-medium"
+              style={{
+                backgroundColor: mode === opt.value ? 'var(--accent)' : 'var(--surface-secondary)',
+                color: mode === opt.value ? 'white' : 'var(--muted)',
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="flex flex-wrap items-end gap-2">
         <div className="flex flex-col gap-1">
           <label className="text-xs" style={{ color: 'var(--muted)' }}>
@@ -144,29 +185,48 @@ function ToolRegistrySection({
           </label>
           <input style={{ ...inputStyle, width: 90 }} placeholder="ej: 9.1" value={version} onChange={(e) => setVersion(e.target.value)} />
         </div>
-        {fields.map((f) => (
-          <div key={f.key} className="flex flex-col gap-1">
+        {mode === 'download' ? (
+          <div className="flex flex-col gap-1">
             <label className="text-xs" style={{ color: 'var(--muted)' }}>
-              {f.label}
+              Versión exacta a descargar
             </label>
-            <div className="flex gap-1">
-              <input
-                style={{ ...inputStyle, width: 220 }}
-                value={values[f.key] ?? ''}
-                onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
-              />
-              {isTauri() && (
-                <Button size="sm" variant="ghost" className="shrink-0 rounded-full px-2 text-xs" onPress={() => handlePick(f.key)}>
-                  Elegir…
-                </Button>
-              )}
-            </div>
+            <input
+              style={{ ...inputStyle, width: 160 }}
+              placeholder={exactVersionHint}
+              value={exactVersion}
+              onChange={(e) => setExactVersion(e.target.value)}
+            />
           </div>
-        ))}
+        ) : (
+          fields.map((f) => (
+            <div key={f.key} className="flex flex-col gap-1">
+              <label className="text-xs" style={{ color: 'var(--muted)' }}>
+                {f.label}
+              </label>
+              <div className="flex gap-1">
+                <input
+                  style={{ ...inputStyle, width: 220 }}
+                  value={values[f.key] ?? ''}
+                  onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                />
+                {isTauri() && (
+                  <Button size="sm" variant="ghost" className="shrink-0 rounded-full px-2 text-xs" onPress={() => handlePick(f.key)}>
+                    Elegir…
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
         <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} isDisabled={busy || !canSubmit} onPress={handleRegister}>
-          {busy ? 'Registrando…' : 'Registrar'}
+          {busy ? (mode === 'download' ? 'Descargando…' : 'Registrando…') : mode === 'download' ? 'Descargar y registrar' : 'Registrar'}
         </Button>
       </div>
+      {mode === 'download' && (
+        <p className="mt-1 text-xs" style={{ color: 'var(--muted)' }}>
+          Puede tardar varios minutos según el tamaño de la descarga.
+        </p>
+      )}
 
       {error && (
         <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
@@ -313,6 +373,11 @@ export function Configuracion() {
 
   async function handleUnregisterTool(engine: ToolRegistryEngine, version: string) {
     await unregisterTool(engine, version);
+    await refreshToolRegistry();
+  }
+
+  async function handleDownloadTool(engine: 'postgres' | 'mariadb', version: string, exactVersion: string) {
+    await downloadTool(engine, version, exactVersion);
     await refreshToolRegistry();
   }
 
@@ -519,6 +584,8 @@ export function Configuracion() {
                   rows={toolRegistry.postgres as unknown as Record<string, Record<string, string>>}
                   onRegister={(version, values) => handleRegisterTool('postgres', version, values)}
                   onUnregister={(version) => handleUnregisterTool('postgres', version)}
+                  onDownload={(version, exactVersion) => handleDownloadTool('postgres', version, exactVersion)}
+                  exactVersionHint='ej: 18.6-1'
                 />
                 <ToolRegistrySection
                   title="MySQL"
@@ -535,6 +602,8 @@ export function Configuracion() {
                   rows={toolRegistry.mariadb as unknown as Record<string, Record<string, string>>}
                   onRegister={(version, values) => handleRegisterTool('mariadb', version, values)}
                   onUnregister={(version) => handleUnregisterTool('mariadb', version)}
+                  onDownload={(version, exactVersion) => handleDownloadTool('mariadb', version, exactVersion)}
+                  exactVersionHint='ej: 11.5.2'
                 />
               </div>
             )}

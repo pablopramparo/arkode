@@ -95,7 +95,13 @@ async function ensureCache() {
   // machine: the old argument order failed with that identical error, and
   // moving --strip-components before -xf fixed it. GNU tar (Git Bash)
   // accepts either order, so this reordering is safe everywhere.
-  execFileSync('tar', ['--strip-components=1', '-xf', zipPath, '-C', cacheDir, 'pgsql/bin'], { stdio: 'inherit' });
+  // --force-local: without it, GNU tar (what Git Bash/MSYS resolves on a
+  // dev machine) misparses a bare Windows drive-letter path like
+  // "C:\Users\..." as "host:path" remote-tar syntax and fails with
+  // "Cannot connect to C: resolve failed" -- confirmed by hand 2026-08-25.
+  // bsdtar (what the GitHub Actions runner's tar.exe resolves to) accepts
+  // the same flag as a harmless no-op, so this is safe everywhere.
+  execFileSync('tar', ['--force-local', '--strip-components=1', '-xf', zipPath, '-C', cacheDir, 'pgsql/bin'], { stdio: 'inherit' });
   rmSync(zipPath, { force: true });
 }
 

@@ -69,3 +69,19 @@ export async function unregisterTool(engine: ToolRegistryEngine, version: string
     })
   );
 }
+
+/** postgres/mariadb only — see downloadTool.ts's own doc comment for why mysql is excluded. exactVersion is the vendor's real release string (e.g. "18.6-1" for postgres, "11.5.2" for mariadb), distinct from `version` (the registry key this gets registered under, e.g. "18" or "11.5"). Can take a while for postgres (~344MB) — no client-side timeout is set. */
+export async function downloadTool(
+  engine: 'postgres' | 'mariadb',
+  version: string,
+  exactVersion: string
+): Promise<Record<string, string>> {
+  const body = await handleToolRegistryJson<{ ok: true; paths: Record<string, string> }>(
+    await fetch(`${getApiBase()}/tool-registry/${engine}/download`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version, exactVersion }),
+    })
+  );
+  return body.paths;
+}

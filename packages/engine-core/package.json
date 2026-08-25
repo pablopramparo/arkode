@@ -13,6 +13,7 @@
     "@primno/dpapi": "^2.0.1",
     "basic-ftp": "^6.2.0",
     "better-sqlite3": "^13.0.3",
+    "extract-zip": "^2.0.1",
     "pino": "^10.3.1",
     "ssh2": "^1.17.0",
     "ssh2-sftp-client": "^12.1.1"

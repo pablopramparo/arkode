@@ -54,6 +54,18 @@ export function migrationsSourceDir(): string {
 }
 
 /**
+ * Where an auto-downloaded direct_dump tool version gets vendored (see
+ * databaseConnections/downloadTool.ts) — a real, persistent copy, not a
+ * temp/cache location, since the whole point is for the resulting path to
+ * still be valid the next time this tool version's registry entry is
+ * resolved. Same ProgramData reasoning as everywhere else in this file:
+ * survives an app update, reachable by a SYSTEM-run scheduled task.
+ */
+export function vendoredToolsDir(engine: string, version: string): string {
+  return join(appDataDir(), 'vendored-tools', engine, version);
+}
+
+/**
  * Suggested default root for a new client's local_base_path — purely a UI
  * suggestion; each client's local_base_path is stored explicitly and can
  * point anywhere (e.g. a separate data drive). Deliberately under
