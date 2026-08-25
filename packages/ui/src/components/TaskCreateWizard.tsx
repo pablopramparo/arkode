@@ -301,6 +301,14 @@ function NewConnectionFields({ values, onChange }: { values: FormValues; onChang
                   onChange={(e) => onChange({ remoteOutputPathTemplate: e.target.value })}
                 />
               </Field>
+              <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
+                <input
+                  type="checkbox"
+                  checked={values.remoteCleanup}
+                  onChange={(e) => onChange({ remoteCleanup: e.target.checked })}
+                />
+                Eliminar el archivo remoto tras una descarga exitosa
+              </label>
             </>
           )}
         </>
@@ -621,6 +629,7 @@ export function TaskCreateWizard({
             remotePath: form.strategy === 'fetch_existing' ? form.remotePath.trim() : undefined,
             remoteCommand: form.strategy === 'remote_dump' ? form.remoteCommand.trim() : undefined,
             remoteOutputPathTemplate: form.strategy === 'remote_dump' ? form.remoteOutputPathTemplate.trim() : undefined,
+            remoteCleanup: form.strategy === 'remote_dump' ? form.remoteCleanup : undefined,
           });
           transportId = conn.id;
         }
