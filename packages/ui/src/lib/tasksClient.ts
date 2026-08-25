@@ -1,4 +1,4 @@
-import type { BackupTask, BackupStrategyKind, DbEngine } from 'engine-core';
+import type { BackupTask, BackupStrategyKind, DbEngine, ScheduleFrequency, DirectDumpCompatibilityResult } from 'engine-core';
 
 // Dev-time only: talks to `engine-cli serve` directly over HTTP — see statusClient.ts.
 const BASE_URL = 'http://127.0.0.1:4287';
@@ -20,6 +20,29 @@ export interface TaskInput {
   retentionDays?: number | null;
   scheduleTime?: string | null;
   scheduleEnabled?: boolean;
+  scheduleFrequency?: ScheduleFrequency;
+  scheduleDaysOfWeek?: number[] | null;
+  scheduleDayOfMonth?: number | null;
+  /** Skip the direct_dump compatibility gate and apply the schedule anyway — see ScheduleCompatibilityError. */
+  force?: boolean;
+}
+
+/** A BackupTask as returned right after creation — `scheduleBlocked` is set only when a requested schedule couldn't be applied because the direct_dump compatibility gate failed (the task itself was still created). */
+export type CreatedTask = BackupTask & { scheduleBlocked?: DirectDumpCompatibilityResult };
+
+/**
+ * Thrown by setTaskSchedule when the server refuses to enable a direct_dump
+ * task's schedule because the compatibility gate (connection + detected
+ * server version + a usable local dump tool) failed — distinct from a
+ * request-level error. Callers can offer the user a "force anyway" retry
+ * using `compatibility` for context, by re-calling with `force: true`.
+ */
+export class ScheduleCompatibilityError extends Error {
+  compatibility: DirectDumpCompatibilityResult;
+  constructor(compatibility: DirectDumpCompatibilityResult) {
+    super(compatibility.message);
+    this.compatibility = compatibility;
+  }
 }
 
 export interface TaskUpdateInput {
@@ -39,7 +62,7 @@ export async function fetchTasks(opts: { includeInactive?: boolean } = {}): Prom
   return handleJson(await fetch(`${BASE_URL}/tasks${query}`));
 }
 
-export async function createTask(input: TaskInput): Promise<BackupTask> {
+export async function createTask(input: TaskInput): Promise<CreatedTask> {
   return handleJson(
     await fetch(`${BASE_URL}/tasks`, {
       method: 'POST',
@@ -59,14 +82,28 @@ export async function updateTask(id: string, patch: TaskUpdateInput): Promise<Ba
   );
 }
 
-export async function setTaskSchedule(id: string, scheduleTime: string | null, scheduleEnabled: boolean): Promise<BackupTask> {
-  return handleJson(
-    await fetch(`${BASE_URL}/tasks/${id}/schedule`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scheduleTime, scheduleEnabled }),
-    })
-  );
+export interface SetTaskScheduleInput {
+  scheduleTime: string | null;
+  scheduleEnabled: boolean;
+  scheduleFrequency?: ScheduleFrequency;
+  scheduleDaysOfWeek?: number[] | null;
+  scheduleDayOfMonth?: number | null;
+  /** Skip the direct_dump compatibility gate and apply the schedule anyway. */
+  force?: boolean;
+}
+
+export async function setTaskSchedule(id: string, input: SetTaskScheduleInput): Promise<BackupTask> {
+  const res = await fetch(`${BASE_URL}/tasks/${id}/schedule`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json();
+  if (res.status === 409 && body.compatibility) {
+    throw new ScheduleCompatibilityError(body.compatibility);
+  }
+  if (!res.ok) throw new Error(body.error ?? `Request failed: ${res.status}`);
+  return body;
 }
 
 export async function deactivateTask(id: string): Promise<void> {

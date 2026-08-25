@@ -26,3 +26,26 @@ export async function fetchRuns(opts: { taskId?: string; clientId?: string; limi
 export function downloadRunUrl(runId: string): string {
   return `${BASE_URL}/runs/${runId}/download`;
 }
+
+export interface BackupsPage {
+  runs: RunRow[];
+  total: number;
+}
+
+/** Real backups only (Success/Warning runs with a file on disk) — distinct from fetchRuns' every-attempt Historial view. Paginated. */
+export async function fetchBackups(
+  opts: { clientId?: string; taskId?: string; limit?: number; offset?: number } = {}
+): Promise<BackupsPage> {
+  const params = new URLSearchParams();
+  if (opts.clientId) params.set('clientId', opts.clientId);
+  if (opts.taskId) params.set('taskId', opts.taskId);
+  if (opts.limit) params.set('limit', String(opts.limit));
+  if (opts.offset) params.set('offset', String(opts.offset));
+  const query = params.toString();
+  const res = await fetch(`${BASE_URL}/backups${query ? `?${query}` : ''}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Request failed: ${res.status}`);
+  }
+  return res.json();
+}

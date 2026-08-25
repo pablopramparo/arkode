@@ -1,12 +1,13 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
 import { fetchDashboardStatus, runTaskNow, testTaskConnection, type ConnectionTestResult, type DashboardRow } from '../lib/statusClient';
-import { formatAge, formatSize, ageInHours } from '../lib/format';
+import { formatAge, formatSize, ageInHours, formatConnectionTestVersions } from '../lib/format';
 import { StatusChip } from './StatusChip';
 import { StatCard } from './StatCard';
-import { AlertTriangleIcon, CheckCircleIcon, ClipboardIcon, EyeIcon, PulseIcon, UsersIcon } from './icons';
+import { AlertTriangleIcon, CheckCircleIcon, ClipboardIcon, EyeIcon, PlayIcon, PulseIcon, UsersIcon } from './icons';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { IconButton } from './IconButton';
+import { ClientLink } from './ClientLink';
 
 const POLL_INTERVAL_MS = 20_000;
 /** A daily backup task without a fresh file past this age is worth flagging, even if the last *attempt* technically succeeded a while ago. */
@@ -27,7 +28,7 @@ interface RowActionState {
   errorExpanded?: boolean;
 }
 
-export function Dashboard() {
+export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: string) => void }) {
   const [rows, setRows] = useState<DashboardRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
@@ -179,7 +180,9 @@ export function Dashboard() {
                           backgroundColor: problem ? 'color-mix(in oklab, var(--danger) 6%, transparent)' : undefined,
                         }}
                       >
-                        <td className="px-4 py-2.5 font-medium">{row.client}</td>
+                        <td className="px-4 py-2.5 font-medium">
+                          <ClientLink clientId={row.clientId} name={row.client} onSelect={onSelectClient} />
+                        </td>
                         <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                           {row.task}
                         </td>
@@ -212,7 +215,14 @@ export function Dashboard() {
                               isDisabled={Boolean(state?.busy)}
                               onPress={() => handleRun(row.taskId)}
                             >
-                              {state?.busy === 'run' ? 'Ejecutando…' : 'Ejecutar ahora'}
+                              {state?.busy === 'run' ? (
+                                'Ejecutando…'
+                              ) : (
+                                <span className="flex items-center gap-1.5">
+                                  <PlayIcon className="h-3.5 w-3.5" />
+                                  Ejecutar ahora
+                                </span>
+                              )}
                             </Button>
                             <IconButton
                               icon={<PulseIcon />}
@@ -239,6 +249,7 @@ export function Dashboard() {
                                 {state.testResult.ok ? 'Conexión OK' : 'Conexión fallida'}
                                 {state.testResult.message ? ` — ${state.testResult.message}` : ''}
                                 {state.testResult.latencyMs != null ? ` (${state.testResult.latencyMs} ms)` : ''}
+                                {formatConnectionTestVersions(state.testResult)}
                               </span>
                             )}
                             {!state?.actionError && !state?.testResult && state?.errorExpanded && row.latestErrorMessage && (

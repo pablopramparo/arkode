@@ -5,10 +5,11 @@ import { formatDateTime, formatDuration, formatSize } from '../lib/format';
 import { StatusChip } from './StatusChip';
 import { IconButton, IconLinkButton } from './IconButton';
 import { DownloadIcon, EyeIcon } from './icons';
+import { ClientLink } from './ClientLink';
 
 const RUN_LIMIT = 200;
 
-export function Historial() {
+export function Historial({ onSelectClient }: { onSelectClient: (clientId: string) => void }) {
   const [tasks, setTasks] = useState<TaskRow[] | null>(null);
   const [runs, setRuns] = useState<RunRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -124,7 +125,9 @@ export function Historial() {
                 return (
                   <Fragment key={run.id}>
                     <tr style={{ borderTop: '1px solid var(--separator)' }}>
-                      <td className="px-4 py-2.5 font-medium">{run.clientName ?? '—'}</td>
+                      <td className="px-4 py-2.5 font-medium">
+                        {run.clientName ? <ClientLink clientId={run.clientId} name={run.clientName} onSelect={onSelectClient} /> : '—'}
+                      </td>
                       <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                         {run.taskName ?? '—'}
                       </td>

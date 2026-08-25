@@ -1,16 +1,24 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
+import { isTauri } from '@tauri-apps/api/core';
+import { openPath } from '@tauri-apps/plugin-opener';
 import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
 import { fetchTasks, type TaskRow } from '../lib/tasksClient';
 import { fetchConnections, testTransport, testDatabaseConnection, type ConnectionsData } from '../lib/connectionsClient';
-import { downloadRunUrl, fetchRuns, type RunRow } from '../lib/runsClient';
-import { runTaskNow, testTaskConnection } from '../lib/statusClient';
-import type { ConnectionTestResult } from 'engine-core';
+import { downloadRunUrl, fetchBackups, fetchRuns, type RunRow } from '../lib/runsClient';
+import { runTaskNow, testTaskConnection, testTaskCompatibility } from '../lib/statusClient';
+import type { ConnectionTestResult, DirectDumpCompatibilityResult } from 'engine-core';
 import { StatusChip } from './StatusChip';
+import { Switch } from './Switch';
 import { IconButton, IconLinkButton } from './IconButton';
-import { DownloadIcon, PulseIcon } from './icons';
-import { formatRetention, formatDateTime, formatDuration, formatSize } from '../lib/format';
+import { DownloadIcon, EditIcon, FolderIcon, PlayIcon, PulseIcon, CheckCircleIcon } from './icons';
+import { formatRetention, formatDateTime, formatDuration, formatSize, formatSchedule } from '../lib/format';
 import { primaryPillStyle } from '../lib/pillStyles';
+import { TaskCreateWizard } from './TaskCreateWizard';
+import { TaskEditModal } from './TaskEditModal';
+import { ConnectionEditModal } from './ConnectionEditModal';
+import { ConnectionCreateModal } from './ConnectionCreateModal';
+import type { ConnectionRow } from './Conexiones';
 
 const STRATEGY_LABEL: Record<string, string> = {
   fetch_existing: 'SFTP existente',
@@ -18,11 +26,14 @@ const STRATEGY_LABEL: Record<string, string> = {
   direct_dump: 'Conexión directa a BD',
 };
 
-type Tab = 'tareas' | 'conexiones' | 'historial';
+type Tab = 'tareas' | 'conexiones' | 'backups' | 'historial';
+
+const BACKUPS_PAGE_SIZE = 20;
 
 interface RowActionState {
   busy?: boolean;
   testResult?: ConnectionTestResult;
+  compatibilityResult?: DirectDumpCompatibilityResult;
   actionError?: string;
 }
 
@@ -30,10 +41,11 @@ function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab
   const tabs: { id: Tab; label: string }[] = [
     { id: 'tareas', label: 'Tareas' },
     { id: 'conexiones', label: 'Conexiones' },
+    { id: 'backups', label: 'Backups' },
     { id: 'historial', label: 'Historial' },
   ];
   return (
-    <div className="mb-4 flex gap-1 border-b" style={{ borderColor: 'var(--border)' }}>
+    <div className="flex flex-1 gap-1" style={{ borderColor: 'var(--border)' }}>
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -57,9 +69,46 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   const [tasks, setTasks] = useState<TaskRow[] | null>(null);
   const [connections, setConnections] = useState<ConnectionsData | null>(null);
   const [runs, setRuns] = useState<RunRow[] | null>(null);
+  const [backups, setBackups] = useState<RunRow[] | null>(null);
+  const [backupsTotal, setBackupsTotal] = useState(0);
+  const [backupsPage, setBackupsPage] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [actionState, setActionState] = useState<Record<string, RowActionState>>({});
   const [activeTab, setActiveTab] = useState<Tab>('tareas');
+  const [showInactive, setShowInactive] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [showCreateConnection, setShowCreateConnection] = useState(false);
+  const [editingTask, setEditingTask] = useState<TaskRow | null>(null);
+  const [editingConnectionRow, setEditingConnectionRow] = useState<ConnectionRow | null>(null);
+  const [folderError, setFolderError] = useState<string | null>(null);
+
+  async function handleOpenFolder(path: string) {
+    setFolderError(null);
+    try {
+      await openPath(path);
+    } catch (err) {
+      setFolderError(`No se pudo abrir la carpeta (¿existe todavía en disco?): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  const loadBackups = useCallback(
+    async (page: number) => {
+      try {
+        const { runs: pageRuns, total } = await fetchBackups({ clientId, limit: BACKUPS_PAGE_SIZE, offset: page * BACKUPS_PAGE_SIZE });
+        setBackups(pageRuns);
+        setBackupsTotal(total);
+        setBackupsPage(page);
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'No se pudo conectar con el motor de backups.');
+      }
+    },
+    [clientId]
+  );
+
+  useEffect(() => {
+    loadBackups(0);
+  }, [loadBackups]);
 
   function patchAction(id: string, patch: RowActionState) {
     setActionState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
@@ -99,10 +148,20 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   }
 
   async function handleTestTask(taskId: string) {
-    patchAction(taskId, { busy: true, actionError: undefined, testResult: undefined });
+    patchAction(taskId, { busy: true, actionError: undefined, testResult: undefined, compatibilityResult: undefined });
     try {
       const result = await testTaskConnection(taskId);
       patchAction(taskId, { busy: false, testResult: result });
+    } catch (err) {
+      patchAction(taskId, { busy: false, actionError: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function handleTestTaskCompatibility(taskId: string) {
+    patchAction(taskId, { busy: true, actionError: undefined, testResult: undefined, compatibilityResult: undefined });
+    try {
+      const result = await testTaskCompatibility(taskId);
+      patchAction(taskId, { busy: false, compatibilityResult: result });
     } catch (err) {
       patchAction(taskId, { busy: false, actionError: err instanceof Error ? err.message : String(err) });
     }
@@ -120,10 +179,12 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
 
   const clientTransports = connections?.transports.filter((t) => t.clientId === clientId) ?? [];
   const clientDbConnections = connections?.databaseConnections.filter((d) => d.clientId === clientId) ?? [];
-  const connectionRows = [
-    ...clientTransports.map((t) => ({ id: t.id, name: t.name, type: t.type.toUpperCase(), host: `${t.host}:${t.port}`, isActive: t.isActive, kind: 'transport' as const })),
-    ...clientDbConnections.map((d) => ({ id: d.id, name: d.name, type: d.engine, host: `${d.host}:${d.port}`, isActive: d.isActive, kind: 'database' as const })),
+  const connectionRows: ConnectionRow[] = [
+    ...clientTransports.map((t): ConnectionRow => ({ kind: 'transport', id: t.id, data: t })),
+    ...clientDbConnections.map((d): ConnectionRow => ({ kind: 'database', id: d.id, data: d })),
   ];
+  const visibleTasks = tasks?.filter((t) => showInactive || t.isActive) ?? null;
+  const visibleConnectionRows = connectionRows.filter((r) => showInactive || r.data.isActive);
 
   return (
     <div className="max-w-[1600px] px-10 py-8">
@@ -156,19 +217,48 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                 {client.description}
               </p>
             )}
-            <p className="mt-1 text-xs" style={{ color: 'var(--muted)' }}>
+            <p className="mt-1 flex items-center gap-1.5 text-xs" style={{ color: 'var(--muted)' }}>
               {client.localBasePath} · Retención: {formatRetention(client.retentionCount, client.retentionDays)}
+              {isTauri() && (
+                <IconButton
+                  icon={<FolderIcon />}
+                  label="Abrir carpeta local"
+                  onPress={() => handleOpenFolder(client.localBasePath)}
+                />
+              )}
             </p>
+            {folderError && (
+              <p className="mt-1 text-xs" style={{ color: 'var(--danger)' }}>
+                {folderError}
+              </p>
+            )}
           </header>
 
-          <TabBar
-            active={activeTab}
-            onChange={setActiveTab}
-            counts={{ tareas: tasks?.length ?? 0, conexiones: connectionRows.length, historial: runs?.length ?? 0 }}
-          />
+          <div className="mb-4 flex items-center justify-between border-b" style={{ borderColor: 'var(--border)' }}>
+            <TabBar
+              active={activeTab}
+              onChange={setActiveTab}
+              counts={{ tareas: visibleTasks?.length ?? 0, conexiones: visibleConnectionRows.length, backups: backupsTotal, historial: runs?.length ?? 0 }}
+            />
+            <div className="mb-1.5 flex items-center gap-3">
+              {(activeTab === 'tareas' || activeTab === 'conexiones') && (
+                <Switch checked={showInactive} onChange={() => setShowInactive((v) => !v)} label="Mostrar inactivas" />
+              )}
+              {activeTab === 'tareas' && (
+                <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setShowCreate(true)}>
+                  + Agregar backup
+                </Button>
+              )}
+              {activeTab === 'conexiones' && (
+                <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setShowCreateConnection(true)}>
+                  + Nueva conexión
+                </Button>
+              )}
+            </div>
+          </div>
 
           {activeTab === 'tareas' &&
-            (tasks && tasks.length > 0 ? (
+            (visibleTasks && visibleTasks.length > 0 ? (
               <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
                 <table className="w-full border-collapse text-sm">
                   <thead>
@@ -180,7 +270,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                     </tr>
                   </thead>
                   <tbody>
-                    {tasks.map((task) => {
+                    {visibleTasks.map((task) => {
                       const state = actionState[task.id];
                       return (
                         <tr key={task.id} style={{ borderTop: '1px solid var(--separator)', opacity: task.isActive ? 1 : 0.55 }}>
@@ -189,7 +279,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                             {STRATEGY_LABEL[task.strategy] ?? task.strategy}
                           </td>
                           <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                            {task.scheduleTime ?? 'Sin programar'}
+                            {formatSchedule(task)}
                           </td>
                           <td className="px-4 py-2.5">
                             {task.isActive && (
@@ -201,7 +291,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   isDisabled={Boolean(state?.busy)}
                                   onPress={() => handleRun(task.id)}
                                 >
-                                  Ejecutar ahora
+                                  <span className="flex items-center gap-1.5">
+                                    <PlayIcon className="h-3.5 w-3.5" />
+                                    Ejecutar ahora
+                                  </span>
                                 </Button>
                                 <IconButton
                                   icon={<PulseIcon />}
@@ -209,9 +302,23 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   disabled={Boolean(state?.busy)}
                                   onPress={() => handleTestTask(task.id)}
                                 />
+                                {task.strategy === 'direct_dump' && (
+                                  <IconButton
+                                    icon={<CheckCircleIcon />}
+                                    label="Probar compatibilidad (versión + herramienta)"
+                                    disabled={Boolean(state?.busy)}
+                                    onPress={() => handleTestTaskCompatibility(task.id)}
+                                  />
+                                )}
+                                <IconButton icon={<EditIcon />} label="Editar" onPress={() => setEditingTask(task)} />
                                 {state?.testResult && (
                                   <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                                     {state.testResult.ok ? 'OK' : state.testResult.message}
+                                  </span>
+                                )}
+                                {state?.compatibilityResult && (
+                                  <span className="text-xs" style={{ color: state.compatibilityResult.ok ? 'var(--success)' : 'var(--danger)' }}>
+                                    {state.compatibilityResult.ok ? 'Compatible' : state.compatibilityResult.message}
                                   </span>
                                 )}
                                 {state?.actionError && (
@@ -235,7 +342,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             ))}
 
           {activeTab === 'conexiones' &&
-            (connectionRows.length > 0 ? (
+            (visibleConnectionRows.length > 0 ? (
               <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
                 <table className="w-full border-collapse text-sm">
                   <thead>
@@ -247,19 +354,19 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                     </tr>
                   </thead>
                   <tbody>
-                    {connectionRows.map((row) => {
+                    {visibleConnectionRows.map((row) => {
                       const state = actionState[row.id];
                       return (
-                        <tr key={row.id} style={{ borderTop: '1px solid var(--separator)', opacity: row.isActive ? 1 : 0.55 }}>
-                          <td className="px-4 py-2.5 font-medium">{row.name}</td>
+                        <tr key={row.id} style={{ borderTop: '1px solid var(--separator)', opacity: row.data.isActive ? 1 : 0.55 }}>
+                          <td className="px-4 py-2.5 font-medium">{row.data.name}</td>
                           <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                            {row.type}
+                            {row.kind === 'transport' ? row.data.type.toUpperCase() : row.data.engine}
                           </td>
                           <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                            {row.host}
+                            {row.data.host}:{row.data.port}
                           </td>
                           <td className="px-4 py-2.5">
-                            {row.isActive && (
+                            {row.data.isActive && (
                               <div className="flex items-center gap-2">
                                 <IconButton
                                   icon={<PulseIcon />}
@@ -267,6 +374,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   disabled={Boolean(state?.busy)}
                                   onPress={() => handleTestConnection(row.id, row.kind)}
                                 />
+                                <IconButton icon={<EditIcon />} label="Editar" onPress={() => setEditingConnectionRow(row)} />
                                 {state?.testResult && (
                                   <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                                     {state.testResult.ok ? 'OK' : state.testResult.message}
@@ -284,6 +392,73 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             ) : (
               <p className="text-sm" style={{ color: 'var(--muted)' }}>
                 Este cliente no tiene conexiones todavía.
+              </p>
+            ))}
+
+          {activeTab === 'backups' &&
+            (backups && backups.length > 0 ? (
+              <>
+                <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
+                  <table className="w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="text-left" style={{ color: 'var(--muted)' }}>
+                        <th className="px-4 py-2 font-medium">Tarea</th>
+                        <th className="px-4 py-2 font-medium">Fecha</th>
+                        <th className="px-4 py-2 font-medium">Tamaño</th>
+                        <th className="px-4 py-2 font-medium">Estado</th>
+                        <th className="px-4 py-2 font-medium"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {backups.map((run) => (
+                        <tr key={run.id} style={{ borderTop: '1px solid var(--separator)' }}>
+                          <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                            {run.taskName ?? '—'}
+                          </td>
+                          <td className="px-4 py-2.5">{formatDateTime(run.startedAt)}</td>
+                          <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                            {formatSize(run.sizeBytes)}
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <StatusChip status={run.status} />
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-3 flex items-center justify-between text-sm" style={{ color: 'var(--muted)' }}>
+                  <span>
+                    {backupsPage * BACKUPS_PAGE_SIZE + 1}–{Math.min((backupsPage + 1) * BACKUPS_PAGE_SIZE, backupsTotal)} de {backupsTotal}
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="rounded-full px-3"
+                      isDisabled={backupsPage === 0}
+                      onPress={() => loadBackups(backupsPage - 1)}
+                    >
+                      Anterior
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="rounded-full px-3"
+                      isDisabled={(backupsPage + 1) * BACKUPS_PAGE_SIZE >= backupsTotal}
+                      onPress={() => loadBackups(backupsPage + 1)}
+                    >
+                      Siguiente
+                    </Button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm" style={{ color: 'var(--muted)' }}>
+                Este cliente todavía no tiene backups guardados.
               </p>
             ))}
 
@@ -333,6 +508,35 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
               </p>
             ))}
         </>
+      )}
+
+      {showCreate && connections && (
+        <TaskCreateWizard
+          connections={connections}
+          fixedClientId={clientId}
+          onClose={() => setShowCreate(false)}
+          onCreated={refresh}
+        />
+      )}
+
+      {editingTask && <TaskEditModal task={editingTask} onClose={() => setEditingTask(null)} onSaved={refresh} />}
+
+      {showCreateConnection && connections && (
+        <ConnectionCreateModal
+          clients={connections.clients}
+          fixedClientId={clientId}
+          onClose={() => setShowCreateConnection(false)}
+          onCreated={refresh}
+        />
+      )}
+
+      {editingConnectionRow && connections && (
+        <ConnectionEditModal
+          row={editingConnectionRow}
+          clients={connections.clients}
+          onClose={() => setEditingConnectionRow(null)}
+          onSaved={refresh}
+        />
       )}
     </div>
   );

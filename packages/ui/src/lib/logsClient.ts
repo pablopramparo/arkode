@@ -4,6 +4,7 @@ import type { LogEvent, LogEventLevel } from 'engine-core';
 const BASE_URL = 'http://127.0.0.1:4287';
 
 export interface LogEventRow extends LogEvent {
+  clientId: string | null;
   clientName: string | null;
   taskName: string | null;
 }

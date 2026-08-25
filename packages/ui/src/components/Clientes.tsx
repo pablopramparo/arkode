@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
+import { isTauri } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   createClient,
   deactivateClient,
@@ -11,6 +13,7 @@ import {
 import { formatRetention } from '../lib/format';
 import { Modal } from './Modal';
 import { Switch } from './Switch';
+import { ClientLink } from './ClientLink';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 
 interface ClientFormValues {
@@ -21,7 +24,8 @@ interface ClientFormValues {
   retentionDays: string;
 }
 
-const EMPTY_FORM: ClientFormValues = { name: '', description: '', localBasePath: '', retentionCount: '', retentionDays: '' };
+// Suggested defaults for a brand-new client — conservative and editable, not a hard rule. Never applied to editForm: startEdit() always overwrites it with the client's real stored values first.
+const EMPTY_FORM: ClientFormValues = { name: '', description: '', localBasePath: '', retentionCount: '10', retentionDays: '30' };
 
 function toClientFormValues(client: ClientWithTaskCount): ClientFormValues {
   return {
@@ -81,12 +85,27 @@ function ClientFields({
         />
       </Field>
       <Field label="Carpeta local *">
-        <input
-          style={inputStyle}
-          placeholder="Ej: D:/Backups/Cliente"
-          value={values.localBasePath}
-          onChange={(e) => onChange({ localBasePath: e.target.value })}
-        />
+        <div className="flex gap-2">
+          <input
+            style={{ ...inputStyle, flex: 1 }}
+            placeholder="Ej: D:/Backups/Cliente"
+            value={values.localBasePath}
+            onChange={(e) => onChange({ localBasePath: e.target.value })}
+          />
+          {isTauri() && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="shrink-0 rounded-full px-3"
+              onPress={async () => {
+                const selected = await openDialog({ directory: true, multiple: false });
+                if (typeof selected === 'string') onChange({ localBasePath: selected });
+              }}
+            >
+              Elegir…
+            </Button>
+          )}
+        </div>
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Retención (N backups)">
@@ -94,7 +113,7 @@ function ClientFields({
             style={inputStyle}
             type="number"
             min={0}
-            placeholder="Ej: 10"
+            placeholder="Sin límite"
             value={values.retentionCount}
             onChange={(e) => onChange({ retentionCount: e.target.value })}
           />
@@ -104,7 +123,7 @@ function ClientFields({
             style={inputStyle}
             type="number"
             min={0}
-            placeholder="Ej: 30"
+            placeholder="Sin límite"
             value={values.retentionDays}
             onChange={(e) => onChange({ retentionDays: e.target.value })}
           />
@@ -272,14 +291,7 @@ export function Clientes({ onSelectClient }: { onSelectClient: (clientId: string
                 >
                   <td className="px-4 py-2.5 font-medium">
                     {client.isActive ? (
-                      <button
-                        type="button"
-                        className="hover:underline"
-                        style={{ color: 'inherit' }}
-                        onClick={() => onSelectClient(client.id)}
-                      >
-                        {client.name}
-                      </button>
+                      <ClientLink clientId={client.id} name={client.name} onSelect={onSelectClient} />
                     ) : (
                       client.name
                     )}

@@ -1,4 +1,4 @@
-import type { BackupRun, ConnectionTestResult, DashboardRow } from 'engine-core';
+import type { BackupRun, ConnectionTestResult, DashboardRow, DirectDumpCompatibilityResult } from 'engine-core';
 
 // Dev-time only: talks to `engine-cli serve` directly over HTTP. Once the
 // Tauri shell exists, this should be replaced with either the same server
@@ -14,11 +14,11 @@ export async function fetchDashboardStatus(): Promise<DashboardRow[]> {
   return res.json();
 }
 
-async function postTaskAction<T>(taskId: string, action: 'run' | 'test-connection'): Promise<T> {
+async function postTaskAction<T>(taskId: string, action: 'run' | 'test-connection' | 'test-compatibility'): Promise<T> {
   const res = await fetch(`${BASE_URL}/tasks/${taskId}/${action}`, { method: 'POST' });
   const body = await res.json();
   // 404 (unknown task) and 500 (unexpected exception) are real request-level errors.
-  // 502 from test-connection is an expected "connection failed" result, not a request error — body is still the ConnectionTestResult shape.
+  // 502 from test-connection/test-compatibility is an expected "failed" result, not a request error — body is still the respective result shape.
   if (res.status === 404 || res.status === 500) {
     throw new Error(body.error ?? `Request failed: ${res.status}`);
   }
@@ -33,4 +33,9 @@ export function testTaskConnection(taskId: string): Promise<ConnectionTestResult
   return postTaskAction<ConnectionTestResult>(taskId, 'test-connection');
 }
 
-export type { DashboardRow, BackupRun, ConnectionTestResult };
+/** direct_dump only — see testDirectDumpCompatibility in engine-core. */
+export function testTaskCompatibility(taskId: string): Promise<DirectDumpCompatibilityResult> {
+  return postTaskAction<DirectDumpCompatibilityResult>(taskId, 'test-compatibility');
+}
+
+export type { DashboardRow, BackupRun, ConnectionTestResult, DirectDumpCompatibilityResult };

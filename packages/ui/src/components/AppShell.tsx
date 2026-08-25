@@ -7,9 +7,17 @@ import {
   SettingsIcon,
   UsersIcon,
 } from "./icons";
+import { TitleBar } from "./TitleBar";
 import arkodeLogo from "../assets/arkode-logo-completo.png";
 
-export type Screen = "dashboard" | "clientes" | "conexiones" | "tareas" | "historial" | "logs" | "configuracion";
+export type Screen =
+  | "dashboard"
+  | "clientes"
+  | "conexiones"
+  | "tareas"
+  | "historial"
+  | "logs"
+  | "configuracion";
 
 interface NavItem {
   id: Screen | string;
@@ -24,7 +32,12 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: <GridIcon />, enabled: true },
   { id: "clientes", label: "Clientes", icon: <UsersIcon />, enabled: true },
-  { id: "conexiones", label: "Conexiones", icon: <DatabaseIcon />, enabled: true },
+  {
+    id: "conexiones",
+    label: "Conexiones",
+    icon: <DatabaseIcon />,
+    enabled: true,
+  },
   { id: "tareas", label: "Tareas", icon: <ClockIcon />, enabled: true },
   {
     id: "historial",
@@ -51,17 +64,19 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-screen">
-      <aside
-        className="flex w-60 shrink-0 flex-col border-r px-3 py-5"
-        style={{
-          borderColor: "var(--border)",
-          backgroundColor:
-            "color-mix(in oklab, var(--foreground) 3%, var(--background))",
-        }}
-      >
+    <div className="flex min-h-screen flex-col">
+      <TitleBar />
+      <div className="flex min-h-0 flex-1">
+        <aside
+          className="flex w-60 shrink-0 flex-col border-r px-3 py-5"
+          style={{
+            borderColor: "var(--border)",
+            backgroundColor:
+              "color-mix(in oklab, var(--foreground) 3%, var(--background))",
+          }}
+        >
         <div className="mb-6 px-2">
-          <img src={arkodeLogo} alt="Arkode by Codebius" className="w-full" />
+          <img src={arkodeLogo} alt="arkode by codebius" className="w-full" />
         </div>
 
         <nav className="flex flex-col gap-0.5">
@@ -101,11 +116,12 @@ export function AppShell({
           className="mt-auto px-2 pt-4 text-xs hover:underline"
           style={{ color: "var(--muted)" }}
         >
-          Arkode by Codebius
+          arkode by codebius
         </a>
-      </aside>
+        </aside>
 
-      <main className="flex-1">{children}</main>
+        <main className="flex-1 overflow-y-auto">{children}</main>
+      </div>
     </div>
   );
 }

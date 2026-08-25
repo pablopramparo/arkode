@@ -1,8 +1,177 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@heroui/react';
+import { isTauri } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { isEnabled as isAutostartEnabled, enable as enableAutostart, disable as disableAutostart } from '@tauri-apps/plugin-autostart';
 import type { ImportConfigResult, SystemInfo } from 'engine-core';
-import { CONFIG_EXPORT_URL, fetchSystemInfo, importConfig } from '../lib/configClient';
+import {
+  CONFIG_EXPORT_URL,
+  fetchSystemInfo,
+  importConfig,
+  fetchToolRegistry,
+  registerTool,
+  unregisterTool,
+  type ToolRegistryData,
+  type ToolRegistryEngine,
+} from '../lib/configClient';
+import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
 import { primaryPillStyle } from '../lib/pillStyles';
+import { Switch } from './Switch';
+
+const inputStyle: React.CSSProperties = {
+  backgroundColor: 'var(--background)',
+  border: '1px solid var(--border)',
+  borderRadius: 6,
+  padding: '5px 8px',
+  color: 'var(--foreground)',
+};
+
+interface ToolRegistryField {
+  key: string;
+  label: string;
+}
+
+/**
+ * One shared component for all three engines' version-keyed dump-tool
+ * registries — the table+add-row shape is identical across postgres (two
+ * path fields: pg_dump/pg_restore) and mysql/mariadb (one path field each);
+ * only the field list differs, which is exactly the kind of structural
+ * duplication worth collapsing (unlike the dump *clients* themselves, whose
+ * actual per-engine dump/SSL logic genuinely differs and stays separate).
+ */
+function ToolRegistrySection({
+  title,
+  description,
+  fields,
+  rows,
+  onRegister,
+  onUnregister,
+}: {
+  title: string;
+  description: string;
+  fields: ToolRegistryField[];
+  rows: Record<string, Record<string, string>>;
+  onRegister: (version: string, values: Record<string, string>) => Promise<void>;
+  onUnregister: (version: string) => Promise<void>;
+}) {
+  const [version, setVersion] = useState('');
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit = version.trim().length > 0 && fields.every((f) => (values[f.key] ?? '').trim().length > 0);
+
+  async function handlePick(fieldKey: string) {
+    const selected = await openDialog({
+      directory: false,
+      multiple: false,
+      filters: [{ name: 'Ejecutable', extensions: ['exe'] }],
+    });
+    if (typeof selected === 'string') setValues((prev) => ({ ...prev, [fieldKey]: selected }));
+  }
+
+  async function handleRegister() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onRegister(version.trim(), values);
+      setVersion('');
+      setValues({});
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUnregister(v: string) {
+    setError(null);
+    try {
+      await onUnregister(v);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return (
+    <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+      <h3 className="text-sm font-medium">{title}</h3>
+      <p className="mb-3 text-xs" style={{ color: 'var(--muted)' }}>
+        {description}
+      </p>
+
+      {Object.keys(rows).length > 0 && (
+        <table className="mb-3 w-full border-collapse text-sm">
+          <thead>
+            <tr className="text-left" style={{ color: 'var(--muted)' }}>
+              <th className="py-1 pr-3 font-medium">Versión</th>
+              {fields.map((f) => (
+                <th key={f.key} className="py-1 pr-3 font-medium">
+                  {f.label}
+                </th>
+              ))}
+              <th className="py-1 font-medium" />
+            </tr>
+          </thead>
+          <tbody>
+            {Object.entries(rows).map(([v, paths]) => (
+              <tr key={v} style={{ borderTop: '1px solid var(--separator)' }}>
+                <td className="py-1.5 pr-3 font-medium">{v}</td>
+                {fields.map((f) => (
+                  <td key={f.key} className="py-1.5 pr-3" style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--muted)' }}>
+                    {paths[f.key] ?? '—'}
+                  </td>
+                ))}
+                <td className="py-1.5">
+                  <Button size="sm" variant="ghost" className="rounded-full px-2 text-xs" onPress={() => handleUnregister(v)}>
+                    Quitar
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex flex-col gap-1">
+          <label className="text-xs" style={{ color: 'var(--muted)' }}>
+            Versión
+          </label>
+          <input style={{ ...inputStyle, width: 90 }} placeholder="ej: 9.1" value={version} onChange={(e) => setVersion(e.target.value)} />
+        </div>
+        {fields.map((f) => (
+          <div key={f.key} className="flex flex-col gap-1">
+            <label className="text-xs" style={{ color: 'var(--muted)' }}>
+              {f.label}
+            </label>
+            <div className="flex gap-1">
+              <input
+                style={{ ...inputStyle, width: 220 }}
+                value={values[f.key] ?? ''}
+                onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+              />
+              {isTauri() && (
+                <Button size="sm" variant="ghost" className="shrink-0 rounded-full px-2 text-xs" onPress={() => handlePick(f.key)}>
+                  Elegir…
+                </Button>
+              )}
+            </div>
+          </div>
+        ))}
+        <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} isDisabled={busy || !canSubmit} onPress={handleRegister}>
+          {busy ? 'Registrando…' : 'Registrar'}
+        </Button>
+      </div>
+
+      {error && (
+        <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function ToolStatusBadge({ path, exists }: { path: string | null; exists: boolean }) {
   const { label, color } = path == null
@@ -24,17 +193,59 @@ const monoStyle: React.CSSProperties = { fontFamily: 'monospace', fontSize: '0.8
 
 export function Configuracion() {
   const [system, setSystem] = useState<SystemInfo | null>(null);
+  const [clients, setClients] = useState<ClientWithTaskCount[] | null>(null);
+  const [exportClientId, setExportClientId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<ImportConfigResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [toolRegistry, setToolRegistry] = useState<ToolRegistryData | null>(null);
+  const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [autostartBusy, setAutostartBusy] = useState(false);
+
+  const refreshToolRegistry = () => fetchToolRegistry().then(setToolRegistry);
 
   useEffect(() => {
     fetchSystemInfo()
       .then(setSystem)
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    fetchClients()
+      .then(setClients)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    refreshToolRegistry().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    if (isTauri()) {
+      isAutostartEnabled()
+        .then(setAutostart)
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    }
   }, []);
+
+  async function handleToggleAutostart() {
+    setAutostartBusy(true);
+    setError(null);
+    try {
+      if (autostart) await disableAutostart();
+      else await enableAutostart();
+      setAutostart(await isAutostartEnabled());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAutostartBusy(false);
+    }
+  }
+
+  async function handleRegisterTool(engine: ToolRegistryEngine, version: string, values: Record<string, string>) {
+    await registerTool(engine, version, values);
+    await refreshToolRegistry();
+  }
+
+  async function handleUnregisterTool(engine: ToolRegistryEngine, version: string) {
+    await unregisterTool(engine, version);
+    await refreshToolRegistry();
+  }
+
+  const exportUrl = exportClientId ? `${CONFIG_EXPORT_URL}?clientId=${exportClientId}` : CONFIG_EXPORT_URL;
 
   async function handleFileSelected(file: File) {
     setImportBusy(true);
@@ -69,6 +280,23 @@ export function Configuracion() {
         >
           {error}
         </div>
+      )}
+
+      {isTauri() && (
+        <section className="mb-8">
+          <h2 className="mb-2 text-sm font-semibold">Aplicación</h2>
+          <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+            <Switch
+              checked={autostart ?? false}
+              onChange={handleToggleAutostart}
+              label={autostartBusy ? 'Actualizando…' : 'Iniciar Arkode automáticamente al iniciar Windows'}
+            />
+            <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
+              Esto solo afecta si el Dashboard se abre solo al prender la PC — los backups programados corren igual
+              como tarea de Windows, con la app cerrada o no.
+            </p>
+          </div>
+        </section>
       )}
 
       <section className="mb-8">
@@ -124,13 +352,70 @@ export function Configuracion() {
         </p>
       </section>
 
+      <section className="mb-8">
+        <h2 className="mb-2 text-sm font-semibold">Herramientas por versión (direct_dump)</h2>
+        <p className="mb-3 text-xs" style={{ color: 'var(--muted)' }}>
+          Cuando un cliente usa una versión que no coincide con la ruta por defecto de arriba, registrá acá la herramienta
+          correcta para esa versión — se elige automáticamente según la versión detectada del servidor, sin tocar la tarea.
+        </p>
+        {toolRegistry && (
+          <div className="flex flex-col gap-4">
+            <ToolRegistrySection
+              title="PostgreSQL"
+              description='Versión mayor (ej. "18", "15", o "9.6" para versiones previas a la 10).'
+              fields={[
+                { key: 'pgDumpPath', label: 'pg_dump' },
+                { key: 'pgRestorePath', label: 'pg_restore' },
+              ]}
+              rows={toolRegistry.postgres as unknown as Record<string, Record<string, string>>}
+              onRegister={(version, values) => handleRegisterTool('postgres', version, values)}
+              onUnregister={(version) => handleUnregisterTool('postgres', version)}
+            />
+            <ToolRegistrySection
+              title="MySQL"
+              description='Versión mayor.menor (ej. "8.0", "9.1").'
+              fields={[{ key: 'mysqldumpPath', label: 'mysqldump' }]}
+              rows={toolRegistry.mysql as unknown as Record<string, Record<string, string>>}
+              onRegister={(version, values) => handleRegisterTool('mysql', version, values)}
+              onUnregister={(version) => handleUnregisterTool('mysql', version)}
+            />
+            <ToolRegistrySection
+              title="MariaDB"
+              description='Versión mayor.menor (ej. "10.11", "11.5").'
+              fields={[{ key: 'mariaDbDumpPath', label: 'mariadb-dump' }]}
+              rows={toolRegistry.mariadb as unknown as Record<string, Record<string, string>>}
+              onRegister={(version, values) => handleRegisterTool('mariadb', version, values)}
+              onUnregister={(version) => handleUnregisterTool('mariadb', version)}
+            />
+          </div>
+        )}
+      </section>
+
       <section>
         <h2 className="mb-2 text-sm font-semibold">Configuración de clientes</h2>
         <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
           <div className="flex flex-wrap items-center gap-3">
-            <a href={CONFIG_EXPORT_URL}>
+            <select
+              style={{
+                backgroundColor: 'var(--background)',
+                border: '1px solid var(--border)',
+                borderRadius: 9999,
+                padding: '6px 14px',
+                color: 'var(--foreground)',
+              }}
+              value={exportClientId}
+              onChange={(e) => setExportClientId(e.target.value)}
+            >
+              <option value="">Todos los clientes</option>
+              {clients?.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <a href={exportUrl}>
               <Button size="sm" className="rounded-full px-4" style={primaryPillStyle}>
-                Exportar todos los clientes
+                {exportClientId ? 'Exportar cliente' : 'Exportar todos'}
               </Button>
             </a>
             <Button

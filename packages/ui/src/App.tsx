@@ -18,19 +18,27 @@ function App() {
     setSelectedClientId(null);
   }
 
+  // A client name is clickable from anywhere in the app — always lands on
+  // "Clientes" with that client's ficha open, regardless of which screen it
+  // was clicked from.
+  function goToClient(clientId: string) {
+    setScreen('clientes');
+    setSelectedClientId(clientId);
+  }
+
   return (
     <AppShell screen={screen} onNavigate={navigate}>
-      {screen === 'dashboard' && <Dashboard />}
+      {screen === 'dashboard' && <Dashboard onSelectClient={goToClient} />}
       {screen === 'clientes' &&
         (selectedClientId ? (
           <ClienteDetalle clientId={selectedClientId} onBack={() => setSelectedClientId(null)} />
         ) : (
           <Clientes onSelectClient={setSelectedClientId} />
         ))}
-      {screen === 'conexiones' && <Conexiones />}
-      {screen === 'tareas' && <Tareas />}
-      {screen === 'historial' && <Historial />}
-      {screen === 'logs' && <Logs />}
+      {screen === 'conexiones' && <Conexiones onSelectClient={goToClient} />}
+      {screen === 'tareas' && <Tareas onSelectClient={goToClient} />}
+      {screen === 'historial' && <Historial onSelectClient={goToClient} />}
+      {screen === 'logs' && <Logs onSelectClient={goToClient} />}
       {screen === 'configuracion' && <Configuracion />}
     </AppShell>
   );

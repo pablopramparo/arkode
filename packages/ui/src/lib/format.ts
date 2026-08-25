@@ -1,3 +1,29 @@
+import type { ScheduleFrequency } from 'engine-core';
+
+const WEEKDAY_ABBR: Record<number, string> = { 0: 'Dom', 1: 'Lun', 2: 'Mar', 3: 'Mié', 4: 'Jue', 5: 'Vie', 6: 'Sáb' };
+
+export interface ScheduleLike {
+  scheduleTime: string | null;
+  scheduleEnabled: boolean;
+  scheduleFrequency: ScheduleFrequency;
+  scheduleDaysOfWeek: number[] | null;
+  scheduleDayOfMonth: number | null;
+}
+
+/** "03:00 · Diario", "03:00 · Lun, Mié, Vie", "03:00 · Día 15", each with " (deshabilitado)" appended when disabled — "Sin programar" if there's no time at all. */
+export function formatSchedule(task: ScheduleLike): string {
+  if (!task.scheduleTime) return 'Sin programar';
+  let frequencyPart: string;
+  if (task.scheduleFrequency === 'weekly' && task.scheduleDaysOfWeek?.length) {
+    frequencyPart = task.scheduleDaysOfWeek.map((d) => WEEKDAY_ABBR[d]).join(', ');
+  } else if (task.scheduleFrequency === 'monthly' && task.scheduleDayOfMonth != null) {
+    frequencyPart = `Día ${task.scheduleDayOfMonth}`;
+  } else {
+    frequencyPart = 'Diario';
+  }
+  return `${task.scheduleTime} · ${frequencyPart}${task.scheduleEnabled ? '' : ' (deshabilitado)'}`;
+}
+
 /** "142 MB", "1.2 GB" — matches project.md's own dashboard example formatting. */
 export function formatSize(bytes: number | null): string {
   if (bytes == null) return '—';
@@ -38,6 +64,14 @@ export function formatDuration(durationMs: number | null): string {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
+}
+
+/** " · Servidor: 18.0 · Cliente: psql (PostgreSQL) 18.0" — appended after a connection test's message/latency, when either version was detected (direct_dump only; never populated for SFTP/SSH transport tests). Empty string otherwise. */
+export function formatConnectionTestVersions(result: { serverVersion?: string; localToolVersion?: string }): string {
+  const parts: string[] = [];
+  if (result.serverVersion) parts.push(`Servidor: ${result.serverVersion}`);
+  if (result.localToolVersion) parts.push(`Cliente: ${result.localToolVersion}`);
+  return parts.length > 0 ? ` · ${parts.join(' · ')}` : '';
 }
 
 /** "24/8, 09:15" — a compact absolute timestamp for a history table (age alone isn't enough once you're looking at many rows). */

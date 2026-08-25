@@ -12,7 +12,7 @@ export interface DatabaseConnectionWithClientName extends DatabaseConnection {
 }
 
 export interface ConnectionsData {
-  clients: { id: string; name: string }[];
+  clients: { id: string; name: string; retentionCount: number | null; retentionDays: number | null }[];
   transports: TransportWithClientName[];
   databaseConnections: DatabaseConnectionWithClientName[];
 }

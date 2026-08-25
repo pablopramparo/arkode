@@ -134,3 +134,61 @@ export function SettingsIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function FolderIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <path d="M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v8.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z" />
+    </svg>
+  );
+}
+
+export function PlayIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base} fill="currentColor" stroke="none">
+      <path d="M6.5 4.5v15l13-7.5z" />
+    </svg>
+  );
+}
+
+export function EditIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <path d="M15.5 4.5 19.5 8.5 8 20H4v-4z" />
+      <path d="M14 6 18 10" />
+    </svg>
+  );
+}
+
+export function MinimizeIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+export function MaximizeIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <rect x="5.5" y="5.5" width="13" height="13" rx="1" />
+    </svg>
+  );
+}
+
+export function RestoreIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <rect x="7.5" y="7.5" width="11" height="11" rx="1" />
+      <path d="M9.5 7.5V6a1 1 0 0 1 1-1H18a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H17" />
+    </svg>
+  );
+}
+
+export function CloseIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </svg>
+  );
+}

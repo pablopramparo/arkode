@@ -1,8 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
 import {
-  createDatabaseConnection,
-  createTransport,
   deactivateDatabaseConnection,
   deactivateTransport,
   fetchConnections,
@@ -10,26 +8,29 @@ import {
   reactivateTransport,
   testDatabaseConnection,
   testTransport,
-  updateDatabaseConnection,
-  updateTransport,
   type ConnectionsData,
   type DatabaseConnectionWithClientName,
   type TransportWithClientName,
 } from '../lib/connectionsClient';
 import type { ConnectionTestResult } from 'engine-core';
-import { Modal } from './Modal';
 import { Switch } from './Switch';
+import { IconButton } from './IconButton';
+import { EditIcon, PulseIcon } from './icons';
+import { ConnectionEditModal } from './ConnectionEditModal';
+import { ConnectionCreateModal } from './ConnectionCreateModal';
+import { ClientLink } from './ClientLink';
+import { formatConnectionTestVersions } from '../lib/format';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 
 type Kind = 'transport' | 'database';
 type TransportType = 'sftp' | 'ssh';
 type Engine = 'postgres' | 'mysql' | 'mariadb';
 
-type ConnectionRow =
+export type ConnectionRow =
   | { kind: 'transport'; id: string; data: TransportWithClientName }
   | { kind: 'database'; id: string; data: DatabaseConnectionWithClientName };
 
-interface FormValues {
+export interface FormValues {
   kind: Kind;
   transportType: TransportType;
   engine: Engine;
@@ -55,7 +56,7 @@ function defaultPort(kind: Kind, engine: Engine): string {
   return engine === 'postgres' ? '5432' : '3306';
 }
 
-const EMPTY_FORM: FormValues = {
+export const EMPTY_FORM: FormValues = {
   kind: 'transport',
   transportType: 'sftp',
   engine: 'postgres',
@@ -76,7 +77,7 @@ const EMPTY_FORM: FormValues = {
   sslMode: '',
 };
 
-function transportToFormValues(t: TransportWithClientName): FormValues {
+export function transportToFormValues(t: TransportWithClientName): FormValues {
   return {
     ...EMPTY_FORM,
     kind: 'transport',
@@ -95,7 +96,7 @@ function transportToFormValues(t: TransportWithClientName): FormValues {
   };
 }
 
-function databaseToFormValues(d: DatabaseConnectionWithClientName): FormValues {
+export function databaseToFormValues(d: DatabaseConnectionWithClientName): FormValues {
   return {
     ...EMPTY_FORM,
     kind: 'database',
@@ -110,7 +111,7 @@ function databaseToFormValues(d: DatabaseConnectionWithClientName): FormValues {
   };
 }
 
-function toTransportInput(values: FormValues) {
+export function toTransportInput(values: FormValues) {
   return {
     type: values.transportType,
     clientId: values.clientId,
@@ -128,7 +129,7 @@ function toTransportInput(values: FormValues) {
   };
 }
 
-function toDatabaseInput(values: FormValues) {
+export function toDatabaseInput(values: FormValues) {
   return {
     clientId: values.clientId,
     name: values.name.trim(),
@@ -142,7 +143,7 @@ function toDatabaseInput(values: FormValues) {
   };
 }
 
-function isFormValid(values: FormValues): boolean {
+export function isFormValid(values: FormValues): boolean {
   if (!values.clientId || !values.name.trim() || !values.host.trim() || !values.username.trim()) return false;
   if (values.kind === 'transport') {
     if (!values.privateKeyPath.trim()) return false;
@@ -182,16 +183,19 @@ function TypeBadge({ row }: { row: ConnectionRow }) {
   );
 }
 
-function ConnectionFields({
+export function ConnectionFields({
   values,
   onChange,
   clients,
   isCreate,
+  fixedClientId,
 }: {
   values: FormValues;
   onChange: (patch: Partial<FormValues>) => void;
   clients: { id: string; name: string }[];
   isCreate: boolean;
+  /** Pre-fills and locks the client selector — used when creating a connection from within a client's own ficha, where the client is already chosen. */
+  fixedClientId?: string;
 }) {
   function setKindAndType(kind: Kind, transportType: TransportType) {
     onChange({ kind, transportType, port: defaultPort(kind, values.engine) });
@@ -230,7 +234,7 @@ function ConnectionFields({
         <select
           style={inputStyle}
           value={values.clientId}
-          disabled={!isCreate}
+          disabled={!isCreate || Boolean(fixedClientId)}
           onChange={(e) => onChange({ clientId: e.target.value })}
         >
           <option value="">Seleccionar…</option>
@@ -379,21 +383,14 @@ interface RowActionState {
   actionError?: string;
 }
 
-export function Conexiones() {
+export function Conexiones({ onSelectClient }: { onSelectClient: (clientId: string) => void }) {
   const [data, setData] = useState<ConnectionsData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
   const [actionState, setActionState] = useState<Record<string, RowActionState>>({});
 
   const [showCreate, setShowCreate] = useState(false);
-  const [createForm, setCreateForm] = useState<FormValues>(EMPTY_FORM);
-  const [createBusy, setCreateBusy] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-
   const [editingRow, setEditingRow] = useState<ConnectionRow | null>(null);
-  const [editForm, setEditForm] = useState<FormValues>(EMPTY_FORM);
-  const [editBusy, setEditBusy] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
 
   const refresh = useCallback(async (includeInactive: boolean) => {
     try {
@@ -411,43 +408,6 @@ export function Conexiones() {
 
   function patchAction(id: string, patch: RowActionState) {
     setActionState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
-  }
-
-  async function handleCreate() {
-    setCreateBusy(true);
-    setCreateError(null);
-    try {
-      if (createForm.kind === 'transport') await createTransport(toTransportInput(createForm));
-      else await createDatabaseConnection(toDatabaseInput(createForm));
-      setShowCreate(false);
-      await refresh(showInactive);
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCreateBusy(false);
-    }
-  }
-
-  function startEdit(row: ConnectionRow) {
-    setEditingRow(row);
-    setEditForm(row.kind === 'transport' ? transportToFormValues(row.data) : databaseToFormValues(row.data));
-    setEditError(null);
-  }
-
-  async function handleSaveEdit() {
-    if (!editingRow) return;
-    setEditBusy(true);
-    setEditError(null);
-    try {
-      if (editingRow.kind === 'transport') await updateTransport(editingRow.id, toTransportInput(editForm));
-      else await updateDatabaseConnection(editingRow.id, toDatabaseInput(editForm));
-      setEditingRow(null);
-      await refresh(showInactive);
-    } catch (err) {
-      setEditError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setEditBusy(false);
-    }
   }
 
   async function handleToggleActive(row: ConnectionRow) {
@@ -500,11 +460,7 @@ export function Conexiones() {
             size="sm"
             className="rounded-full px-4"
             style={primaryPillStyle}
-            onPress={() => {
-              setCreateForm(EMPTY_FORM);
-              setCreateError(null);
-              setShowCreate(true);
-            }}
+            onPress={() => setShowCreate(true)}
           >
             + Nueva conexión
           </Button>
@@ -539,7 +495,9 @@ export function Conexiones() {
                 return (
                   <Fragment key={row.id}>
                     <tr style={{ borderTop: '1px solid var(--separator)', opacity: row.data.isActive ? 1 : 0.55 }}>
-                      <td className="px-4 py-2.5 font-medium">{row.data.clientName}</td>
+                      <td className="px-4 py-2.5 font-medium">
+                        <ClientLink clientId={row.data.clientId} name={row.data.clientName} onSelect={onSelectClient} />
+                      </td>
                       <td className="px-4 py-2.5">
                         {row.data.name}
                         {!row.data.isActive && (
@@ -557,19 +515,14 @@ export function Conexiones() {
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-2">
                           {row.data.isActive && (
-                            <Button size="sm" variant="ghost" className="rounded-full px-3" onPress={() => startEdit(row)}>
-                              Editar
-                            </Button>
+                            <IconButton icon={<EditIcon />} label="Editar" onPress={() => setEditingRow(row)} />
                           )}
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="rounded-full px-3"
-                            isDisabled={Boolean(state?.busy)}
+                          <IconButton
+                            icon={<PulseIcon />}
+                            label={state?.busy === 'test' ? 'Probando conexión…' : 'Probar conexión'}
+                            disabled={Boolean(state?.busy)}
                             onPress={() => handleTest(row)}
-                          >
-                            {state?.busy === 'test' ? 'Probando…' : 'Probar conexión'}
-                          </Button>
+                          />
                           <Button
                             size="sm"
                             className="rounded-full px-3"
@@ -591,6 +544,7 @@ export function Conexiones() {
                               {state.testResult.ok ? 'Conexión OK' : 'Conexión fallida'}
                               {state.testResult.message ? ` — ${state.testResult.message}` : ''}
                               {state.testResult.latencyMs != null ? ` (${state.testResult.latencyMs} ms)` : ''}
+                              {formatConnectionTestVersions(state.testResult)}
                             </span>
                           )}
                         </td>
@@ -607,63 +561,16 @@ export function Conexiones() {
       {data && rows.length === 0 && <p style={{ color: 'var(--muted)' }}>No hay conexiones configuradas todavía.</p>}
 
       {showCreate && data && (
-        <Modal title="Nueva conexión" onClose={() => setShowCreate(false)}>
-          <ConnectionFields
-            values={createForm}
-            onChange={(patch) => setCreateForm((prev) => ({ ...prev, ...patch }))}
-            clients={data.clients}
-            isCreate
-          />
-          {createError && (
-            <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
-              {createError}
-            </p>
-          )}
-          <div className="mt-4 flex justify-end gap-2">
-            <Button size="sm" variant="ghost" className="rounded-full px-4" isDisabled={createBusy} onPress={() => setShowCreate(false)}>
-              Cancelar
-            </Button>
-            <Button
-              size="sm"
-              className="rounded-full px-4"
-              style={primaryPillStyle}
-              isDisabled={createBusy || !isFormValid(createForm)}
-              onPress={handleCreate}
-            >
-              {createBusy ? 'Creando…' : 'Crear'}
-            </Button>
-          </div>
-        </Modal>
+        <ConnectionCreateModal clients={data.clients} onClose={() => setShowCreate(false)} onCreated={() => refresh(showInactive)} />
       )}
 
       {editingRow && data && (
-        <Modal title={`Editar "${editingRow.data.name}"`} onClose={() => setEditingRow(null)}>
-          <ConnectionFields
-            values={editForm}
-            onChange={(patch) => setEditForm((prev) => ({ ...prev, ...patch }))}
-            clients={data.clients}
-            isCreate={false}
-          />
-          {editError && (
-            <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
-              {editError}
-            </p>
-          )}
-          <div className="mt-4 flex justify-end gap-2">
-            <Button size="sm" variant="ghost" className="rounded-full px-4" isDisabled={editBusy} onPress={() => setEditingRow(null)}>
-              Cancelar
-            </Button>
-            <Button
-              size="sm"
-              className="rounded-full px-4"
-              style={primaryPillStyle}
-              isDisabled={editBusy || !isFormValid(editForm)}
-              onPress={handleSaveEdit}
-            >
-              {editBusy ? 'Guardando…' : 'Guardar'}
-            </Button>
-          </div>
-        </Modal>
+        <ConnectionEditModal
+          row={editingRow}
+          clients={data.clients}
+          onClose={() => setEditingRow(null)}
+          onSaved={() => refresh(showInactive)}
+        />
       )}
     </div>
   );

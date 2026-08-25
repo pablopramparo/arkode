@@ -3,6 +3,7 @@ import { Button } from '@heroui/react';
 import type { LogEventLevel } from 'engine-core';
 import { fetchLogs, type LogEventRow } from '../lib/logsClient';
 import { formatDateTime } from '../lib/format';
+import { ClientLink } from './ClientLink';
 
 const PAGE_SIZE = 50;
 
@@ -33,7 +34,7 @@ const inputStyle: React.CSSProperties = {
   color: 'var(--foreground)',
 };
 
-export function Logs() {
+export function Logs({ onSelectClient }: { onSelectClient: (clientId: string) => void }) {
   const [events, setEvents] = useState<LogEventRow[] | null>(null);
   const [total, setTotal] = useState(0);
   const [steps, setSteps] = useState<string[]>([]);
@@ -156,7 +157,13 @@ export function Logs() {
                     <td className="px-4 py-2.5 whitespace-nowrap" style={{ color: 'var(--muted)' }}>
                       {formatDateTime(event.createdAt)}
                     </td>
-                    <td className="px-4 py-2.5">{event.clientName ?? '—'}</td>
+                    <td className="px-4 py-2.5">
+                      {event.clientId && event.clientName ? (
+                        <ClientLink clientId={event.clientId} name={event.clientName} onSelect={onSelectClient} />
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                     <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                       {event.taskName ?? '—'}
                     </td>
