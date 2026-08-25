@@ -119,3 +119,75 @@ export { exportConfig, exportTask } from './config/exportConfig.js';
 export type { ExportConfigDeps } from './config/exportConfig.js';
 export { importConfig, importTaskBundle } from './config/importConfig.js';
 export type { ImportConfigDeps, ImportConfigResult, ImportedClientResult, ImportedTaskBundleResult } from './config/importConfig.js';
+
+// --- File backups (restic-backed), a domain parallel to the DB-backup one
+// above -- deliberately its own tables/orchestrator/scheduler/retention, not
+// sharing code with backup_tasks/backup_runs. See fileBackup/types.ts and
+// CLAUDE.md's file-backup design notes for the full reasoning.
+export * from './fileBackup/types.js';
+
+export { createFileBackupRepositoriesRepo } from './fileBackup/db/repositories/fileBackupRepositoriesRepo.js';
+export type {
+  FileBackupRepositoriesRepo,
+  CreateFileBackupRepositoryInput,
+} from './fileBackup/db/repositories/fileBackupRepositoriesRepo.js';
+
+export { createFileBackupTasksRepo } from './fileBackup/db/repositories/fileBackupTasksRepo.js';
+export type {
+  FileBackupTasksRepo,
+  CreateLocalFolderTaskInput,
+  SetFileBackupScheduleInput,
+  UpdateFileBackupTaskInput,
+} from './fileBackup/db/repositories/fileBackupTasksRepo.js';
+
+export { createFileBackupRunsRepo } from './fileBackup/db/repositories/fileBackupRunsRepo.js';
+export type {
+  FileBackupRunsRepo,
+  CreateFileBackupRunInput,
+  RecordBackupSummaryInput,
+} from './fileBackup/db/repositories/fileBackupRunsRepo.js';
+
+export { createFileBackupRetentionDeletionsRepo } from './fileBackup/db/repositories/fileBackupRetentionDeletionsRepo.js';
+export type {
+  FileBackupRetentionDeletionsRepo,
+  CreateFileBackupRetentionDeletionInput,
+} from './fileBackup/db/repositories/fileBackupRetentionDeletionsRepo.js';
+
+export { createFileBackupMaintenanceRunsRepo } from './fileBackup/db/repositories/fileBackupMaintenanceRunsRepo.js';
+export type {
+  FileBackupMaintenanceRunsRepo,
+  CreateFileBackupMaintenanceRunInput,
+} from './fileBackup/db/repositories/fileBackupMaintenanceRunsRepo.js';
+
+export { toResticPath, fromResticPath } from './fileBackup/restic/paths.js';
+export * as resticClient from './fileBackup/restic/resticClient.js';
+export { RESTIC_HOST, buildForgetArgs } from './fileBackup/restic/resticClient.js';
+
+export { checkRepositoryLock, recoverStaleRepositoryRuns } from './fileBackup/locking/repositoryLock.js';
+export type { FileBackupOperationKind, RepositoryLockDeps, RepositoryLockResult } from './fileBackup/locking/repositoryLock.js';
+
+export { createFileBackupRunLogger } from './fileBackup/logging/createFileBackupRunLogger.js';
+export type { FileBackupRunLogger } from './fileBackup/logging/createFileBackupRunLogger.js';
+
+export { createFileBackupRepository, exportFileBackupRepositoryKey } from './fileBackup/createFileBackupRepository.js';
+export type { CreateFileBackupRepositoryDeps, CreateFileBackupRepositoryResult } from './fileBackup/createFileBackupRepository.js';
+
+export { restoreFileBackupRun, restoreFileBackupFile } from './fileBackup/restoreFileBackup.js';
+export type { RestoreFileBackupDeps } from './fileBackup/restoreFileBackup.js';
+
+export { runFileBackupTask } from './fileBackup/orchestrator/runFileBackupTask.js';
+export type { RunFileBackupTaskDeps, RunFileBackupTaskResult } from './fileBackup/orchestrator/runFileBackupTask.js';
+
+export { applyFileBackupRetention, resolveFileBackupRetentionPolicy } from './fileBackup/retention/applyFileBackupRetention.js';
+export type { FileBackupRetentionPolicy, ApplyFileBackupRetentionDeps } from './fileBackup/retention/applyFileBackupRetention.js';
+
+export { runFileBackupMaintenance } from './fileBackup/maintenance/runFileBackupMaintenance.js';
+export type {
+  RunFileBackupMaintenanceDeps,
+  RunFileBackupMaintenanceOpts,
+  FileBackupMaintenanceOutcome,
+} from './fileBackup/maintenance/runFileBackupMaintenance.js';
+
+export { isFileBackupTaskDue } from './fileBackup/scheduler/isFileBackupTaskDue.js';
+export { runFileBackupDueTasks } from './fileBackup/scheduler/runFileBackupDueTasks.js';
+export type { FileBackupRunDueResult } from './fileBackup/scheduler/runFileBackupDueTasks.js';

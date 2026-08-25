@@ -202,3 +202,21 @@ export function HelpCircleIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function KeyIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <circle cx="7.5" cy="15.5" r="4" />
+      <path d="M10.3 12.7 20 3M16.5 6.5l3 3M13.7 9.3l2.3 2.3" />
+    </svg>
+  );
+}
+
+export function UndoIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <path d="M4.5 9.5H11a6 6 0 1 1-5.2 9" />
+      <path d="M4.5 4.5v5h5" />
+    </svg>
+  );
+}

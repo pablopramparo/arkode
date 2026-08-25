@@ -1,23 +1,35 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@heroui/react';
 import { isTauri } from '@tauri-apps/api/core';
 import { openPath } from '@tauri-apps/plugin-opener';
 import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
-import { fetchTasks, taskExportUrl, importTaskBundle, type TaskRow } from '../lib/tasksClient';
-import { fetchConnections, testTransport, testDatabaseConnection, type ConnectionsData } from '../lib/connectionsClient';
+import { fetchTasks, taskExportUrl, importTaskBundle, deactivateTask, reactivateTask, type TaskRow } from '../lib/tasksClient';
+import {
+  fetchConnections,
+  testTransport,
+  testDatabaseConnection,
+  deactivateTransport,
+  reactivateTransport,
+  deactivateDatabaseConnection,
+  reactivateDatabaseConnection,
+  type ConnectionsData,
+} from '../lib/connectionsClient';
 import { downloadRunUrl, fetchBackups, fetchRuns, type RunRow } from '../lib/runsClient';
 import { runTaskNow, testTaskConnection, testTaskCompatibility } from '../lib/statusClient';
 import type { ConnectionTestResult, DirectDumpCompatibilityResult } from 'engine-core';
 import { StatusChip } from './StatusChip';
 import { Switch } from './Switch';
 import { IconButton, IconLinkButton } from './IconButton';
-import { DownloadIcon, EditIcon, FolderIcon, PlayIcon, PulseIcon, CheckCircleIcon } from './icons';
+import { DownloadIcon, EditIcon, EyeIcon, FolderIcon, PlayIcon, PulseIcon, CheckCircleIcon } from './icons';
+import { Spinner } from './Spinner';
 import { formatRetention, formatDateTime, formatDuration, formatSize, formatSchedule } from '../lib/format';
-import { primaryPillStyle } from '../lib/pillStyles';
+import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { TaskCreateWizard } from './TaskCreateWizard';
 import { TaskEditModal } from './TaskEditModal';
+import { isTaskInProgress } from './Tareas';
 import { ConnectionEditModal } from './ConnectionEditModal';
 import { ConnectionCreateModal } from './ConnectionCreateModal';
+import { FileBackupsPanel } from './FileBackupsPanel';
 import type { ConnectionRow } from './Conexiones';
 
 const STRATEGY_LABEL: Record<string, string> = {
@@ -26,21 +38,22 @@ const STRATEGY_LABEL: Record<string, string> = {
   direct_dump: 'Conexión directa a BD',
 };
 
-type Tab = 'tareas' | 'conexiones' | 'backups' | 'historial';
+type Tab = 'tareas' | 'conexiones' | 'backups' | 'historial' | 'archivos';
 
 const BACKUPS_PAGE_SIZE = 20;
 
 interface RowActionState {
-  busy?: boolean;
+  busy?: 'run' | 'test' | 'compatibility' | 'toggle';
   testResult?: ConnectionTestResult;
   compatibilityResult?: DirectDumpCompatibilityResult;
   actionError?: string;
 }
 
-function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab) => void; counts: Record<Tab, number> }) {
+function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab) => void; counts: Partial<Record<Tab, number>> }) {
   const tabs: { id: Tab; label: string }[] = [
     { id: 'tareas', label: 'Tareas' },
     { id: 'conexiones', label: 'Conexiones' },
+    { id: 'archivos', label: 'Archivos' },
     { id: 'backups', label: 'Backups' },
     { id: 'historial', label: 'Historial' },
   ];
@@ -57,7 +70,8 @@ function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab
             borderBottom: active === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
           }}
         >
-          {tab.label} ({counts[tab.id]})
+          {tab.label}
+          {counts[tab.id] != null ? ` (${counts[tab.id]})` : ''}
         </button>
       ))}
     </div>
@@ -76,6 +90,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   const [actionState, setActionState] = useState<Record<string, RowActionState>>({});
   const [activeTab, setActiveTab] = useState<Tab>('tareas');
   const [showInactive, setShowInactive] = useState(false);
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showCreateConnection, setShowCreateConnection] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskRow | null>(null);
@@ -163,43 +178,75 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   }, [refresh]);
 
   async function handleRun(taskId: string) {
-    patchAction(taskId, { busy: true, actionError: undefined });
+    patchAction(taskId, { busy: 'run', actionError: undefined });
     try {
       await runTaskNow(taskId);
-      patchAction(taskId, { busy: false });
+      patchAction(taskId, { busy: undefined });
       await refresh();
     } catch (err) {
-      patchAction(taskId, { busy: false, actionError: err instanceof Error ? err.message : String(err) });
+      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
     }
   }
 
   async function handleTestTask(taskId: string, trustHost?: boolean) {
-    patchAction(taskId, { busy: true, actionError: undefined, testResult: undefined, compatibilityResult: undefined });
+    patchAction(taskId, { busy: 'test', actionError: undefined, testResult: undefined, compatibilityResult: undefined });
     try {
       const result = await testTaskConnection(taskId, trustHost);
-      patchAction(taskId, { busy: false, testResult: result });
+      patchAction(taskId, { busy: undefined, testResult: result });
     } catch (err) {
-      patchAction(taskId, { busy: false, actionError: err instanceof Error ? err.message : String(err) });
+      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
     }
   }
 
   async function handleTestTaskCompatibility(taskId: string) {
-    patchAction(taskId, { busy: true, actionError: undefined, testResult: undefined, compatibilityResult: undefined });
+    patchAction(taskId, { busy: 'compatibility', actionError: undefined, testResult: undefined, compatibilityResult: undefined });
     try {
       const result = await testTaskCompatibility(taskId);
-      patchAction(taskId, { busy: false, compatibilityResult: result });
+      patchAction(taskId, { busy: undefined, compatibilityResult: result });
     } catch (err) {
-      patchAction(taskId, { busy: false, actionError: err instanceof Error ? err.message : String(err) });
+      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
     }
   }
 
   async function handleTestConnection(id: string, kind: 'transport' | 'database', trustHost?: boolean) {
-    patchAction(id, { busy: true, actionError: undefined, testResult: undefined });
+    patchAction(id, { busy: 'test', actionError: undefined, testResult: undefined });
     try {
       const result = kind === 'transport' ? await testTransport(id, trustHost) : await testDatabaseConnection(id);
-      patchAction(id, { busy: false, testResult: result });
+      patchAction(id, { busy: undefined, testResult: result });
     } catch (err) {
-      patchAction(id, { busy: false, actionError: err instanceof Error ? err.message : String(err) });
+      patchAction(id, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function handleToggleTask(task: TaskRow) {
+    if (task.isActive && !window.confirm(`¿Desactivar "${task.name}"? Dejará de programarse; su historial no se toca.`)) {
+      return;
+    }
+    patchAction(task.id, { busy: 'toggle', actionError: undefined });
+    try {
+      await (task.isActive ? deactivateTask(task.id) : reactivateTask(task.id));
+      patchAction(task.id, { busy: undefined });
+      await refresh();
+    } catch (err) {
+      patchAction(task.id, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function handleToggleConnection(row: ConnectionRow) {
+    if (row.data.isActive && !window.confirm(`¿Desactivar "${row.data.name}"? Las tareas que la usan fallarán limpiamente en vez de eliminarse.`)) {
+      return;
+    }
+    patchAction(row.id, { busy: 'toggle', actionError: undefined });
+    try {
+      if (row.kind === 'transport') {
+        await (row.data.isActive ? deactivateTransport(row.id) : reactivateTransport(row.id));
+      } else {
+        await (row.data.isActive ? deactivateDatabaseConnection(row.id) : reactivateDatabaseConnection(row.id));
+      }
+      patchAction(row.id, { busy: undefined });
+      await refresh();
+    } catch (err) {
+      patchAction(row.id, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -350,19 +397,26 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                             {formatSchedule(task)}
                           </td>
                           <td className="px-4 py-2.5">
-                            {task.isActive && (
+                            {task.isActive ? (
                               <div className="flex items-center gap-2">
                                 <Button
                                   size="sm"
                                   className="rounded-full px-3"
                                   style={primaryPillStyle}
-                                  isDisabled={Boolean(state?.busy)}
+                                  isDisabled={Boolean(state?.busy) || isTaskInProgress(task)}
                                   onPress={() => handleRun(task.id)}
                                 >
-                                  <span className="flex items-center gap-1.5">
-                                    <PlayIcon className="h-3.5 w-3.5" />
-                                    Ejecutar ahora
-                                  </span>
+                                  {state?.busy === 'run' || isTaskInProgress(task) ? (
+                                    <span className="flex items-center gap-1.5">
+                                      <Spinner />
+                                      {isTaskInProgress(task) && state?.busy !== 'run' ? 'En curso…' : 'Ejecutando…'}
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center gap-1.5">
+                                      <PlayIcon className="h-3.5 w-3.5" />
+                                      Ejecutar ahora
+                                    </span>
+                                  )}
                                 </Button>
                                 <IconButton
                                   icon={<PulseIcon />}
@@ -384,6 +438,15 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   label="Exportar (conexión + tarea, para adjuntar a otro cliente)"
                                   href={taskExportUrl(task.id)}
                                 />
+                                <Button
+                                  size="sm"
+                                  className="rounded-full px-3"
+                                  style={dangerPillStyle}
+                                  isDisabled={state?.busy === 'toggle'}
+                                  onPress={() => handleToggleTask(task)}
+                                >
+                                  {state?.busy === 'toggle' ? '…' : 'Desactivar'}
+                                </Button>
                                 {state?.testResult && !state.testResult.unknownHost && (
                                   <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                                     {state.testResult.ok ? 'OK' : state.testResult.message}
@@ -401,7 +464,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                       size="sm"
                                       className="rounded-full px-3"
                                       style={primaryPillStyle}
-                                      isDisabled={state.busy}
+                                      isDisabled={Boolean(state.busy)}
                                       onPress={() => handleTestTask(task.id, true)}
                                     >
                                       Confiar y probar de nuevo
@@ -413,6 +476,26 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                     {state.compatibilityResult.ok ? 'Compatible' : state.compatibilityResult.message}
                                   </span>
                                 )}
+                                {state?.actionError && (
+                                  <span className="text-xs" style={{ color: 'var(--danger)' }}>
+                                    {state.actionError}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                                  (inactiva)
+                                </span>
+                                <Button
+                                  size="sm"
+                                  className="rounded-full px-3"
+                                  style={primaryPillStyle}
+                                  isDisabled={state?.busy === 'toggle'}
+                                  onPress={() => handleToggleTask(task)}
+                                >
+                                  {state?.busy === 'toggle' ? '…' : 'Reactivar'}
+                                </Button>
                                 {state?.actionError && (
                                   <span className="text-xs" style={{ color: 'var(--danger)' }}>
                                     {state.actionError}
@@ -458,7 +541,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                             {row.data.host}:{row.data.port}
                           </td>
                           <td className="px-4 py-2.5">
-                            {row.data.isActive && (
+                            {row.data.isActive ? (
                               <div className="flex items-center gap-2">
                                 <IconButton
                                   icon={<PulseIcon />}
@@ -467,6 +550,15 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   onPress={() => handleTestConnection(row.id, row.kind)}
                                 />
                                 <IconButton icon={<EditIcon />} label="Editar" onPress={() => setEditingConnectionRow(row)} />
+                                <Button
+                                  size="sm"
+                                  className="rounded-full px-3"
+                                  style={dangerPillStyle}
+                                  isDisabled={state?.busy === 'toggle'}
+                                  onPress={() => handleToggleConnection(row)}
+                                >
+                                  {state?.busy === 'toggle' ? '…' : 'Desactivar'}
+                                </Button>
                                 {state?.testResult && !state.testResult.unknownHost && (
                                   <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                                     {state.testResult.ok ? 'OK' : state.testResult.message}
@@ -484,13 +576,28 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                       size="sm"
                                       className="rounded-full px-3"
                                       style={primaryPillStyle}
-                                      isDisabled={state.busy}
+                                      isDisabled={Boolean(state.busy)}
                                       onPress={() => handleTestConnection(row.id, row.kind, true)}
                                     >
                                       Confiar y probar de nuevo
                                     </Button>
                                   </span>
                                 )}
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                                  (inactiva)
+                                </span>
+                                <Button
+                                  size="sm"
+                                  className="rounded-full px-3"
+                                  style={primaryPillStyle}
+                                  isDisabled={state?.busy === 'toggle'}
+                                  onPress={() => handleToggleConnection(row)}
+                                >
+                                  {state?.busy === 'toggle' ? '…' : 'Reactivar'}
+                                </Button>
                               </div>
                             )}
                           </td>
@@ -505,6 +612,8 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                 Este cliente no tiene conexiones todavía.
               </p>
             ))}
+
+          {activeTab === 'archivos' && <FileBackupsPanel clientId={clientId} />}
 
           {activeTab === 'backups' &&
             (backups && backups.length > 0 ? (
@@ -588,28 +697,49 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                     </tr>
                   </thead>
                   <tbody>
-                    {runs.map((run) => (
-                      <tr key={run.id} style={{ borderTop: '1px solid var(--separator)' }}>
-                        <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                          {run.taskName ?? '—'}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <StatusChip status={run.status} />
-                        </td>
-                        <td className="px-4 py-2.5">{formatDateTime(run.startedAt)}</td>
-                        <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                          {formatDuration(run.durationMs)}
-                        </td>
-                        <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                          {formatSize(run.sizeBytes)}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          {run.localPath && (
-                            <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                    {runs.map((run) => {
+                      const expanded = expandedRunId === run.id;
+                      return (
+                        <Fragment key={run.id}>
+                          <tr style={{ borderTop: '1px solid var(--separator)' }}>
+                            <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                              {run.taskName ?? '—'}
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <StatusChip status={run.status} />
+                            </td>
+                            <td className="px-4 py-2.5">{formatDateTime(run.startedAt)}</td>
+                            <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                              {formatDuration(run.durationMs)}
+                            </td>
+                            <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                              {formatSize(run.sizeBytes)}
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <div className="flex items-center gap-1">
+                                {run.localPath && (
+                                  <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                                )}
+                                {run.errorMessage && (
+                                  <IconButton
+                                    icon={<EyeIcon />}
+                                    label={expanded ? 'Ocultar error' : 'Ver error'}
+                                    onPress={() => setExpandedRunId(expanded ? null : run.id)}
+                                  />
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                          {expanded && run.errorMessage && (
+                            <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
+                              <td colSpan={6} className="px-4 py-2 text-xs" style={{ color: 'var(--danger)', fontFamily: 'monospace' }}>
+                                {run.errorMessage}
+                              </td>
+                            </tr>
                           )}
-                        </td>
-                      </tr>
-                    ))}
+                        </Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

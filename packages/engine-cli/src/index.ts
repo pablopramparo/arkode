@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { randomUUID } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { createReadStream, existsSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, resolve as resolvePath, join as joinPath } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
   runBackupTask,
@@ -29,6 +30,14 @@ import {
   createMysqlToolRegistry,
   createMariaDbToolRegistry,
   testDirectDumpCompatibility,
+  createFileBackupRepository,
+  exportFileBackupRepositoryKey,
+  runFileBackupTask,
+  runFileBackupDueTasks,
+  runFileBackupMaintenance,
+  restoreFileBackupRun,
+  restoreFileBackupFile,
+  scheduledTaskNameForBackupTask as scheduledTaskNameForId,
   type DbEngine,
   type Transport,
   type ConnectionTestResult,
@@ -37,9 +46,17 @@ import {
   type RunBackupTaskDeps,
   type BackupTask,
   type DirectDumpCompatibilityResult,
+  type RunFileBackupTaskDeps,
+  type FileBackupTask,
+  type FileBackupMaintenanceOperation,
 } from 'engine-core';
 import { buildContext } from './context.js';
 import { confirmHostInteractively } from './confirmHost.js';
+
+/** The scheduled-task naming helper only ever interpolates a bare id — reused unchanged for file-backup task ids under a distinct alias for readability at call sites. */
+const scheduledTaskNameForFileBackupTask = scheduledTaskNameForId;
+/** Fixed name for the one global maintenance sweep task (see runFileBackupMaintenance.ts) -- not per-task/per-client. */
+const FILE_BACKUP_MAINTENANCE_TASK_NAME = '\\arkode\\file-backup-maintenance';
 
 const program = new Command();
 program.name('engine-cli').description('arkode engine CLI').version('0.0.0');
@@ -1119,6 +1136,381 @@ program
     console.log(`Downloaded and registered MariaDB ${opts.mariadbVersion}: ${paths.mariaDbDumpPath}`);
   });
 
+// === File backups (restic-backed) — a domain parallel to the DB-backup
+// commands above, deliberately not sharing logic with them. See
+// CLAUDE.md's file-backup design notes. ===
+
+/** Shared by the file-task:run CLI command and the serve HTTP endpoint. */
+function buildFileBackupTaskDeps(ctx: ReturnType<typeof buildContext>): RunFileBackupTaskDeps {
+  return {
+    clientsRepo: ctx.clientsRepo,
+    fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+    fileBackupRunsRepo: ctx.fileBackupRunsRepo,
+    fileBackupMaintenanceRunsRepo: ctx.fileBackupMaintenanceRunsRepo,
+    fileBackupRetentionDeletionsRepo: ctx.fileBackupRetentionDeletionsRepo,
+    secretStore: ctx.secretStore,
+  };
+}
+
+function runFileBackupTaskNow(ctx: ReturnType<typeof buildContext>, task: FileBackupTask) {
+  return runFileBackupTask(task, buildFileBackupTaskDeps(ctx));
+}
+
+function mapMaintenanceOperationFlag(value: string | undefined): FileBackupMaintenanceOperation | 'all' | undefined {
+  if (!value) return undefined;
+  if (value === 'check-read-data') return 'check_read_data';
+  return value as FileBackupMaintenanceOperation | 'all';
+}
+
+program
+  .command('file-repo:create')
+  .description(
+    'Create the one restic repository a client\'s file-backup tasks share, at {client.localBasePath}\\_restic-repo. Prints the plaintext recovery key ONCE — save it somewhere outside this installation (file-repo:export-key re-shows it later, but recovery must never depend solely on this machine).'
+  )
+  .requiredOption('--client <clientId>')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    try {
+      const { repository, recoveryKey } = await createFileBackupRepository(opts.client, {
+        clientsRepo: ctx.clientsRepo,
+        fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+        secretStore: ctx.secretStore,
+      });
+      console.log(JSON.stringify(repository, null, 2));
+      console.error(`\nRECOVERY KEY (guardala fuera de esta PC — es indispensable para recuperar estos backups si esta instalación se pierde):\n${recoveryKey}\n`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('file-repo:export-key')
+  .description("Re-display a file-backup repository's plaintext recovery key.")
+  .requiredOption('--client <clientId>')
+  .action((opts) => {
+    const ctx = buildContext();
+    const repository = ctx.fileBackupRepositoriesRepo.getByClientId(opts.client);
+    if (!repository) {
+      console.error(`Client ${opts.client} has no file-backup repository yet — create one with file-repo:create.`);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const key = exportFileBackupRepositoryKey(repository.id, ctx);
+      console.log(key);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('file-repo:run-maintenance')
+  .description(
+    'Run repository maintenance (prune/check) — never run as part of a normal backup. With no options, sweeps every repository and runs whatever is due per its own cadence (prune weekly, check monthly). --operation forces a specific operation regardless of cadence.'
+  )
+  .option('--repo <repositoryId>', 'target just this one repository instead of every repository')
+  .option('--operation <prune|check|check-read-data|all>', 'force this operation regardless of due-cadence')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    const outcomes = await runFileBackupMaintenance(
+      { fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo, fileBackupMaintenanceRunsRepo: ctx.fileBackupMaintenanceRunsRepo, fileBackupRunsRepo: ctx.fileBackupRunsRepo, secretStore: ctx.secretStore },
+      { repositoryId: opts.repo, operation: mapMaintenanceOperationFlag(opts.operation) }
+    );
+    console.log(JSON.stringify(outcomes, null, 2));
+    if (outcomes.some((o) => o.error)) process.exitCode = 1;
+  });
+
+program
+  .command('file-repo:scheduler:install-maintenance')
+  .description('Register the one global Windows Scheduled Task that sweeps every file-backup repository for due maintenance. Runs as SYSTEM; must be run elevated.')
+  .action(async () => {
+    await installScheduledTask({
+      taskName: FILE_BACKUP_MAINTENANCE_TASK_NAME,
+      description: 'arkode - file-backup repository maintenance sweep (prune/check)',
+      scheduleTime: '04:00',
+      command: process.execPath,
+      arguments: Boolean((process as NodeJS.Process & { pkg?: unknown }).pkg) ? 'file-repo:run-maintenance' : `"${process.argv[1]}" file-repo:run-maintenance`,
+    });
+    console.log(`Registered Windows Scheduled Task "${FILE_BACKUP_MAINTENANCE_TASK_NAME}", running as SYSTEM.`);
+  });
+
+program
+  .command('file-repo:scheduler:uninstall-maintenance')
+  .description('Remove the global file-backup maintenance Scheduled Task.')
+  .action(async () => {
+    await uninstallScheduledTask(FILE_BACKUP_MAINTENANCE_TASK_NAME);
+    console.log(`Removed Windows Scheduled Task "${FILE_BACKUP_MAINTENANCE_TASK_NAME}".`);
+  });
+
+program
+  .command('file-repo:scheduler:status-maintenance')
+  .description('Check whether the global file-backup maintenance Scheduled Task is registered.')
+  .action(async () => {
+    const status = await scheduledTaskStatus(FILE_BACKUP_MAINTENANCE_TASK_NAME);
+    console.log(JSON.stringify(status, null, 2));
+    if (!status.exists) process.exitCode = 1;
+  });
+
+program
+  .command('file-task:create')
+  .description('Create a local_folder file-backup task. The client must already have a file-backup repository (file-repo:create).')
+  .requiredOption('--client <clientId>')
+  .requiredOption('--name <name>')
+  .requiredOption('--source-path <path>', 'the folder to back up — resolved to an absolute path before use')
+  .option('--retention-count <n>')
+  .option('--retention-days <n>')
+  .action((opts) => {
+    const ctx = buildContext();
+    const repository = ctx.fileBackupRepositoriesRepo.getByClientId(opts.client);
+    if (!repository) {
+      console.error(`Client ${opts.client} has no file-backup repository yet — create one with file-repo:create.`);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const task = ctx.fileBackupTasksRepo.createLocalFolder({
+        clientId: opts.client,
+        repositoryId: repository.id,
+        name: opts.name,
+        sourcePath: resolvePath(opts.sourcePath),
+        retentionCount: opts.retentionCount != null ? Number(opts.retentionCount) : null,
+        retentionDays: opts.retentionDays != null ? Number(opts.retentionDays) : null,
+      });
+      console.log(JSON.stringify(task, null, 2));
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('file-task:update')
+  .description("Update a file-backup task's name/retention (not its source folder — create a new task to point at a different one).")
+  .argument('<taskId>')
+  .option('--name <name>')
+  .option('--retention-count <n>')
+  .option('--retention-days <n>')
+  .action((taskId: string, opts) => {
+    const ctx = buildContext();
+    const task = ctx.fileBackupTasksRepo.update(taskId, {
+      name: opts.name,
+      retentionCount: opts.retentionCount != null ? Number(opts.retentionCount) : undefined,
+      retentionDays: opts.retentionDays != null ? Number(opts.retentionDays) : undefined,
+    });
+    console.log(JSON.stringify(task, null, 2));
+  });
+
+program
+  .command('file-task:deactivate')
+  .argument('<taskId>')
+  .action((taskId: string) => {
+    const ctx = buildContext();
+    ctx.fileBackupTasksRepo.deactivate(taskId);
+    console.log(`Deactivated file-backup task ${taskId}.`);
+  });
+
+program
+  .command('file-task:reactivate')
+  .argument('<taskId>')
+  .action((taskId: string) => {
+    const ctx = buildContext();
+    ctx.fileBackupTasksRepo.reactivate(taskId);
+    console.log(`Reactivated file-backup task ${taskId}.`);
+  });
+
+program
+  .command('file-task:list')
+  .requiredOption('--client <clientId>')
+  .action((opts) => {
+    const ctx = buildContext();
+    console.log(JSON.stringify(ctx.fileBackupTasksRepo.listByClient(opts.client), null, 2));
+  });
+
+program
+  .command('file-task:run')
+  .description('Run a local_folder file-backup task now.')
+  .argument('<taskId>')
+  .action(async (taskId: string) => {
+    const ctx = buildContext();
+    const task = ctx.fileBackupTasksRepo.getById(taskId);
+    if (!task) {
+      console.error(`File-backup task ${taskId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const result = await runFileBackupTaskNow(ctx, task);
+      console.log(JSON.stringify(result.run, null, 2));
+      if (result.run.status === 'Failed') process.exitCode = 1;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('file-task:run-due')
+  .description('Run every currently-due scheduled file-backup task (or just one, with --task). What a file-backup task\'s Windows Scheduled Task actually invokes.')
+  .option('--task <taskId>')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    let tasks: FileBackupTask[];
+    if (opts.task) {
+      const task = ctx.fileBackupTasksRepo.getById(opts.task);
+      if (!task) {
+        console.error(`File-backup task ${opts.task} not found.`);
+        process.exitCode = 1;
+        return;
+      }
+      tasks = [task];
+    } else {
+      tasks = ctx.fileBackupTasksRepo.listScheduled();
+    }
+    const results = await runFileBackupDueTasks(tasks, { ...buildFileBackupTaskDeps(ctx), fileBackupRunsRepo: ctx.fileBackupRunsRepo }, new Date());
+    console.log(JSON.stringify(results, null, 2));
+    if (results.some((r) => r.error || r.result?.run.status === 'Failed')) process.exitCode = 1;
+  });
+
+program
+  .command('file-task:set-schedule')
+  .argument('<taskId>')
+  .option('--time <HH:MM>')
+  .option('--disable', 'disable scheduling without clearing the configured time', false)
+  .option('--frequency <daily|weekly|monthly>')
+  .option('--days-of-week <list>', 'comma-separated 0 (Sunday) through 6 (Saturday)')
+  .option('--day-of-month <n>', '1-31')
+  .action((taskId: string, opts) => {
+    const ctx = buildContext();
+    const task = ctx.fileBackupTasksRepo.getById(taskId);
+    if (!task) {
+      console.error(`File-backup task ${taskId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!opts.time && !opts.disable) {
+      console.error('Specify --time <HH:MM> and/or --disable.');
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const updated = ctx.fileBackupTasksRepo.setSchedule(taskId, {
+        scheduleTime: opts.time ?? task.scheduleTime,
+        scheduleEnabled: !opts.disable,
+        scheduleFrequency: opts.frequency,
+        scheduleDaysOfWeek: opts.daysOfWeek ? opts.daysOfWeek.split(',').map(Number) : undefined,
+        scheduleDayOfMonth: opts.dayOfMonth ? Number(opts.dayOfMonth) : undefined,
+      });
+      console.log(JSON.stringify(updated, null, 2));
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('file-task:scheduler:install')
+  .description('Register a Windows Scheduled Task for a file-backup task, using its already-configured schedule. Runs as SYSTEM; must be run elevated.')
+  .argument('<taskId>')
+  .action(async (taskId: string) => {
+    const ctx = buildContext();
+    const task = ctx.fileBackupTasksRepo.getById(taskId);
+    if (!task) {
+      console.error(`File-backup task ${taskId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!task.scheduleEnabled || !task.scheduleTime) {
+      console.error(`Task ${taskId} has no enabled schedule — set one first: file-task:set-schedule ${taskId} --time HH:MM`);
+      process.exitCode = 1;
+      return;
+    }
+    const taskName = scheduledTaskNameForFileBackupTask(taskId);
+    const isPkgExe = Boolean((process as NodeJS.Process & { pkg?: unknown }).pkg);
+    await installScheduledTask({
+      taskName,
+      description: `arkode - scheduled file-backup run for task "${task.name}"`,
+      scheduleTime: task.scheduleTime,
+      command: process.execPath,
+      arguments: isPkgExe ? `file-task:run-due --task ${taskId}` : `"${process.argv[1]}" file-task:run-due --task ${taskId}`,
+    });
+    console.log(`Registered Windows Scheduled Task "${taskName}" for file-backup task "${task.name}" at ${task.scheduleTime} daily, running as SYSTEM.`);
+  });
+
+program
+  .command('file-task:scheduler:uninstall')
+  .argument('<taskId>')
+  .action(async (taskId: string) => {
+    const taskName = scheduledTaskNameForFileBackupTask(taskId);
+    await uninstallScheduledTask(taskName);
+    console.log(`Removed Windows Scheduled Task "${taskName}".`);
+  });
+
+program
+  .command('file-task:scheduler:status')
+  .argument('<taskId>')
+  .action(async (taskId: string) => {
+    const taskName = scheduledTaskNameForFileBackupTask(taskId);
+    const status = await scheduledTaskStatus(taskName);
+    console.log(JSON.stringify(status, null, 2));
+    if (!status.exists) process.exitCode = 1;
+  });
+
+program
+  .command('file-run:list')
+  .option('--task <taskId>')
+  .option('--client <clientId>')
+  .action((opts) => {
+    const ctx = buildContext();
+    console.log(JSON.stringify(ctx.fileBackupRunsRepo.listRecent({ taskId: opts.task, clientId: opts.client }), null, 2));
+  });
+
+program
+  .command('file-run:restore')
+  .description("Restore a file-backup run's entire snapshot to a local folder.")
+  .requiredOption('--run <runId>')
+  .requiredOption('--target <dir>')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    try {
+      const target = resolvePath(opts.target);
+      await mkdir(target, { recursive: true });
+      const result = await restoreFileBackupRun(opts.run, target, {
+        fileBackupRunsRepo: ctx.fileBackupRunsRepo,
+        fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+        secretStore: ctx.secretStore,
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('file-run:restore-file')
+  .description('Restore a single file from a file-backup run\'s snapshot.')
+  .requiredOption('--run <runId>')
+  .requiredOption('--path <absoluteSourcePath>', 'the file\'s original absolute path at backup time')
+  .requiredOption('--target <destPath>', 'where to write the restored file')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    try {
+      const dest = resolvePath(opts.target);
+      await mkdir(resolvePath(dest, '..'), { recursive: true });
+      await restoreFileBackupFile(opts.run, opts.path, dest, {
+        fileBackupRunsRepo: ctx.fileBackupRunsRepo,
+        fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+        secretStore: ctx.secretStore,
+      });
+      console.log(`Restored to ${dest}`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
 program
   .command('serve')
   .description(
@@ -1842,6 +2234,226 @@ program
           sendJson(res, 200, task);
         } catch (err) {
           sendRepoError(res, err);
+        }
+        return;
+      }
+
+      // === File backups (restic-backed) ===
+
+      if (req.method === 'GET' && pathname === '/file-repos') {
+        const clientId = url.searchParams.get('client');
+        const repos = clientId
+          ? [ctx.fileBackupRepositoriesRepo.getByClientId(clientId)].filter((r) => r != null)
+          : ctx.fileBackupRepositoriesRepo.listForActiveClients();
+        sendJson(res, 200, repos);
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/file-repos') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.clientId) {
+            sendJson(res, 400, { error: 'clientId is required.' });
+            return;
+          }
+          const { repository, recoveryKey } = await createFileBackupRepository(body.clientId, {
+            clientsRepo: ctx.clientsRepo,
+            fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+            secretStore: ctx.secretStore,
+          });
+          sendJson(res, 201, { ...repository, recoveryKey });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const exportKeyMatch = req.method === 'GET' && pathname.match(/^\/file-repos\/([^/]+)\/export-key$/);
+      if (exportKeyMatch) {
+        try {
+          const recoveryKey = exportFileBackupRepositoryKey(exportKeyMatch[1], ctx);
+          sendJson(res, 200, { recoveryKey });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const maintenanceMatch = req.method === 'POST' && pathname.match(/^\/file-repos\/([^/]+)\/run-maintenance$/);
+      if (maintenanceMatch) {
+        try {
+          const body = await readJsonBody(req);
+          const outcomes = await runFileBackupMaintenance(
+            { fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo, fileBackupMaintenanceRunsRepo: ctx.fileBackupMaintenanceRunsRepo, fileBackupRunsRepo: ctx.fileBackupRunsRepo, secretStore: ctx.secretStore },
+            { repositoryId: maintenanceMatch[1], operation: mapMaintenanceOperationFlag(body.operation) }
+          );
+          sendJson(res, 200, outcomes);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/file-tasks') {
+        const clientId = url.searchParams.get('client');
+        const includeInactive = url.searchParams.get('includeInactive') === 'true';
+        let tasks = clientId ? ctx.fileBackupTasksRepo.listByClient(clientId) : [];
+        if (!includeInactive) tasks = tasks.filter((t) => t.isActive);
+        sendJson(res, 200, tasks);
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/file-tasks') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.clientId || !body.name || !body.sourcePath) {
+            sendJson(res, 400, { error: 'clientId, name, and sourcePath are required.' });
+            return;
+          }
+          const repository = ctx.fileBackupRepositoriesRepo.getByClientId(body.clientId);
+          if (!repository) {
+            sendJson(res, 400, { error: 'This client has no file-backup repository yet — create one first (POST /file-repos).' });
+            return;
+          }
+          const task = ctx.fileBackupTasksRepo.createLocalFolder({
+            clientId: body.clientId,
+            repositoryId: repository.id,
+            name: body.name,
+            sourcePath: resolvePath(body.sourcePath),
+            retentionCount: body.retentionCount ?? null,
+            retentionDays: body.retentionDays ?? null,
+          });
+          if (body.scheduleTime) {
+            ctx.fileBackupTasksRepo.setSchedule(task.id, {
+              scheduleTime: body.scheduleTime,
+              scheduleEnabled: body.scheduleEnabled ?? true,
+              scheduleFrequency: body.scheduleFrequency,
+              scheduleDaysOfWeek: body.scheduleDaysOfWeek,
+              scheduleDayOfMonth: body.scheduleDayOfMonth,
+            });
+          }
+          const created = ctx.fileBackupTasksRepo.getById(task.id);
+          sendJson(res, 201, created);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const fileTaskIdMatch = req.method === 'PATCH' && pathname.match(/^\/file-tasks\/([^/]+)$/);
+      if (fileTaskIdMatch) {
+        try {
+          const body = await readJsonBody(req);
+          const task = ctx.fileBackupTasksRepo.update(fileTaskIdMatch[1], body);
+          sendJson(res, 200, task);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const fileTaskActionMatch = req.method === 'POST' && pathname.match(/^\/file-tasks\/([^/]+)\/(deactivate|reactivate|run)$/);
+      if (fileTaskActionMatch) {
+        const [, taskId, action] = fileTaskActionMatch;
+        try {
+          if (action === 'deactivate') {
+            ctx.fileBackupTasksRepo.deactivate(taskId);
+            sendJson(res, 200, { ok: true });
+          } else if (action === 'reactivate') {
+            ctx.fileBackupTasksRepo.reactivate(taskId);
+            sendJson(res, 200, { ok: true });
+          } else {
+            const task = ctx.fileBackupTasksRepo.getById(taskId);
+            if (!task) {
+              sendJson(res, 404, { error: `File-backup task ${taskId} not found.` });
+              return;
+            }
+            const result = await runFileBackupTaskNow(ctx, task);
+            sendJson(res, 200, result.run);
+          }
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const fileTaskScheduleMatch = req.method === 'POST' && pathname.match(/^\/file-tasks\/([^/]+)\/schedule$/);
+      if (fileTaskScheduleMatch) {
+        try {
+          const body = await readJsonBody(req);
+          const task = ctx.fileBackupTasksRepo.setSchedule(fileTaskScheduleMatch[1], {
+            scheduleTime: body.disable ? (ctx.fileBackupTasksRepo.getById(fileTaskScheduleMatch[1])?.scheduleTime ?? null) : body.scheduleTime,
+            scheduleEnabled: !body.disable,
+            scheduleFrequency: body.scheduleFrequency,
+            scheduleDaysOfWeek: body.scheduleDaysOfWeek,
+            scheduleDayOfMonth: body.scheduleDayOfMonth,
+          });
+          sendJson(res, 200, task);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/file-runs') {
+        const limitParam = url.searchParams.get('limit');
+        const runs = ctx.fileBackupRunsRepo.listRecent({
+          taskId: url.searchParams.get('task') ?? undefined,
+          clientId: url.searchParams.get('client') ?? undefined,
+          limit: limitParam ? Number(limitParam) : undefined,
+        });
+        sendJson(res, 200, runs);
+        return;
+      }
+
+      const fileRunRestoreMatch = req.method === 'POST' && pathname.match(/^\/file-runs\/([^/]+)\/restore$/);
+      if (fileRunRestoreMatch) {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.targetDir) {
+            sendJson(res, 400, { error: 'targetDir is required.' });
+            return;
+          }
+          const target = resolvePath(body.targetDir);
+          await mkdir(target, { recursive: true });
+          const result = await restoreFileBackupRun(fileRunRestoreMatch[1], target, {
+            fileBackupRunsRepo: ctx.fileBackupRunsRepo,
+            fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+            secretStore: ctx.secretStore,
+          });
+          sendJson(res, 200, { ...result, targetDir: target });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const fileRunDownloadFileMatch = req.method === 'GET' && pathname.match(/^\/file-runs\/([^/]+)\/download-file$/);
+      if (fileRunDownloadFileMatch) {
+        const sourcePath = url.searchParams.get('path');
+        if (!sourcePath) {
+          sendJson(res, 400, { error: 'A ?path= query param (the file\'s original absolute path) is required.' });
+          return;
+        }
+        const tempDest = joinPath(tmpdir(), `arkode-file-download-${randomUUID()}${basename(sourcePath) ? '-' + basename(sourcePath) : ''}`);
+        try {
+          await restoreFileBackupFile(fileRunDownloadFileMatch[1], sourcePath, tempDest, {
+            fileBackupRunsRepo: ctx.fileBackupRunsRepo,
+            fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+            secretStore: ctx.secretStore,
+          });
+          res.writeHead(200, {
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition': `attachment; filename="${basename(sourcePath)}"`,
+          });
+          const stream = createReadStream(tempDest);
+          stream.pipe(res);
+          stream.on('close', () => {
+            unlink(tempDest).catch(() => {});
+          });
+        } catch (err) {
+          sendRepoError(res, err);
+          await unlink(tempDest).catch(() => {});
         }
         return;
       }

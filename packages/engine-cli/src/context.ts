@@ -11,6 +11,11 @@ import {
   createRetentionDeletionsRepo,
   createSettingsRepo,
   MachineDpapiSecretStore,
+  createFileBackupRepositoriesRepo,
+  createFileBackupTasksRepo,
+  createFileBackupRunsRepo,
+  createFileBackupRetentionDeletionsRepo,
+  createFileBackupMaintenanceRunsRepo,
 } from 'engine-core';
 
 export function buildContext() {
@@ -28,6 +33,14 @@ export function buildContext() {
   const settingsRepo = createSettingsRepo(db);
   const secretStore = new MachineDpapiSecretStore(db);
 
+  // File backups (restic-backed) -- a domain parallel to the DB-backup one
+  // above, deliberately not sharing repos/tables with it.
+  const fileBackupRepositoriesRepo = createFileBackupRepositoriesRepo(db);
+  const fileBackupTasksRepo = createFileBackupTasksRepo(db);
+  const fileBackupRunsRepo = createFileBackupRunsRepo(db);
+  const fileBackupRetentionDeletionsRepo = createFileBackupRetentionDeletionsRepo(db);
+  const fileBackupMaintenanceRunsRepo = createFileBackupMaintenanceRunsRepo(db);
+
   return {
     db,
     clientsRepo,
@@ -40,6 +53,11 @@ export function buildContext() {
     retentionDeletionsRepo,
     settingsRepo,
     secretStore,
+    fileBackupRepositoriesRepo,
+    fileBackupTasksRepo,
+    fileBackupRunsRepo,
+    fileBackupRetentionDeletionsRepo,
+    fileBackupMaintenanceRunsRepo,
   };
 }
 
