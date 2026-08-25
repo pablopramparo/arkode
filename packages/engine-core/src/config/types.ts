@@ -1,4 +1,4 @@
-import type { BackupStrategyKind, DatabaseEngine, DbEngine, TransportType } from '../types.js';
+import type { BackupStrategyKind, DatabaseEngine, DbEngine, ScheduleFrequency, TransportType } from '../types.js';
 
 /**
  * A portable configuration snapshot for one or more clients — never
@@ -21,7 +21,10 @@ export interface ExportedTransport {
   host: string;
   port: number;
   username: string;
+  /** The source machine's own path — kept for reference, but never reused directly on import (see privateKeyContentBase64). */
   privateKeyPath: string;
+  /** The private key file's own content, base64-encoded, so import can write a working copy on the target machine — null if the file couldn't be read at export time (moved, permissions, etc.), in which case the import falls back to today's path-only behavior and flags it in secretsNeedingReentry. */
+  privateKeyContentBase64: string | null;
   hasPassphrase: boolean;
   remotePath: string | null;
   remoteFilePattern: string | null;
@@ -51,6 +54,9 @@ export interface ExportedTask {
   dbEngine: DbEngine;
   scheduleTime: string | null;
   scheduleEnabled: boolean;
+  scheduleFrequency: ScheduleFrequency;
+  scheduleDaysOfWeek: number[] | null;
+  scheduleDayOfMonth: number | null;
   retentionCount: number | null;
   retentionDays: number | null;
 }

@@ -2,8 +2,6 @@ export interface TaskDefinitionInput {
   description: string;
   /** 24h "HH:MM", local time. */
   scheduleTime: string;
-  /** "DOMAIN\User" (or ".\User" for a local account) — must match the Principal that will own the task. */
-  userId: string;
   /** Absolute path to the executable to run (e.g. node.exe, or the future compiled engine-cli.exe). */
   command: string;
   /** Full argument string, e.g. `"C:\...\dist\index.js" run-due --task <id>`. */
@@ -29,15 +27,35 @@ function escapeXml(value: string): string {
  * minutes) as a catch-up path for a PC that was off at the scheduled time.
  * Redundant same-day double-firing between the two is handled by
  * isTaskDue()/runDueTasks(), not by anything here — this XML only concerns
- * itself with getting the process invoked at the right moments.
+ * itself with getting the process invoked at the right moments. The
+ * LogonTrigger has no `<UserId>` filter, so it fires on *any* user's
+ * logon — irrelevant to who triggered it, since the task always runs as
+ * SYSTEM regardless (see Principal below).
  *
- * LogonType is deliberately Password, not S4U: Windows Credential Manager
- * secrets (SSH passphrases, DB passwords) are DPAPI-protected using a key
- * derived from the account's actual password. S4U logon never supplies
- * that password, so a task created with S4U would run but be unable to
- * decrypt the very secrets it needs — this is the same per-user DPAPI
- * constraint already noted for why the task must run as the interactive
- * user rather than SYSTEM, extended to why the logon *type* matters too.
+ * Principal is always the built-in SYSTEM account — deliberately, and a
+ * change from this app's original design (which ran as the interactive
+ * user with LogonType=Password). That design required the user's real
+ * Windows account password at registration time, because Windows
+ * Credential Manager secrets are CurrentUser-scope DPAPI-protected and
+ * only decryptable within that user's own login session — S4U logon never
+ * supplies the password, so it couldn't decrypt them either. Secrets now
+ * live in this app's own SQLite table, encrypted with LocalMachine-scope
+ * DPAPI instead (see secrets/machineDpapiStore.ts) — decryptable by *any*
+ * account on this machine, SYSTEM included, with no password anywhere in
+ * the loop. This is what a real Windows password prompt during "install
+ * the app on a client's PC" would have meant for a non-technical user, and
+ * why it was worth the schema/secret-storage migration to avoid entirely.
+ *
+ * `UserId` is the well-known SID `S-1-5-18`, not the literal string
+ * "SYSTEM" — schtasks.exe's own XML importer rejected the literal name
+ * with a schema error ("(22,35):LogonType:ServiceAccount") when paired
+ * with `LogonType=ServiceAccount`, confirmed by hand against a real
+ * Windows install. The combination that actually works, and is what's
+ * used here: the SID alone with `RunLevel=HighestAvailable`, no
+ * `<LogonType>` element at all — Task Scheduler infers a service-account
+ * logon from the well-known SID. `RunLevel` is technically a no-op for
+ * SYSTEM (which already runs at maximum privilege regardless of this
+ * value), kept for schema clarity rather than because it changes anything.
  */
 export function buildTaskDefinitionXml(input: TaskDefinitionInput): string {
   const now = new Date();
@@ -63,9 +81,8 @@ export function buildTaskDefinitionXml(input: TaskDefinitionInput): string {
   </Triggers>
   <Principals>
     <Principal id="Author">
-      <UserId>${escapeXml(input.userId)}</UserId>
-      <LogonType>Password</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
+      <UserId>S-1-5-18</UserId>
+      <RunLevel>HighestAvailable</RunLevel>
     </Principal>
   </Principals>
   <Settings>

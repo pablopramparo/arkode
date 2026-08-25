@@ -1,7 +1,10 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { exportConfig } from '../../src/config/exportConfig.js';
 import { importConfig } from '../../src/config/importConfig.js';
 import { createTestContext, type TestContext } from '../helpers/testContext.js';
+import { withTempDir } from '../helpers/tempDir.js';
 
 function seedFullClient(ctx: TestContext, name = 'Winners') {
   const client = ctx.clientsRepo.create({ name, localBasePath: `D:/Backups/${name}`, retentionCount: 30 });
@@ -35,12 +38,18 @@ function seedFullClient(ctx: TestContext, name = 'Winners') {
     passwordSecretRef: 'databaseConnection:password:secret-ref-2',
   });
 
-  const fetchTask = ctx.tasksRepo.createFetchExisting({
+  const fetchTaskUnscheduled = ctx.tasksRepo.createFetchExisting({
     clientId: client.id,
     transportId: sftp.id,
     name: 'Fetch task',
     dbEngine: 'unknown',
     retentionCount: 5,
+  });
+  const fetchTask = ctx.tasksRepo.setSchedule(fetchTaskUnscheduled.id, {
+    scheduleTime: '03:00',
+    scheduleEnabled: true,
+    scheduleFrequency: 'weekly',
+    scheduleDaysOfWeek: [1, 3, 5],
   });
   const remoteTask = ctx.tasksRepo.createRemoteDump({
     clientId: client.id,
@@ -115,9 +124,12 @@ describe('importConfig', () => {
     expect(clientResult.transportsCreated).toBe(2);
     expect(clientResult.databaseConnectionsCreated).toBe(1);
     expect(clientResult.tasksCreated).toBe(3);
-    expect(clientResult.secretsNeedingReentry).toHaveLength(2);
+    // 2 credential-manager secrets (passphrase/password) + 2 private keys that couldn't be
+    // read at export time ('k1'/'k2' aren't real files in this fixture) needing a manual copy.
+    expect(clientResult.secretsNeedingReentry).toHaveLength(4);
     expect(clientResult.secretsNeedingReentry.some((s) => s.includes('passphrase'))).toBe(true);
     expect(clientResult.secretsNeedingReentry.some((s) => s.includes('password'))).toBe(true);
+    expect(clientResult.secretsNeedingReentry.filter((s) => s.includes('private key file')).length).toBe(2);
 
     // Tasks in the new DB correctly reference the newly-created (different-id) transports/connections.
     const importedClient = targetCtx.clientsRepo.getByName('Winners')!;
@@ -125,6 +137,22 @@ describe('importConfig', () => {
     const directTask = importedTasks.find((t) => t.strategy === 'direct_dump')!;
     expect(directTask.databaseConnectionId).not.toBeNull();
     expect(directTask.databaseConnectionId).not.toBe(pgConn.id); // a freshly-generated id in the new DB, not the source's
+  });
+
+  it('restores a task\'s schedule (including weekly/monthly frequency), not just its transport/connection', () => {
+    const sourceCtx = createTestContext();
+    const { fetchTask } = seedFullClient(sourceCtx); // fetchTask has a weekly schedule, Mon/Wed/Fri at 03:00
+    const exported = exportConfig('all', sourceCtx);
+
+    const targetCtx = createTestContext();
+    importConfig(exported, targetCtx);
+
+    const importedClient = targetCtx.clientsRepo.getByName('Winners')!;
+    const importedTask = targetCtx.tasksRepo.listByClient(importedClient.id).find((t) => t.name === fetchTask.name)!;
+    expect(importedTask.scheduleTime).toBe('03:00');
+    expect(importedTask.scheduleEnabled).toBe(true);
+    expect(importedTask.scheduleFrequency).toBe('weekly');
+    expect(importedTask.scheduleDaysOfWeek).toEqual([1, 3, 5]);
   });
 
   it('re-exporting an imported client reproduces the same structure, except secrets are correctly gone', () => {
@@ -180,6 +208,9 @@ describe('importConfig', () => {
           dbEngine: 'unknown',
           scheduleTime: null,
           scheduleEnabled: true,
+          scheduleFrequency: 'daily',
+          scheduleDaysOfWeek: null,
+          scheduleDayOfMonth: null,
           retentionCount: null,
           retentionDays: null,
         },
@@ -191,5 +222,124 @@ describe('importConfig', () => {
     expect(brokenResult.clientId).not.toBeNull(); // the client itself still gets created
     expect(brokenResult.tasksCreated).toBe(0);
     expect(brokenResult.errors[0]).toMatch(/does-not-exist/);
+  });
+});
+
+describe('exportConfig private key content', () => {
+  it('includes the private key file\'s content (base64) when the file can be read', async () => {
+    await withTempDir(async (dir) => {
+      const keyPath = join(dir, 'id_rsa');
+      writeFileSync(keyPath, 'fake-private-key-bytes');
+
+      const ctx = createTestContext();
+      const client = ctx.clientsRepo.create({ name: 'KeyTest', localBasePath: 'D:/x' });
+      ctx.transportsRepo.createSftp({
+        clientId: client.id,
+        name: 'sftp',
+        host: 'h',
+        username: 'u',
+        privateKeyPath: keyPath,
+        remotePath: '/backups',
+      });
+
+      const exported = exportConfig('all', ctx);
+      expect(exported.clients[0].transports[0].privateKeyContentBase64).toBe(
+        Buffer.from('fake-private-key-bytes').toString('base64')
+      );
+    });
+  });
+
+  it('leaves privateKeyContentBase64 null when the file cannot be read', () => {
+    const ctx = createTestContext();
+    const client = ctx.clientsRepo.create({ name: 'KeyTestMissing', localBasePath: 'D:/x' });
+    ctx.transportsRepo.createSftp({
+      clientId: client.id,
+      name: 'sftp',
+      host: 'h',
+      username: 'u',
+      privateKeyPath: 'this/path/does/not/exist',
+      remotePath: '/backups',
+    });
+
+    const exported = exportConfig('all', ctx);
+    expect(exported.clients[0].transports[0].privateKeyContentBase64).toBeNull();
+  });
+});
+
+describe('importConfig private key restoration', () => {
+  it('writes the imported private key to a new file under importedKeysDir, with matching content, and needs no manual re-copy', async () => {
+    await withTempDir(async (sourceDir) => {
+      await withTempDir(async (keysDir) => {
+        const keyPath = join(sourceDir, 'id_rsa');
+        writeFileSync(keyPath, 'real-key-bytes');
+
+        const sourceCtx = createTestContext();
+        const client = sourceCtx.clientsRepo.create({ name: 'KeyImportTest', localBasePath: 'D:/x' });
+        sourceCtx.transportsRepo.createSftp({
+          clientId: client.id,
+          name: 'sftp',
+          host: 'h',
+          username: 'u',
+          privateKeyPath: keyPath,
+          remotePath: '/backups',
+        });
+        const exported = exportConfig('all', sourceCtx);
+
+        const targetCtx = createTestContext();
+        const result = importConfig(exported, { ...targetCtx, importedKeysDir: keysDir });
+
+        const clientResult = result.clients[0];
+        expect(clientResult.errors).toEqual([]);
+        expect(clientResult.secretsNeedingReentry).toEqual([]);
+
+        const importedClient = targetCtx.clientsRepo.getByName('KeyImportTest')!;
+        const importedTransport = targetCtx.transportsRepo.listByClient(importedClient.id)[0];
+        expect(importedTransport.privateKeyPath).not.toBe(keyPath);
+        expect(importedTransport.privateKeyPath.startsWith(keysDir)).toBe(true);
+        expect(readFileSync(importedTransport.privateKeyPath, 'utf8')).toBe('real-key-bytes');
+      });
+    });
+  });
+
+  it('falls back to the original path and flags a manual copy when the key content is missing from the export', () => {
+    const ctx = createTestContext();
+    const exported = exportConfig('all', createTestContext());
+    exported.clients.push({
+      name: 'NoKeyContent',
+      description: null,
+      localBasePath: 'D:/x',
+      retentionCount: null,
+      retentionDays: null,
+      transports: [
+        {
+          name: 't1',
+          type: 'sftp',
+          host: 'h',
+          port: 22,
+          username: 'u',
+          privateKeyPath: '/original/machine/path/id_rsa',
+          privateKeyContentBase64: null,
+          hasPassphrase: false,
+          remotePath: '/backups',
+          remoteFilePattern: null,
+          remoteCommand: null,
+          remoteOutputPathTemplate: null,
+          remoteCleanup: false,
+          knownHostFingerprint: null,
+        },
+      ],
+      databaseConnections: [],
+      tasks: [],
+    });
+
+    const result = importConfig(exported, ctx);
+    const clientResult = result.clients.find((c) => c.name === 'NoKeyContent')!;
+    expect(clientResult.transportsCreated).toBe(1);
+    expect(clientResult.secretsNeedingReentry).toHaveLength(1);
+    expect(clientResult.secretsNeedingReentry[0]).toContain('/original/machine/path/id_rsa');
+
+    const importedClient = ctx.clientsRepo.getByName('NoKeyContent')!;
+    const importedTransport = ctx.transportsRepo.listByClient(importedClient.id)[0];
+    expect(importedTransport.privateKeyPath).toBe('/original/machine/path/id_rsa');
   });
 });

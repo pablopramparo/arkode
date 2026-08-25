@@ -206,3 +206,132 @@ describe('tasksRepo update/deactivate/reactivate', () => {
     expect(() => ctx.tasksRepo.reactivate('nonexistent')).toThrow(/not found/i);
   });
 });
+
+describe('tasksRepo.setSchedule frequency', () => {
+  function seedTask(ctx: ReturnType<typeof createTestContext>) {
+    const client = seedClient(ctx);
+    const transport = ctx.transportsRepo.createSftp({
+      clientId: client.id,
+      name: 'sftp',
+      host: 'h',
+      username: 'u',
+      privateKeyPath: 'k',
+      remotePath: '/backups',
+    });
+    return ctx.tasksRepo.createFetchExisting({
+      clientId: client.id,
+      transportId: transport.id,
+      name: 'task',
+      dbEngine: 'unknown',
+    });
+  }
+
+  it('defaults a fresh task to daily with no days-of-week/day-of-month', () => {
+    const ctx = createTestContext();
+    const task = seedTask(ctx);
+    expect(task.scheduleFrequency).toBe('daily');
+    expect(task.scheduleDaysOfWeek).toBeNull();
+    expect(task.scheduleDayOfMonth).toBeNull();
+  });
+
+  it('sets a weekly schedule with specific days of the week', () => {
+    const ctx = createTestContext();
+    const task = seedTask(ctx);
+
+    const updated = ctx.tasksRepo.setSchedule(task.id, {
+      scheduleTime: '03:00',
+      scheduleEnabled: true,
+      scheduleFrequency: 'weekly',
+      scheduleDaysOfWeek: [1, 3, 5],
+    });
+
+    expect(updated.scheduleFrequency).toBe('weekly');
+    expect(updated.scheduleDaysOfWeek).toEqual([1, 3, 5]);
+    expect(updated.scheduleDayOfMonth).toBeNull();
+  });
+
+  it('sets a monthly schedule with a specific day of the month', () => {
+    const ctx = createTestContext();
+    const task = seedTask(ctx);
+
+    const updated = ctx.tasksRepo.setSchedule(task.id, {
+      scheduleTime: '03:00',
+      scheduleEnabled: true,
+      scheduleFrequency: 'monthly',
+      scheduleDayOfMonth: 15,
+    });
+
+    expect(updated.scheduleFrequency).toBe('monthly');
+    expect(updated.scheduleDayOfMonth).toBe(15);
+    expect(updated.scheduleDaysOfWeek).toBeNull();
+  });
+
+  it('rejects a weekly schedule with no days of the week', () => {
+    const ctx = createTestContext();
+    const task = seedTask(ctx);
+    expect(() =>
+      ctx.tasksRepo.setSchedule(task.id, { scheduleTime: '03:00', scheduleEnabled: true, scheduleFrequency: 'weekly', scheduleDaysOfWeek: [] })
+    ).toThrow(/at least one day of the week/i);
+  });
+
+  it('rejects an out-of-range day of the week', () => {
+    const ctx = createTestContext();
+    const task = seedTask(ctx);
+    expect(() =>
+      ctx.tasksRepo.setSchedule(task.id, { scheduleTime: '03:00', scheduleEnabled: true, scheduleFrequency: 'weekly', scheduleDaysOfWeek: [7] })
+    ).toThrow(/0 \(Sunday\) through 6 \(Saturday\)/);
+  });
+
+  it('rejects a monthly schedule with no day of the month', () => {
+    const ctx = createTestContext();
+    const task = seedTask(ctx);
+    expect(() =>
+      ctx.tasksRepo.setSchedule(task.id, { scheduleTime: '03:00', scheduleEnabled: true, scheduleFrequency: 'monthly', scheduleDayOfMonth: null })
+    ).toThrow(/between 1 and 31/);
+  });
+
+  it('rejects an out-of-range day of the month', () => {
+    const ctx = createTestContext();
+    const task = seedTask(ctx);
+    expect(() =>
+      ctx.tasksRepo.setSchedule(task.id, { scheduleTime: '03:00', scheduleEnabled: true, scheduleFrequency: 'monthly', scheduleDayOfMonth: 32 })
+    ).toThrow(/between 1 and 31/);
+  });
+
+  it('preserves the configured frequency/days across an update that omits them (e.g. just toggling scheduleEnabled)', () => {
+    const ctx = createTestContext();
+    const task = seedTask(ctx);
+    ctx.tasksRepo.setSchedule(task.id, {
+      scheduleTime: '03:00',
+      scheduleEnabled: true,
+      scheduleFrequency: 'weekly',
+      scheduleDaysOfWeek: [2, 4],
+    });
+
+    const updated = ctx.tasksRepo.setSchedule(task.id, { scheduleTime: '03:00', scheduleEnabled: false });
+
+    expect(updated.scheduleEnabled).toBe(false);
+    expect(updated.scheduleFrequency).toBe('weekly');
+    expect(updated.scheduleDaysOfWeek).toEqual([2, 4]);
+  });
+
+  it('switching back to daily drops any previously configured days of the week', () => {
+    const ctx = createTestContext();
+    const task = seedTask(ctx);
+    ctx.tasksRepo.setSchedule(task.id, {
+      scheduleTime: '03:00',
+      scheduleEnabled: true,
+      scheduleFrequency: 'weekly',
+      scheduleDaysOfWeek: [2, 4],
+    });
+
+    const updated = ctx.tasksRepo.setSchedule(task.id, {
+      scheduleTime: '03:00',
+      scheduleEnabled: true,
+      scheduleFrequency: 'daily',
+    });
+
+    expect(updated.scheduleFrequency).toBe('daily');
+    expect(updated.scheduleDaysOfWeek).toBeNull();
+  });
+});

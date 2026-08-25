@@ -85,6 +85,15 @@ export interface RunsRepo {
   listInProgress(taskId?: string): BackupRun[];
   /** Every run (any status), newest first, optionally filtered — for a Historial view. Capped by `limit` (default 200) so a long-lived install never loads its entire history in one request. */
   listRecent(opts?: { taskId?: string; clientId?: string; limit?: number }): BackupRun[];
+  /** Real backups only (Success or Warning, with a file on disk) — for a "ver backups" browser, as opposed to Historial's every-attempt view. Paginated; returns `total` so the UI can compute page count. */
+  listBackups(opts?: ListBackupsOptions): { runs: BackupRun[]; total: number };
+}
+
+export interface ListBackupsOptions {
+  clientId?: string;
+  taskId?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export function createRunsRepo(db: Database): RunsRepo {
@@ -146,6 +155,18 @@ export function createRunsRepo(db: Database): RunsRepo {
        AND (@clientId IS NULL OR client_id = @clientId)
      ORDER BY started_at DESC
      LIMIT @limit`
+  );
+  const listBackupsWhereClause = `
+    WHERE (@clientId IS NULL OR client_id = @clientId)
+      AND (@taskId IS NULL OR task_id = @taskId)
+      AND status IN ('Success','Warning')
+      AND local_path IS NOT NULL
+  `;
+  const listBackupsStmt = db.prepare<Record<string, unknown>, BackupRunRow>(
+    `SELECT * FROM backup_runs ${listBackupsWhereClause} ORDER BY started_at DESC LIMIT @limit OFFSET @offset`
+  );
+  const countBackupsStmt = db.prepare<Record<string, unknown>, { total: number }>(
+    `SELECT COUNT(*) AS total FROM backup_runs ${listBackupsWhereClause}`
   );
 
   return {
@@ -227,6 +248,18 @@ export function createRunsRepo(db: Database): RunsRepo {
         limit: opts?.limit ?? 200,
       });
       return rows.map(toDomain);
+    },
+
+    listBackups(opts) {
+      const params = {
+        clientId: opts?.clientId ?? null,
+        taskId: opts?.taskId ?? null,
+        limit: opts?.limit ?? 50,
+        offset: opts?.offset ?? 0,
+      };
+      const runs = listBackupsStmt.all(params).map(toDomain);
+      const { total } = countBackupsStmt.get(params) ?? { total: 0 };
+      return { runs, total };
     },
   };
 }

@@ -9,10 +9,19 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "build:exe": "pkg -t node22-win-x64 -o dist-exe/engine-cli.exe ."
   },
   "dependencies": {
     "commander": "^15.0.0",
     "engine-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.22.0"
+  },
+  "pkg": {
+    "assets": [
+      "../engine-core/dist/db/migrations/**/*"
+    ]
   }
 }

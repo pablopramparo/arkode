@@ -1,10 +1,14 @@
 import { join } from 'node:path';
 import type { DatabaseConnection } from '../types.js';
 import type { SecretStore } from '../secrets/types.js';
+import type { SettingsRepo } from '../db/repositories/settingsRepo.js';
 import type { DatabaseConnectionConfig, DatabaseDumpClient } from '../databaseConnections/types.js';
 import { createPostgresDumpClient } from '../databaseConnections/postgresDumpClient.js';
 import { createMysqlDumpClient } from '../databaseConnections/mysqlDumpClient.js';
 import { createMariaDbDumpClient } from '../databaseConnections/mariaDbDumpClient.js';
+import { createPostgresToolRegistry } from '../databaseConnections/postgresToolRegistry.js';
+import { createMysqlToolRegistry } from '../databaseConnections/mysqlToolRegistry.js';
+import { createMariaDbToolRegistry } from '../databaseConnections/mariaDbToolRegistry.js';
 import type { BackupStrategyContext, BackupStrategyExecutor, ProducedDump } from './types.js';
 
 const EXTENSION_BY_ENGINE: Record<DatabaseConnection['engine'], string> = {
@@ -13,14 +17,25 @@ const EXTENSION_BY_ENGINE: Record<DatabaseConnection['engine'], string> = {
   mariadb: 'sql', // mariadb-dump produces the same plain-SQL format as mysqldump
 };
 
-function resolveDumpClient(engine: DatabaseConnection['engine']): DatabaseDumpClient {
+/**
+ * `settingsRepo` is optional: when present, it backs a version-aware dump
+ * tool registry for each engine (postgresToolRegistry.ts,
+ * mysqlToolRegistry.ts, mariaDbToolRegistry.ts) that the respective dump
+ * client consults before falling back to its one configured default
+ * env-var path — an empty registry (the default, until entries are added
+ * via `pg-tools:register`/`mysql-tools:register`/`mariadb-tools:register`)
+ * changes nothing.
+ */
+function resolveDumpClient(engine: DatabaseConnection['engine'], settingsRepo?: SettingsRepo): DatabaseDumpClient {
   switch (engine) {
     case 'postgres':
-      return createPostgresDumpClient();
+      return createPostgresDumpClient(
+        settingsRepo ? { registry: createPostgresToolRegistry(settingsRepo) } : undefined
+      );
     case 'mysql':
-      return createMysqlDumpClient();
+      return createMysqlDumpClient(settingsRepo ? { registry: createMysqlToolRegistry(settingsRepo) } : undefined);
     case 'mariadb':
-      return createMariaDbDumpClient(); // not implemented yet — throws on dump()
+      return createMariaDbDumpClient(settingsRepo ? { registry: createMariaDbToolRegistry(settingsRepo) } : undefined);
   }
 }
 
@@ -38,7 +53,8 @@ function timestampSuffix(now: Date): string {
  */
 export function createDirectDumpExecutor(
   databaseConnection: DatabaseConnection,
-  secretStore: SecretStore
+  secretStore: SecretStore,
+  settingsRepo?: SettingsRepo
 ): BackupStrategyExecutor {
   return {
     kind: 'direct_dump',
@@ -48,7 +64,7 @@ export function createDirectDumpExecutor(
         ? (secretStore.get(databaseConnection.passwordSecretRef) ?? undefined)
         : undefined;
 
-      const dumpClient = resolveDumpClient(databaseConnection.engine);
+      const dumpClient = resolveDumpClient(databaseConnection.engine, settingsRepo);
       const now = new Date();
       const extension = EXTENSION_BY_ENGINE[databaseConnection.engine];
       const fileName = `${databaseConnection.databaseName}_${timestampSuffix(now)}.${extension}`;

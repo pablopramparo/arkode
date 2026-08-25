@@ -15,20 +15,19 @@ export function scheduledTaskNameForBackupTask(taskId: string): string {
 
 export interface InstallScheduledTaskInput extends TaskDefinitionInput {
   taskName: string;
-  /** "DOMAIN\User" — the same account named in TaskDefinitionInput.userId. */
-  username: string;
-  /**
-   * The Windows account's actual login password. Passed straight through to
-   * schtasks.exe as a CLI argument (Task Scheduler/LSA then stores it
-   * securely) — this app never persists it anywhere itself.
-   */
-  password: string;
 }
 
 /**
  * Registers (or replaces, via /F) a Windows Scheduled Task from a generated
  * XML definition. The XML file is written to a temp path only for the
  * duration of the schtasks call and removed immediately after.
+ *
+ * No credentials are involved: the task's Principal is always SYSTEM (see
+ * taskDefinitionXml.ts), so there is no `/RU`/`/RP` to pass — the account
+ * is fully specified inside the XML itself. This does mean the *calling*
+ * process needs to be running elevated (as Administrator) to register a
+ * task that runs as SYSTEM, which a real installer already runs as by
+ * default; this is a one-time cost at setup, not a per-task one.
  */
 export async function installScheduledTask(input: InstallScheduledTaskInput): Promise<void> {
   const xml = buildTaskDefinitionXml(input);
@@ -40,40 +39,38 @@ export async function installScheduledTask(input: InstallScheduledTaskInput): Pr
   await writeFile(xmlPath, BOM + xml, { encoding: 'utf16le' });
 
   try {
-    await execFileAsync('schtasks.exe', [
-      '/Create',
-      '/TN',
-      input.taskName,
-      '/XML',
-      xmlPath,
-      '/RU',
-      input.username,
-      '/RP',
-      input.password,
-      '/F',
-    ]);
-  } catch (err) {
-    // execFile's error embeds the full command line (including /RP
-    // <password>) in both `.message` and `.cmd` — never let that reach a
-    // caller, a log line, or a UI. Redact before rethrowing.
-    throw new Error(redactPassword(err instanceof Error ? err.message : String(err), input.password));
+    await execFileAsync('schtasks.exe', ['/Create', '/TN', input.taskName, '/XML', xmlPath, '/F']);
   } finally {
     await unlink(xmlPath).catch(() => {});
   }
-}
-
-/** Exported for testing — strips every occurrence of `password` out of an error message. */
-export function redactPassword(message: string, password: string): string {
-  return message.split(password).join('[redacted]');
 }
 
 export async function uninstallScheduledTask(taskName: string): Promise<void> {
   await execFileAsync('schtasks.exe', ['/Delete', '/TN', taskName, '/F']);
 }
 
+/** `net session` only succeeds when the current process is running elevated — no dedicated Node API for this on Windows. */
+async function isRunningElevated(): Promise<boolean> {
+  try {
+    await execFileAsync('net', ['session']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface ScheduledTaskStatus {
   exists: boolean;
   raw?: string;
+  /**
+   * True if this query itself ran non-elevated. Confirmed by hand against a
+   * real Windows install: `schtasks /Query` on a SYSTEM-owned task fails
+   * with the exact same "cannot find" error from a non-elevated caller as
+   * it would for a task that was never registered at all — there is no way
+   * to tell the two apart from schtasks.exe's own output. When this is
+   * true, `exists: false` means "couldn't confirm," not "not registered."
+   */
+  ranNonElevated?: boolean;
 }
 
 export async function scheduledTaskStatus(taskName: string): Promise<ScheduledTaskStatus> {
@@ -81,6 +78,7 @@ export async function scheduledTaskStatus(taskName: string): Promise<ScheduledTa
     const { stdout } = await execFileAsync('schtasks.exe', ['/Query', '/TN', taskName, '/V', '/FO', 'LIST']);
     return { exists: true, raw: stdout };
   } catch {
-    return { exists: false };
+    const elevated = await isRunningElevated();
+    return { exists: false, ranNonElevated: !elevated };
   }
 }

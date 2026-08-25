@@ -33,7 +33,7 @@ export type {
 } from './db/repositories/tasksRepo.js';
 
 export { createRunsRepo } from './db/repositories/runsRepo.js';
-export type { RunsRepo, CreateRunInput, SuccessfulFileSignature } from './db/repositories/runsRepo.js';
+export type { RunsRepo, CreateRunInput, SuccessfulFileSignature, ListBackupsOptions } from './db/repositories/runsRepo.js';
 
 export { createRetentionDeletionsRepo } from './db/repositories/retentionDeletionsRepo.js';
 export type { RetentionDeletionsRepo, CreateRetentionDeletionInput } from './db/repositories/retentionDeletionsRepo.js';
@@ -48,13 +48,14 @@ export { createSettingsRepo } from './db/repositories/settingsRepo.js';
 export type { SettingsRepo } from './db/repositories/settingsRepo.js';
 
 export type { SecretStore } from './secrets/types.js';
-export { WindowsCredentialManagerStore } from './secrets/windowsCredentialManagerStore.js';
+export { MachineDpapiSecretStore } from './secrets/machineDpapiStore.js';
 
 export * from './transports/types.js';
 export { createSftpAdapter, createSftpAdapterFromTransport } from './transports/sftpAdapter.js';
 export { createSshAdapter, createSshAdapterFromTransport } from './transports/sshAdapter.js';
 export { buildHostVerifier } from './transports/hostKeyVerification.js';
 export { resolveOutputPathTemplate } from './transports/outputPathTemplate.js';
+export { copyPrivateKeyIntoAppStorage } from './transports/copyPrivateKey.js';
 
 export * from './databaseConnections/types.js';
 export { createPostgresDumpClient } from './databaseConnections/postgresDumpClient.js';
@@ -63,6 +64,14 @@ export { createMariaDbDumpClient } from './databaseConnections/mariaDbDumpClient
 export { createPostgresConnectionTester } from './databaseConnections/postgresConnectionTester.js';
 export { createMysqlConnectionTester } from './databaseConnections/mysqlConnectionTester.js';
 export { testDatabaseConnection } from './databaseConnections/testDatabaseConnection.js';
+export { createPostgresToolRegistry, extractMajorVersion } from './databaseConnections/postgresToolRegistry.js';
+export type { PostgresToolRegistry, PostgresToolPaths } from './databaseConnections/postgresToolRegistry.js';
+export { createMysqlToolRegistry, extractMysqlMajorMinorVersion } from './databaseConnections/mysqlToolRegistry.js';
+export type { MysqlToolRegistry, MysqlToolPaths } from './databaseConnections/mysqlToolRegistry.js';
+export { createMariaDbToolRegistry, extractMariaDbMajorMinorVersion } from './databaseConnections/mariaDbToolRegistry.js';
+export type { MariaDbToolRegistry, MariaDbToolPaths } from './databaseConnections/mariaDbToolRegistry.js';
+export { testDirectDumpCompatibility } from './databaseConnections/testDirectDumpCompatibility.js';
+export type { DirectDumpCompatibilityResult, ToolCompatibility } from './databaseConnections/testDirectDumpCompatibility.js';
 
 export * from './strategies/types.js';
 export { createFetchExistingExecutor } from './strategies/fetchExistingExecutor.js';
@@ -72,6 +81,7 @@ export { createDirectDumpExecutor } from './strategies/directDumpExecutor.js';
 export * from './validators/types.js';
 export { createGenericValidator } from './validators/genericValidator.js';
 export { createPostgresCustomValidator } from './validators/postgresCustomValidator.js';
+export { createMysqlDumpValidator } from './validators/mysqlDumpValidator.js';
 
 export { createRunLogger } from './logging/logger.js';
 export type { RunLogger } from './logging/logger.js';
@@ -89,7 +99,6 @@ export {
   installScheduledTask,
   uninstallScheduledTask,
   scheduledTaskStatus,
-  redactPassword,
 } from './scheduler/windowsTaskScheduler.js';
 export type { InstallScheduledTaskInput, ScheduledTaskStatus } from './scheduler/windowsTaskScheduler.js';
 

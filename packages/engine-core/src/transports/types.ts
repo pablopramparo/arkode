@@ -23,6 +23,19 @@ export interface ConnectionTestResult {
   ok: boolean;
   message: string;
   latencyMs?: number;
+  /**
+   * The remote server's own reported version, when the connection is a
+   * database one — e.g. "18.0" (Postgres' `server_version`) or "10.11.6-MariaDB"
+   * (MySQL/MariaDB's `VERSION()`, which conveniently distinguishes the two
+   * products in the string itself). Never populated for transport (SFTP/SSH)
+   * tests, or if the version query itself failed for some reason even though
+   * the connectivity check passed. See "direct_dump tool version management"
+   * in CLAUDE.md — this is groundwork for a future compatibility gate, not
+   * the gate itself.
+   */
+  serverVersion?: string;
+  /** The local CLI tool's own reported version (`psql --version` / `mysql --version`), for eyeballing alongside serverVersion — same scope caveat as above. */
+  localToolVersion?: string;
 }
 
 /** Capability every transport adapter provides, regardless of kind. */

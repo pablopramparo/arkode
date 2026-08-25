@@ -10,6 +10,7 @@ import type { RunsRepo } from '../db/repositories/runsRepo.js';
 import type { LogEventsRepo } from '../db/repositories/logEventsRepo.js';
 import type { KnownHostsRepo } from '../db/repositories/knownHostsRepo.js';
 import type { RetentionDeletionsRepo } from '../db/repositories/retentionDeletionsRepo.js';
+import type { SettingsRepo } from '../db/repositories/settingsRepo.js';
 import type { SecretStore } from '../secrets/types.js';
 import { NoNewDumpAvailableError, type BackupStrategyExecutor } from '../strategies/types.js';
 import { createFetchExistingExecutor } from '../strategies/fetchExistingExecutor.js';
@@ -18,6 +19,7 @@ import { createDirectDumpExecutor } from '../strategies/directDumpExecutor.js';
 import type { DumpValidator } from '../validators/types.js';
 import { createGenericValidator } from '../validators/genericValidator.js';
 import { createPostgresCustomValidator } from '../validators/postgresCustomValidator.js';
+import { createMysqlDumpValidator } from '../validators/mysqlDumpValidator.js';
 import { createRunLogger, type RunLogger } from '../logging/logger.js';
 import { applyRetention, resolveRetentionPolicy } from '../retention/applyRetention.js';
 
@@ -33,6 +35,8 @@ export interface RunBackupTaskDeps {
   knownHostsRepo: KnownHostsRepo;
   retentionDeletionsRepo: RetentionDeletionsRepo;
   secretStore: SecretStore;
+  /** Only needed for direct_dump's postgres version-aware tool registry (see postgresToolRegistry.ts) — omit to keep today's single-PG_DUMP_PATH behavior exactly as-is. */
+  settingsRepo?: SettingsRepo;
   onUnknownHost?: (presented: { keyType: string; fingerprintSha256: string }) => Promise<boolean>;
   /**
    * Overrides how the strategy executor is resolved. Production code never
@@ -128,6 +132,10 @@ function resolveTargetDir(client: Client, task: BackupTask, now: Date = new Date
 function pickValidators(dbEngine: DbEngine): DumpValidator[] {
   const validators: DumpValidator[] = [createGenericValidator()];
   if (dbEngine === 'postgres') validators.push(createPostgresCustomValidator());
+  // mariadb-dump writes the exact same "-- Dump completed on" completion
+  // footer mysqldump does (confirmed by hand against a real local instance
+  // of each) — one validator covers both engines.
+  if (dbEngine === 'mysql' || dbEngine === 'mariadb') validators.push(createMysqlDumpValidator());
   return validators;
 }
 
@@ -191,7 +199,7 @@ function resolveExecutor(task: BackupTask, deps: RunBackupTaskDeps): BackupStrat
       if (!databaseConnection) {
         throw new Error(`Task ${task.id} has strategy direct_dump but no valid database connection configured.`);
       }
-      return createDirectDumpExecutor(databaseConnection, deps.secretStore);
+      return createDirectDumpExecutor(databaseConnection, deps.secretStore, deps.settingsRepo);
     }
   }
 }

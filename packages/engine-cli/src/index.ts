@@ -19,11 +19,18 @@ import {
   scheduledTaskStatus,
   getDashboardStatus,
   getSystemInfo,
+  copyPrivateKeyIntoAppStorage,
+  createPostgresToolRegistry,
+  createMysqlToolRegistry,
+  createMariaDbToolRegistry,
+  testDirectDumpCompatibility,
   type DbEngine,
   type Transport,
   type ConnectionTestResult,
   type ConfigExport,
   type RunBackupTaskDeps,
+  type BackupTask,
+  type DirectDumpCompatibilityResult,
 } from 'engine-core';
 import { buildContext } from './context.js';
 import { confirmHostInteractively } from './confirmHost.js';
@@ -141,7 +148,7 @@ program
       host: opts.host,
       port: Number(opts.port),
       username: opts.username,
-      privateKeyPath: opts.privateKeyPath,
+      privateKeyPath: copyPrivateKeyIntoAppStorage(opts.privateKeyPath),
       passphraseSecretRef: resolvePassphraseSecretRef(ctx, opts.passphrase),
       remotePath: opts.remotePath,
       remoteFilePattern: opts.remoteFilePattern ?? null,
@@ -173,7 +180,7 @@ program
       host: opts.host,
       port: Number(opts.port),
       username: opts.username,
-      privateKeyPath: opts.privateKeyPath,
+      privateKeyPath: copyPrivateKeyIntoAppStorage(opts.privateKeyPath),
       passphraseSecretRef: resolvePassphraseSecretRef(ctx, opts.passphrase),
       remoteCommand: opts.remoteCommand,
       remoteOutputPathTemplate: opts.remoteOutputPathTemplate,
@@ -232,7 +239,7 @@ program
       host: opts.host,
       port: opts.port != null ? Number(opts.port) : undefined,
       username: opts.username,
-      privateKeyPath: opts.privateKeyPath,
+      privateKeyPath: opts.privateKeyPath ? copyPrivateKeyIntoAppStorage(opts.privateKeyPath) : undefined,
       passphraseSecretRef: opts.passphrase ? resolvePassphraseSecretRef(ctx, opts.passphrase) : undefined,
       remotePath: opts.remotePath,
       remoteFilePattern: opts.remoteFilePattern,
@@ -356,11 +363,17 @@ program
 
 program
   .command('task:set-schedule')
-  .description('Set, change, or disable a task\'s daily schedule. Registering it with Windows Task Scheduler is a separate step (scheduler:install).')
+  .description(
+    "Set, change, or disable a task's schedule (daily by default, or --frequency weekly/monthly). Registering it with Windows Task Scheduler is a separate step (scheduler:install)."
+  )
   .argument('<taskId>')
   .option('--time <HH:MM>', '24h local time; required unless only --disable is given')
   .option('--disable', 'disable scheduling without clearing the configured time', false)
-  .action((taskId: string, opts) => {
+  .option('--frequency <daily|weekly|monthly>', 'defaults to the task\'s current frequency, or "daily" for a brand-new schedule')
+  .option('--days-of-week <list>', 'comma-separated 0 (Sunday) through 6 (Saturday), e.g. "1,3,5" — required when --frequency weekly')
+  .option('--day-of-month <n>', '1-31 — required when --frequency monthly')
+  .option('--force', 'for direct_dump tasks, enable the schedule even if the compatibility gate fails', false)
+  .action(async (taskId: string, opts) => {
     const ctx = buildContext();
     const task = ctx.tasksRepo.getById(taskId);
     if (!task) {
@@ -373,9 +386,22 @@ program
       process.exitCode = 1;
       return;
     }
+    if (!opts.disable) {
+      const gateFailure = await checkScheduleCompatibilityGate(ctx, task, Boolean(opts.force));
+      if (gateFailure) {
+        console.error(`Compatibility gate failed: ${gateFailure.message}`);
+        console.error(JSON.stringify(gateFailure, null, 2));
+        console.error('Re-run with --force to enable the schedule anyway.');
+        process.exitCode = 1;
+        return;
+      }
+    }
     const updated = ctx.tasksRepo.setSchedule(taskId, {
       scheduleTime: opts.time ?? task.scheduleTime,
       scheduleEnabled: opts.disable ? false : true,
+      scheduleFrequency: opts.frequency,
+      scheduleDaysOfWeek: opts.daysOfWeek ? opts.daysOfWeek.split(',').map(Number) : undefined,
+      scheduleDayOfMonth: opts.dayOfMonth ? Number(opts.dayOfMonth) : undefined,
     });
     console.log(JSON.stringify(updated, null, 2));
   });
@@ -518,6 +544,41 @@ async function testTaskConnection(ctx: ReturnType<typeof buildContext>, task: No
   return testTransportConnection(ctx, transport);
 }
 
+/**
+ * The pre-flight compatibility gate (connection + detected server version +
+ * a usable local dump tool) — only meaningful for direct_dump tasks. Shared
+ * by the `task:test-compatibility` CLI command and the `serve` HTTP endpoint.
+ */
+async function testTaskCompatibility(
+  ctx: ReturnType<typeof buildContext>,
+  task: NonNullable<ReturnType<typeof ctx.tasksRepo.getById>>
+): Promise<DirectDumpCompatibilityResult> {
+  if (task.strategy !== 'direct_dump') {
+    throw new Error(`Task ${task.id} is a ${task.strategy} task — the compatibility gate only applies to direct_dump.`);
+  }
+  const connection = task.databaseConnectionId ? ctx.databaseConnectionsRepo.getById(task.databaseConnectionId) : null;
+  if (!connection) throw new Error(`Task ${task.id} has no valid database connection configured.`);
+  return testDirectDumpCompatibility(connection, ctx.secretStore, ctx.settingsRepo);
+}
+
+/**
+ * Runs the compatibility gate only when actually needed: skipped for
+ * non-direct_dump tasks (no equivalent concept applies) and whenever
+ * `force` is set (an explicit override). Returns the failing result, or
+ * `null` when there's nothing blocking the schedule from being enabled.
+ */
+async function checkScheduleCompatibilityGate(
+  ctx: ReturnType<typeof buildContext>,
+  task: BackupTask,
+  force: boolean
+): Promise<DirectDumpCompatibilityResult | null> {
+  if (force || task.strategy !== 'direct_dump') return null;
+  const connection = task.databaseConnectionId ? ctx.databaseConnectionsRepo.getById(task.databaseConnectionId) : null;
+  if (!connection) return null;
+  const result = await testDirectDumpCompatibility(connection, ctx.secretStore, ctx.settingsRepo);
+  return result.ok ? null : result;
+}
+
 /** Shared by the `task:run` CLI command and the `serve` HTTP endpoint. */
 function runTaskNow(ctx: ReturnType<typeof buildContext>, task: NonNullable<ReturnType<typeof ctx.tasksRepo.getById>>) {
   return runBackupTask(task, {
@@ -529,6 +590,7 @@ function runTaskNow(ctx: ReturnType<typeof buildContext>, task: NonNullable<Retu
     knownHostsRepo: ctx.knownHostsRepo,
     retentionDeletionsRepo: ctx.retentionDeletionsRepo,
     secretStore: ctx.secretStore,
+    settingsRepo: ctx.settingsRepo,
     onUnknownHost: confirmHostInteractively,
   });
 }
@@ -549,6 +611,30 @@ program
     const result = await testTaskConnection(ctx, task);
     console.log(JSON.stringify(result, null, 2));
     if (!result.ok) process.exitCode = 1;
+  });
+
+program
+  .command('task:test-compatibility')
+  .description(
+    "Pre-flight compatibility gate for a direct_dump task: connection + detected server version + a usable local dump tool. Distinct from task:test-connection, which only proves auth."
+  )
+  .argument('<taskId>')
+  .action(async (taskId: string) => {
+    const ctx = buildContext();
+    const task = ctx.tasksRepo.getById(taskId);
+    if (!task) {
+      console.error(`Task ${taskId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const result = await testTaskCompatibility(ctx, task);
+      console.log(JSON.stringify(result, null, 2));
+      if (!result.ok) process.exitCode = 1;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
   });
 
 program
@@ -593,14 +679,11 @@ program
 
 program
   .command('scheduler:install')
-  .description("Register a Windows Scheduled Task for a task, using its already-configured schedule (set one first via task:set-schedule).")
-  .argument('<taskId>')
-  .requiredOption(
-    '--password <password>',
-    "the current Windows account's login password — required so the unattended run can decrypt Credential Manager secrets; passed straight to schtasks.exe, never stored by this app"
+  .description(
+    "Register a Windows Scheduled Task for a task, using its already-configured schedule (set one first via task:set-schedule). Runs as SYSTEM — no Windows password needed — but registering it requires this process itself to be running elevated (as Administrator)."
   )
-  .option('--username <domainUser>', 'defaults to the current user (USERDOMAIN\\USERNAME)')
-  .action(async (taskId: string, opts) => {
+  .argument('<taskId>')
+  .action(async (taskId: string) => {
     const ctx = buildContext();
     const task = ctx.tasksRepo.getById(taskId);
     if (!task) {
@@ -614,25 +697,27 @@ program
       return;
     }
 
-    const username = opts.username ?? `${process.env.USERDOMAIN}\\${process.env.USERNAME}`;
     const taskName = scheduledTaskNameForBackupTask(taskId);
-    // Dev-time only: points at the currently-running node.exe + this script's
-    // own path. Once engine-cli is compiled to a standalone exe (packaging,
-    // not done yet), this needs to target that exe's installed path instead.
+    // `process.pkg` is set (to a truthy object) only when this code is
+    // actually running as the @yao-pkg/pkg-compiled engine-cli.exe — see
+    // CLAUDE.md's "Packaging" section. In that case process.execPath IS the
+    // real, callable exe path, and process.argv[1] is a fake in-snapshot
+    // path ("C:\snapshot\...") that isn't a real file on disk, so it must
+    // never be passed as an argument. Under plain `node dist/index.js`
+    // (today's only real usage, until packaging ships), process.execPath is
+    // node.exe and the script path genuinely needs to be passed explicitly.
+    const isPkgExe = Boolean((process as NodeJS.Process & { pkg?: unknown }).pkg);
     const scriptPath = process.argv[1];
 
     await installScheduledTask({
       taskName,
       description: `Codebius Backup Manager - scheduled run for task "${task.name}"`,
       scheduleTime: task.scheduleTime,
-      userId: username,
-      username,
-      password: opts.password,
       command: process.execPath,
-      arguments: `"${scriptPath}" run-due --task ${taskId}`,
+      arguments: isPkgExe ? `run-due --task ${taskId}` : `"${scriptPath}" run-due --task ${taskId}`,
     });
 
-    console.log(`Registered Windows Scheduled Task "${taskName}" for task "${task.name}" at ${task.scheduleTime} daily.`);
+    console.log(`Registered Windows Scheduled Task "${taskName}" for task "${task.name}" at ${task.scheduleTime} daily, running as SYSTEM.`);
   });
 
 program
@@ -653,6 +738,11 @@ program
     const taskName = scheduledTaskNameForBackupTask(taskId);
     const status = await scheduledTaskStatus(taskName);
     console.log(JSON.stringify(status, null, 2));
+    if (status.ranNonElevated) {
+      console.error(
+        '\nNota: esta consulta no corrió como administrador. Una tarea registrada (que siempre corre como SYSTEM) solo se puede confirmar desde una sesión elevada — "exists: false" acá puede significar "no se pudo verificar", no "no está registrada". Volvé a intentarlo desde una terminal "Ejecutar como administrador".'
+      );
+    }
     if (!status.exists) process.exitCode = 1;
   });
 
@@ -676,6 +766,24 @@ program
     const ctx = buildContext();
     const runs = ctx.runsRepo.listRecent({ taskId: opts.task, clientId: opts.client, limit: Number(opts.limit) });
     console.log(JSON.stringify(runs, null, 2));
+  });
+
+program
+  .command('backup:list')
+  .description('List real backups (Success/Warning runs with a file on disk) — as opposed to run:list\'s every-attempt view. Paginated, newest first.')
+  .option('--client <clientId>')
+  .option('--task <taskId>')
+  .option('--limit <n>', 'default 50', '50')
+  .option('--offset <n>', 'default 0', '0')
+  .action((opts) => {
+    const ctx = buildContext();
+    const result = ctx.runsRepo.listBackups({
+      clientId: opts.client,
+      taskId: opts.task,
+      limit: Number(opts.limit),
+      offset: Number(opts.offset),
+    });
+    console.log(JSON.stringify(result, null, 2));
   });
 
 program
@@ -774,6 +882,109 @@ program
   });
 
 program
+  .command('pg-tools:register')
+  .description(
+    'Register a pg_dump/pg_restore pair for a specific PostgreSQL major version (e.g. "18", "15", or "9.6"), so direct_dump picks a version-matched pg_dump instead of always using PG_DUMP_PATH. Requires PSQL_PATH to be set for version-aware selection to actually kick in — see CLAUDE.md.'
+  )
+  .requiredOption('--pg-version <majorVersion>', 'PostgreSQL major version this pair targets, e.g. "18" or "9.6"')
+  .requiredOption('--pg-dump-path <path>', 'Path to the pg_dump.exe matching this version')
+  .requiredOption('--pg-restore-path <path>', 'Path to the pg_restore.exe matching this version')
+  .action((opts) => {
+    const ctx = buildContext();
+    const registry = createPostgresToolRegistry(ctx.settingsRepo);
+    registry.register(opts.pgVersion, { pgDumpPath: opts.pgDumpPath, pgRestorePath: opts.pgRestorePath });
+    console.log(`Registered PostgreSQL ${opts.pgVersion}: ${opts.pgDumpPath}`);
+  });
+
+program
+  .command('pg-tools:list')
+  .description('List every registered PostgreSQL major-version → pg_dump/pg_restore path pair.')
+  .action(() => {
+    const ctx = buildContext();
+    const registry = createPostgresToolRegistry(ctx.settingsRepo);
+    console.log(JSON.stringify(registry.list(), null, 2));
+  });
+
+program
+  .command('pg-tools:unregister')
+  .description('Remove a registered PostgreSQL major version, if present.')
+  .requiredOption('--pg-version <majorVersion>')
+  .action((opts) => {
+    const ctx = buildContext();
+    const registry = createPostgresToolRegistry(ctx.settingsRepo);
+    registry.unregister(opts.pgVersion);
+    console.log(`Unregistered PostgreSQL ${opts.pgVersion} (if it was registered).`);
+  });
+
+program
+  .command('mysql-tools:register')
+  .description(
+    'Register a mysqldump path for a specific MySQL major.minor version (e.g. "8.0", "9.1"), so direct_dump picks a version-matched mysqldump instead of always using MYSQLDUMP_PATH. Requires MYSQL_CLI_PATH to be set for version-aware selection to actually kick in — see CLAUDE.md.'
+  )
+  .requiredOption('--mysql-version <majorMinorVersion>', 'MySQL major.minor version this path targets, e.g. "8.0" or "9.1"')
+  .requiredOption('--mysqldump-path <path>', 'Path to the mysqldump.exe matching this version')
+  .action((opts) => {
+    const ctx = buildContext();
+    const registry = createMysqlToolRegistry(ctx.settingsRepo);
+    registry.register(opts.mysqlVersion, { mysqldumpPath: opts.mysqldumpPath });
+    console.log(`Registered MySQL ${opts.mysqlVersion}: ${opts.mysqldumpPath}`);
+  });
+
+program
+  .command('mysql-tools:list')
+  .description('List every registered MySQL major.minor-version → mysqldump path.')
+  .action(() => {
+    const ctx = buildContext();
+    const registry = createMysqlToolRegistry(ctx.settingsRepo);
+    console.log(JSON.stringify(registry.list(), null, 2));
+  });
+
+program
+  .command('mysql-tools:unregister')
+  .description('Remove a registered MySQL major.minor version, if present.')
+  .requiredOption('--mysql-version <majorMinorVersion>')
+  .action((opts) => {
+    const ctx = buildContext();
+    const registry = createMysqlToolRegistry(ctx.settingsRepo);
+    registry.unregister(opts.mysqlVersion);
+    console.log(`Unregistered MySQL ${opts.mysqlVersion} (if it was registered).`);
+  });
+
+program
+  .command('mariadb-tools:register')
+  .description(
+    'Register a mariadb-dump path for a specific MariaDB major.minor version (e.g. "10.11", "11.5"), so direct_dump picks a version-matched mariadb-dump instead of always using MARIADB_DUMP_PATH. Requires MYSQL_CLI_PATH to be set for version-aware selection to actually kick in — see CLAUDE.md.'
+  )
+  .requiredOption('--mariadb-version <majorMinorVersion>', 'MariaDB major.minor version this path targets, e.g. "10.11" or "11.5"')
+  .requiredOption('--mariadb-dump-path <path>', 'Path to the mariadb-dump.exe matching this version')
+  .action((opts) => {
+    const ctx = buildContext();
+    const registry = createMariaDbToolRegistry(ctx.settingsRepo);
+    registry.register(opts.mariadbVersion, { mariaDbDumpPath: opts.mariadbDumpPath });
+    console.log(`Registered MariaDB ${opts.mariadbVersion}: ${opts.mariadbDumpPath}`);
+  });
+
+program
+  .command('mariadb-tools:list')
+  .description('List every registered MariaDB major.minor-version → mariadb-dump path.')
+  .action(() => {
+    const ctx = buildContext();
+    const registry = createMariaDbToolRegistry(ctx.settingsRepo);
+    console.log(JSON.stringify(registry.list(), null, 2));
+  });
+
+program
+  .command('mariadb-tools:unregister')
+  .description('Remove a registered MariaDB major.minor version, if present.')
+  .requiredOption('--mariadb-version <majorMinorVersion>')
+  .action((opts) => {
+    const ctx = buildContext();
+    const registry = createMariaDbToolRegistry(ctx.settingsRepo);
+    registry.unregister(opts.mariadbVersion);
+    console.log(`Unregistered MariaDB ${opts.mariadbVersion} (if it was registered).`);
+  });
+
+program
   .command('serve')
   .description(
     'Start a local HTTP server exposing dashboard status (GET /status) and per-task actions (run now, test connection) for the UI. Dev-only for now — see CLAUDE.md.'
@@ -830,7 +1041,7 @@ program
         return;
       }
 
-      const actionMatch = req.method === 'POST' && pathname.match(/^\/tasks\/([^/]+)\/(run|test-connection)$/);
+      const actionMatch = req.method === 'POST' && pathname.match(/^\/tasks\/([^/]+)\/(run|test-connection|test-compatibility)$/);
       if (actionMatch) {
         const [, taskId, action] = actionMatch;
         const task = ctx.tasksRepo.getById(taskId);
@@ -842,8 +1053,11 @@ program
           if (action === 'run') {
             const result = await runTaskNow(ctx, task);
             sendJson(res, 200, result.run);
-          } else {
+          } else if (action === 'test-connection') {
             const result = await testTaskConnection(ctx, task);
+            sendJson(res, result.ok ? 200 : 502, result);
+          } else {
+            const result = await testTaskCompatibility(ctx, task);
             sendJson(res, result.ok ? 200 : 502, result);
           }
         } catch (err) {
@@ -923,7 +1137,11 @@ program
             .filter((d) => includeInactive || d.isActive)
             .map((d) => ({ ...d, clientName: client.name }))
         );
-        sendJson(res, 200, { clients: clients.map((c) => ({ id: c.id, name: c.name })), transports, databaseConnections });
+        sendJson(res, 200, {
+          clients: clients.map((c) => ({ id: c.id, name: c.name, retentionCount: c.retentionCount, retentionDays: c.retentionDays })),
+          transports,
+          databaseConnections,
+        });
         return;
       }
 
@@ -935,6 +1153,7 @@ program
             return;
           }
           const passphraseSecretRef = resolvePassphraseSecretRef(ctx, body.passphrase);
+          const privateKeyPath = copyPrivateKeyIntoAppStorage(body.privateKeyPath);
           let transport;
           if (body.type === 'ssh') {
             if (!body.remoteCommand || !body.remoteOutputPathTemplate) {
@@ -947,7 +1166,7 @@ program
               host: body.host,
               port: body.port,
               username: body.username,
-              privateKeyPath: body.privateKeyPath,
+              privateKeyPath,
               passphraseSecretRef,
               remoteCommand: body.remoteCommand,
               remoteOutputPathTemplate: body.remoteOutputPathTemplate,
@@ -964,7 +1183,7 @@ program
               host: body.host,
               port: body.port,
               username: body.username,
-              privateKeyPath: body.privateKeyPath,
+              privateKeyPath,
               passphraseSecretRef,
               remotePath: body.remotePath,
               remoteFilePattern: body.remoteFilePattern ?? null,
@@ -1012,6 +1231,7 @@ program
           const { passphrase, ...rest } = await readJsonBody(req);
           const patch: Record<string, unknown> = { ...rest };
           if (passphrase) patch.passphraseSecretRef = resolvePassphraseSecretRef(ctx, passphrase);
+          if (patch.privateKeyPath) patch.privateKeyPath = copyPrivateKeyIntoAppStorage(patch.privateKeyPath as string);
           const transport = ctx.transportsRepo.update(transportIdMatch[1], patch);
           sendJson(res, 200, transport);
         } catch (err) {
@@ -1123,6 +1343,26 @@ program
         return;
       }
 
+      if (req.method === 'GET' && pathname === '/backups') {
+        const clientId = url.searchParams.get('clientId') ?? undefined;
+        const taskId = url.searchParams.get('taskId') ?? undefined;
+        const limitParam = url.searchParams.get('limit');
+        const offsetParam = url.searchParams.get('offset');
+        const { runs, total } = ctx.runsRepo.listBackups({
+          clientId,
+          taskId,
+          limit: limitParam ? Number(limitParam) : undefined,
+          offset: offsetParam ? Number(offsetParam) : undefined,
+        });
+        const enriched = runs.map((run) => {
+          const client = ctx.clientsRepo.getById(run.clientId);
+          const task = ctx.tasksRepo.getById(run.taskId);
+          return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null };
+        });
+        sendJson(res, 200, { runs: enriched, total });
+        return;
+      }
+
       const runDownloadMatch = req.method === 'GET' && pathname.match(/^\/runs\/([^/]+)\/download$/);
       if (runDownloadMatch) {
         const run = ctx.runsRepo.getById(runDownloadMatch[1]);
@@ -1153,15 +1393,15 @@ program
           offset: offsetParam ? Number(offsetParam) : undefined,
         });
         // A page of log lines often repeats the same run_id many times (every step of one run) — cache the client/task lookup per run instead of re-querying per line.
-        const runNameCache = new Map<string, { clientName: string | null; taskName: string | null }>();
+        const runNameCache = new Map<string, { clientId: string | null; clientName: string | null; taskName: string | null }>();
         function resolveRunNames(runId: string | null) {
-          if (!runId) return { clientName: null, taskName: null };
+          if (!runId) return { clientId: null, clientName: null, taskName: null };
           const cached = runNameCache.get(runId);
           if (cached) return cached;
           const run = ctx.runsRepo.getById(runId);
           const client = run ? ctx.clientsRepo.getById(run.clientId) : null;
           const task = run ? ctx.tasksRepo.getById(run.taskId) : null;
-          const names = { clientName: client?.name ?? null, taskName: task?.name ?? null };
+          const names = { clientId: client?.id ?? null, clientName: client?.name ?? null, taskName: task?.name ?? null };
           runNameCache.set(runId, names);
           return names;
         }
@@ -1175,12 +1415,73 @@ program
         return;
       }
 
+      if (req.method === 'GET' && pathname === '/tool-registry') {
+        sendJson(res, 200, {
+          postgres: createPostgresToolRegistry(ctx.settingsRepo).list(),
+          mysql: createMysqlToolRegistry(ctx.settingsRepo).list(),
+          mariadb: createMariaDbToolRegistry(ctx.settingsRepo).list(),
+        });
+        return;
+      }
+
+      const toolRegistryActionMatch = req.method === 'POST' && pathname.match(/^\/tool-registry\/(postgres|mysql|mariadb)\/(register|unregister)$/);
+      if (toolRegistryActionMatch) {
+        try {
+          const [, engine, action] = toolRegistryActionMatch;
+          const body = await readJsonBody(req);
+          if (!body.version) {
+            sendJson(res, 400, { error: 'version is required.' });
+            return;
+          }
+
+          if (action === 'unregister') {
+            if (engine === 'postgres') createPostgresToolRegistry(ctx.settingsRepo).unregister(body.version);
+            else if (engine === 'mysql') createMysqlToolRegistry(ctx.settingsRepo).unregister(body.version);
+            else createMariaDbToolRegistry(ctx.settingsRepo).unregister(body.version);
+            sendJson(res, 200, { ok: true });
+            return;
+          }
+
+          if (engine === 'postgres') {
+            if (!body.pgDumpPath || !body.pgRestorePath) {
+              sendJson(res, 400, { error: 'pgDumpPath and pgRestorePath are required for postgres.' });
+              return;
+            }
+            createPostgresToolRegistry(ctx.settingsRepo).register(body.version, {
+              pgDumpPath: body.pgDumpPath,
+              pgRestorePath: body.pgRestorePath,
+            });
+          } else if (engine === 'mysql') {
+            if (!body.mysqldumpPath) {
+              sendJson(res, 400, { error: 'mysqldumpPath is required for mysql.' });
+              return;
+            }
+            createMysqlToolRegistry(ctx.settingsRepo).register(body.version, { mysqldumpPath: body.mysqldumpPath });
+          } else {
+            if (!body.mariaDbDumpPath) {
+              sendJson(res, 400, { error: 'mariaDbDumpPath is required for mariadb.' });
+              return;
+            }
+            createMariaDbToolRegistry(ctx.settingsRepo).register(body.version, { mariaDbDumpPath: body.mariaDbDumpPath });
+          }
+          sendJson(res, 200, { ok: true });
+        } catch (err) {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
       if (req.method === 'GET' && pathname === '/config/export') {
         try {
-          const data = exportConfig('all', ctx);
+          const clientIds = url.searchParams.getAll('clientId');
+          const data = exportConfig(clientIds.length > 0 ? clientIds : 'all', ctx);
+          const filename =
+            data.clients.length === 1
+              ? `arkode-config-export-${data.clients[0].name.replace(/[^a-z0-9-_]+/gi, '_')}.json`
+              : 'arkode-config-export.json';
           res.writeHead(200, {
             'Content-Type': 'application/json',
-            'Content-Disposition': 'attachment; filename="arkode-config-export.json"',
+            'Content-Disposition': `attachment; filename="${filename}"`,
           });
           res.end(JSON.stringify(data, null, 2));
         } catch (err) {
@@ -1238,14 +1539,24 @@ program
             task = body.strategy === 'remote_dump' ? ctx.tasksRepo.createRemoteDump(input) : ctx.tasksRepo.createFetchExisting(input);
           }
 
+          let scheduleBlocked: DirectDumpCompatibilityResult | null = null;
           if (body.scheduleTime) {
-            task = ctx.tasksRepo.setSchedule(task.id, {
-              scheduleTime: body.scheduleTime,
-              scheduleEnabled: body.scheduleEnabled !== false,
-            });
+            const scheduleEnabled = body.scheduleEnabled !== false;
+            scheduleBlocked = scheduleEnabled ? await checkScheduleCompatibilityGate(ctx, task, Boolean(body.force)) : null;
+            if (!scheduleBlocked) {
+              task = ctx.tasksRepo.setSchedule(task.id, {
+                scheduleTime: body.scheduleTime,
+                scheduleEnabled,
+                scheduleFrequency: body.scheduleFrequency,
+                scheduleDaysOfWeek: body.scheduleDaysOfWeek,
+                scheduleDayOfMonth: body.scheduleDayOfMonth,
+              });
+            }
           }
 
-          sendJson(res, 201, task);
+          // scheduleBlocked (only possible for direct_dump) means the task was created but its
+          // requested schedule wasn't applied — still a 201, since task creation itself succeeded.
+          sendJson(res, 201, scheduleBlocked ? { ...task, scheduleBlocked } : task);
         } catch (err) {
           sendRepoError(res, err);
         }
@@ -1269,9 +1580,26 @@ program
       if (taskScheduleMatch) {
         try {
           const body = await readJsonBody(req);
-          const task = ctx.tasksRepo.setSchedule(taskScheduleMatch[1], {
+          const taskId = taskScheduleMatch[1];
+          const scheduleEnabled = Boolean(body.scheduleEnabled);
+          if (scheduleEnabled) {
+            const existingTask = ctx.tasksRepo.getById(taskId);
+            if (!existingTask) {
+              sendJson(res, 404, { error: `Task ${taskId} not found.` });
+              return;
+            }
+            const gateFailure = await checkScheduleCompatibilityGate(ctx, existingTask, Boolean(body.force));
+            if (gateFailure) {
+              sendJson(res, 409, { error: 'compatibility_failed', compatibility: gateFailure });
+              return;
+            }
+          }
+          const task = ctx.tasksRepo.setSchedule(taskId, {
             scheduleTime: body.scheduleTime ?? null,
-            scheduleEnabled: Boolean(body.scheduleEnabled),
+            scheduleEnabled,
+            scheduleFrequency: body.scheduleFrequency,
+            scheduleDaysOfWeek: body.scheduleDaysOfWeek,
+            scheduleDayOfMonth: body.scheduleDayOfMonth,
           });
           sendJson(res, 200, task);
         } catch (err) {

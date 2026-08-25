@@ -6,7 +6,6 @@ describe('buildTaskDefinitionXml', () => {
     const xml = buildTaskDefinitionXml({
       description: 'test',
       scheduleTime: '03:00',
-      userId: 'DOMAIN\\User',
       command: 'C:\\node.exe',
       arguments: '"C:\\index.js" run-due',
     });
@@ -17,27 +16,27 @@ describe('buildTaskDefinitionXml', () => {
     expect(xml).toContain('<Delay>PT2M</Delay>');
   });
 
-  it('uses Password logon type, not S4U, so Credential Manager secrets remain decryptable', () => {
+  it('runs as SYSTEM (by SID, not the literal name) with no LogonType, so no credentials are ever needed', () => {
     const xml = buildTaskDefinitionXml({
       description: 'test',
       scheduleTime: '03:00',
-      userId: 'DOMAIN\\User',
       command: 'C:\\node.exe',
       arguments: 'run-due',
     });
-    expect(xml).toContain('<LogonType>Password</LogonType>');
+    expect(xml).toContain('<UserId>S-1-5-18</UserId>');
+    expect(xml).toContain('<RunLevel>HighestAvailable</RunLevel>');
+    expect(xml).not.toContain('<LogonType>');
+    expect(xml).not.toContain('Password');
     expect(xml).not.toContain('S4U');
   });
 
-  it('runs as the interactive user with least privilege, and tolerates missed slots', () => {
+  it('tolerates missed slots and never runs two instances at once', () => {
     const xml = buildTaskDefinitionXml({
       description: 'test',
       scheduleTime: '03:00',
-      userId: 'DOMAIN\\User',
       command: 'C:\\node.exe',
       arguments: 'run-due',
     });
-    expect(xml).toContain('<RunLevel>LeastPrivilege</RunLevel>');
     expect(xml).toContain('<StartWhenAvailable>true</StartWhenAvailable>');
     expect(xml).toContain('<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>');
   });
@@ -46,7 +45,6 @@ describe('buildTaskDefinitionXml', () => {
     const xml = buildTaskDefinitionXml({
       description: 'Client "Winners" & <special>',
       scheduleTime: '03:00',
-      userId: 'DOMAIN\\User',
       command: 'C:\\node.exe',
       arguments: '"C:\\some path\\index.js" run-due --task abc',
     });

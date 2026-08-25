@@ -1,6 +1,7 @@
 export type BackupStrategyKind = 'fetch_existing' | 'remote_dump' | 'direct_dump';
 export type TransportType = 'sftp' | 'ssh';
 export type DbEngine = 'postgres' | 'mysql' | 'mariadb' | 'unknown';
+export type ScheduleFrequency = 'daily' | 'weekly' | 'monthly';
 /**
  * 'mariadb' is declared but not implemented — MySQL and MariaDB are
  * wire-compatible but not interchangeable at the dump-tool level
@@ -80,6 +81,11 @@ export interface BackupTask {
   dbEngine: DbEngine;
   scheduleTime: string | null;
   scheduleEnabled: boolean;
+  scheduleFrequency: ScheduleFrequency;
+  /** 0 (Sunday) through 6 (Saturday). Only meaningful when scheduleFrequency is 'weekly'. */
+  scheduleDaysOfWeek: number[] | null;
+  /** 1-31. Only meaningful when scheduleFrequency is 'monthly'. */
+  scheduleDayOfMonth: number | null;
   retentionCount: number | null;
   retentionDays: number | null;
   isActive: boolean;

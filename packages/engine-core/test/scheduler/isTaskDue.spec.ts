@@ -13,6 +13,9 @@ function makeTask(overrides: Partial<BackupTask> = {}): BackupTask {
     dbEngine: 'unknown',
     scheduleTime: '03:00',
     scheduleEnabled: true,
+    scheduleFrequency: 'daily',
+    scheduleDaysOfWeek: null,
+    scheduleDayOfMonth: null,
     retentionCount: null,
     retentionDays: null,
     isActive: true,
@@ -93,5 +96,47 @@ describe('isTaskDue', () => {
     // No run yet today, and it's now well past 03:00 — this is exactly the
     // LogonTrigger catch-up scenario.
     expect(isTaskDue(task, new Date(2026, 0, 1, 14, 30), null)).toBe(true);
+  });
+
+  describe('weekly frequency', () => {
+    it('is due when today is one of the configured days of the week', () => {
+      // 2026-01-01 is a Thursday (day 4).
+      const task = makeTask({ scheduleFrequency: 'weekly', scheduleDaysOfWeek: [2, 4] });
+      expect(isTaskDue(task, new Date(2026, 0, 1, 9, 0), null)).toBe(true);
+    });
+
+    it('is not due when today is not one of the configured days of the week', () => {
+      const task = makeTask({ scheduleFrequency: 'weekly', scheduleDaysOfWeek: [1, 3, 5] });
+      expect(isTaskDue(task, new Date(2026, 0, 1, 9, 0), null)).toBe(false);
+    });
+
+    it('is not due when no days of the week are configured', () => {
+      const task = makeTask({ scheduleFrequency: 'weekly', scheduleDaysOfWeek: null });
+      expect(isTaskDue(task, new Date(2026, 0, 1, 9, 0), null)).toBe(false);
+    });
+  });
+
+  describe('monthly frequency', () => {
+    it('is due when today matches the configured day of the month', () => {
+      const task = makeTask({ scheduleFrequency: 'monthly', scheduleDayOfMonth: 15 });
+      expect(isTaskDue(task, new Date(2026, 0, 15, 9, 0), null)).toBe(true);
+    });
+
+    it('is not due when today does not match the configured day of the month', () => {
+      const task = makeTask({ scheduleFrequency: 'monthly', scheduleDayOfMonth: 15 });
+      expect(isTaskDue(task, new Date(2026, 0, 14, 9, 0), null)).toBe(false);
+    });
+
+    it('clamps a configured day beyond the month\'s length to the last day of that month', () => {
+      // April 2026 has 30 days — day 31 should clamp to the 30th.
+      const task = makeTask({ scheduleFrequency: 'monthly', scheduleDayOfMonth: 31 });
+      expect(isTaskDue(task, new Date(2026, 3, 30, 9, 0), null)).toBe(true);
+      expect(isTaskDue(task, new Date(2026, 3, 29, 9, 0), null)).toBe(false);
+    });
+
+    it('is not due when no day of the month is configured', () => {
+      const task = makeTask({ scheduleFrequency: 'monthly', scheduleDayOfMonth: null });
+      expect(isTaskDue(task, new Date(2026, 0, 15, 9, 0), null)).toBe(false);
+    });
   });
 });

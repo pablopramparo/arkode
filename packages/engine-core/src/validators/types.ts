@@ -5,6 +5,6 @@ export interface ValidationResult {
 }
 
 export interface DumpValidator {
-  readonly engine: 'postgres' | 'mysql' | 'generic';
+  readonly engine: 'postgres' | 'mysql' | 'mariadb' | 'generic';
   validate(localFilePath: string): Promise<ValidationResult>;
 }

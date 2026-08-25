@@ -1,6 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import type { BackupTask, DbEngine } from '../../types.js';
+import type { BackupTask, DbEngine, ScheduleFrequency } from '../../types.js';
 import type { TransportsRepo } from './transportsRepo.js';
 import type { DatabaseConnectionsRepo } from './databaseConnectionsRepo.js';
 
@@ -14,11 +14,19 @@ interface BackupTaskRow {
   db_engine: string;
   schedule_time: string | null;
   schedule_enabled: number;
+  schedule_frequency: string;
+  schedule_days_of_week: string | null;
+  schedule_day_of_month: number | null;
   retention_count: number | null;
   retention_days: number | null;
   is_active: number;
   created_at: string;
   updated_at: string;
+}
+
+function parseDaysOfWeek(csv: string | null): number[] | null {
+  if (!csv) return null;
+  return csv.split(',').map(Number);
 }
 
 function toDomain(row: BackupTaskRow): BackupTask {
@@ -32,6 +40,9 @@ function toDomain(row: BackupTaskRow): BackupTask {
     dbEngine: row.db_engine as DbEngine,
     scheduleTime: row.schedule_time,
     scheduleEnabled: row.schedule_enabled === 1,
+    scheduleFrequency: row.schedule_frequency as ScheduleFrequency,
+    scheduleDaysOfWeek: parseDaysOfWeek(row.schedule_days_of_week),
+    scheduleDayOfMonth: row.schedule_day_of_month,
     retentionCount: row.retention_count,
     retentionDays: row.retention_days,
     isActive: row.is_active === 1,
@@ -73,6 +84,12 @@ export interface CreateDirectDumpTaskInput {
 export interface SetScheduleInput {
   scheduleTime: string | null;
   scheduleEnabled: boolean;
+  /** Defaults to the task's current frequency (or 'daily' if it has none yet) when omitted. */
+  scheduleFrequency?: ScheduleFrequency;
+  /** 0 (Sunday) through 6 (Saturday). Required (non-empty) when the resulting frequency is 'weekly'; ignored otherwise. */
+  scheduleDaysOfWeek?: number[] | null;
+  /** 1-31. Required when the resulting frequency is 'monthly'; ignored otherwise. */
+  scheduleDayOfMonth?: number | null;
 }
 
 /** `strategy`/`transportId`/`databaseConnectionId`/`dbEngine` are deliberately not editable — they determine which downstream pipeline runs; create a new task to change any of them. */
@@ -118,7 +135,9 @@ export function createTasksRepo(
   );
   const setScheduleStmt = db.prepare(
     `UPDATE backup_tasks
-     SET schedule_time = @scheduleTime, schedule_enabled = @scheduleEnabled, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     SET schedule_time = @scheduleTime, schedule_enabled = @scheduleEnabled,
+         schedule_frequency = @scheduleFrequency, schedule_days_of_week = @scheduleDaysOfWeek,
+         schedule_day_of_month = @scheduleDayOfMonth, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = @taskId`
   );
   const updateStmt = db.prepare(
@@ -247,10 +266,33 @@ export function createTasksRepo(
       const existing = getByIdStmt.get(taskId);
       if (!existing) throw new Error(`Task ${taskId} not found.`);
 
+      const frequency: ScheduleFrequency = input.scheduleFrequency ?? (existing.schedule_frequency as ScheduleFrequency);
+
+      let daysOfWeek: number[] | null = null;
+      let dayOfMonth: number | null = null;
+
+      if (frequency === 'weekly') {
+        daysOfWeek = input.scheduleDaysOfWeek !== undefined ? input.scheduleDaysOfWeek : parseDaysOfWeek(existing.schedule_days_of_week);
+        if (!daysOfWeek || daysOfWeek.length === 0) {
+          throw new Error('Weekly schedules require at least one day of the week (scheduleDaysOfWeek).');
+        }
+        if (daysOfWeek.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
+          throw new Error('scheduleDaysOfWeek must contain integers 0 (Sunday) through 6 (Saturday).');
+        }
+      } else if (frequency === 'monthly') {
+        dayOfMonth = input.scheduleDayOfMonth !== undefined ? input.scheduleDayOfMonth : existing.schedule_day_of_month;
+        if (dayOfMonth == null || !Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
+          throw new Error('Monthly schedules require scheduleDayOfMonth between 1 and 31.');
+        }
+      }
+
       setScheduleStmt.run({
         taskId,
         scheduleTime: input.scheduleTime,
         scheduleEnabled: input.scheduleEnabled ? 1 : 0,
+        scheduleFrequency: frequency,
+        scheduleDaysOfWeek: daysOfWeek ? daysOfWeek.join(',') : null,
+        scheduleDayOfMonth: dayOfMonth,
       });
       const row = getByIdStmt.get(taskId);
       if (!row) throw new Error(`Failed to read back task ${taskId} after updating its schedule.`);

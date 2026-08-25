@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { getSystemInfo } from '../../src/status/getSystemInfo.js';
 import { withTempDir } from '../helpers/tempDir.js';
 
-const ENV_VARS = ['PG_DUMP_PATH', 'PG_RESTORE_PATH', 'PSQL_PATH', 'MYSQLDUMP_PATH', 'MYSQL_CLI_PATH'] as const;
+const ENV_VARS = ['PG_DUMP_PATH', 'PG_RESTORE_PATH', 'PSQL_PATH', 'MYSQLDUMP_PATH', 'MARIADB_DUMP_PATH', 'MYSQL_CLI_PATH'] as const;
 
 afterEach(() => {
   for (const name of ENV_VARS) delete process.env[name];
@@ -45,7 +45,7 @@ describe('getSystemInfo', () => {
     });
   });
 
-  it('includes all five known tool env vars', () => {
+  it('includes all six known tool env vars', () => {
     const info = getSystemInfo();
     expect(info.tools.map((t) => t.envVar).sort()).toEqual([...ENV_VARS].sort());
   });

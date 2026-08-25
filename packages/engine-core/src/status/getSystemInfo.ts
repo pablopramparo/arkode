@@ -20,7 +20,8 @@ const TOOL_ENV_VARS = [
   { envVar: 'PG_DUMP_PATH', label: 'pg_dump (Postgres — generar dump)' },
   { envVar: 'PG_RESTORE_PATH', label: 'pg_restore (Postgres — validar dump)' },
   { envVar: 'PSQL_PATH', label: 'psql (Postgres — probar conexión)' },
-  { envVar: 'MYSQLDUMP_PATH', label: 'mysqldump (MySQL/MariaDB — generar dump)' },
+  { envVar: 'MYSQLDUMP_PATH', label: 'mysqldump (MySQL — generar dump)' },
+  { envVar: 'MARIADB_DUMP_PATH', label: 'mariadb-dump (MariaDB — generar dump)' },
   { envVar: 'MYSQL_CLI_PATH', label: 'mysql (MySQL/MariaDB — probar conexión)' },
 ] as const;
 

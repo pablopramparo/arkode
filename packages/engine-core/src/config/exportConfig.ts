@@ -1,8 +1,17 @@
+import { readFileSync } from 'node:fs';
 import type { ClientsRepo } from '../db/repositories/clientsRepo.js';
 import type { TransportsRepo } from '../db/repositories/transportsRepo.js';
 import type { DatabaseConnectionsRepo } from '../db/repositories/databaseConnectionsRepo.js';
 import type { TasksRepo } from '../db/repositories/tasksRepo.js';
 import type { ConfigExport, ExportedClient, ExportedDatabaseConnection, ExportedTask, ExportedTransport } from './types.js';
+
+function readPrivateKeyBase64(privateKeyPath: string): string | null {
+  try {
+    return readFileSync(privateKeyPath).toString('base64');
+  } catch {
+    return null;
+  }
+}
 
 export interface ExportConfigDeps {
   clientsRepo: ClientsRepo;
@@ -44,6 +53,7 @@ function exportOneClient(clientId: string, deps: ExportConfigDeps): ExportedClie
     port: t.port,
     username: t.username,
     privateKeyPath: t.privateKeyPath,
+    privateKeyContentBase64: readPrivateKeyBase64(t.privateKeyPath),
     hasPassphrase: t.passphraseSecretRef != null,
     remotePath: t.remotePath,
     remoteFilePattern: t.remoteFilePattern,
@@ -74,6 +84,9 @@ function exportOneClient(clientId: string, deps: ExportConfigDeps): ExportedClie
     dbEngine: task.dbEngine,
     scheduleTime: task.scheduleTime,
     scheduleEnabled: task.scheduleEnabled,
+    scheduleFrequency: task.scheduleFrequency,
+    scheduleDaysOfWeek: task.scheduleDaysOfWeek,
+    scheduleDayOfMonth: task.scheduleDayOfMonth,
     retentionCount: task.retentionCount,
     retentionDays: task.retentionDays,
   }));

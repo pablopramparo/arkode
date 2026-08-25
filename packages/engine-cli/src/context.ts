@@ -10,7 +10,7 @@ import {
   createLogEventsRepo,
   createRetentionDeletionsRepo,
   createSettingsRepo,
-  WindowsCredentialManagerStore,
+  MachineDpapiSecretStore,
 } from 'engine-core';
 
 export function buildContext() {
@@ -26,7 +26,7 @@ export function buildContext() {
   const logEventsRepo = createLogEventsRepo(db);
   const retentionDeletionsRepo = createRetentionDeletionsRepo(db);
   const settingsRepo = createSettingsRepo(db);
-  const secretStore = new WindowsCredentialManagerStore();
+  const secretStore = new MachineDpapiSecretStore(db);
 
   return {
     db,

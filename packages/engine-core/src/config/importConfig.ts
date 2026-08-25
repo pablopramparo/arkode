@@ -1,14 +1,40 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { ClientsRepo } from '../db/repositories/clientsRepo.js';
 import type { TransportsRepo } from '../db/repositories/transportsRepo.js';
 import type { DatabaseConnectionsRepo } from '../db/repositories/databaseConnectionsRepo.js';
 import type { TasksRepo } from '../db/repositories/tasksRepo.js';
-import type { ConfigExport, ExportedClient } from './types.js';
+import { keysDir as defaultKeysDir } from '../paths.js';
+import type { ConfigExport, ExportedClient, ExportedTransport } from './types.js';
 
 export interface ImportConfigDeps {
   clientsRepo: ClientsRepo;
   transportsRepo: TransportsRepo;
   databaseConnectionsRepo: DatabaseConnectionsRepo;
   tasksRepo: TasksRepo;
+  /** Directory to write restored SSH private key files into. Defaults to paths.keysDir(); override in tests to a temp dir. */
+  importedKeysDir?: string;
+}
+
+/**
+ * Resolves the private key path to actually use for the imported transport:
+ * writes the exported file content to a fresh file under keysDir when
+ * available, or falls back to the source machine's own path (almost
+ * certainly wrong here) — `needsManualCopy` is set in that fallback case so
+ * the caller can flag it, but only once the transport is actually created.
+ */
+function resolveImportedPrivateKeyPath(t: ExportedTransport, keysDir: string): { path: string; needsManualCopy?: string } {
+  if (t.privateKeyContentBase64 == null) {
+    return {
+      path: t.privateKeyPath,
+      needsManualCopy: `transport "${t.name}" — its private key file couldn't be included in the export (missing or unreadable at export time); copy "${t.privateKeyPath}" to this machine manually and update the transport's private key path`,
+    };
+  }
+  mkdirSync(keysDir, { recursive: true });
+  const localPath = join(keysDir, `${randomUUID()}.key`);
+  writeFileSync(localPath, Buffer.from(t.privateKeyContentBase64, 'base64'), { mode: 0o600 });
+  return { path: localPath };
 }
 
 export interface ImportedClientResult {
@@ -66,9 +92,11 @@ function importOneClient(exported: ExportedClient, deps: ImportConfigDeps): Impo
     return result; // nothing else can be created without a client
   }
 
+  const keysDir = deps.importedKeysDir ?? defaultKeysDir();
   const transportIdByName = new Map<string, string>();
   for (const t of exported.transports) {
     try {
+      const { path: privateKeyPath, needsManualCopy } = resolveImportedPrivateKeyPath(t, keysDir);
       const created =
         t.type === 'sftp'
           ? deps.transportsRepo.createSftp({
@@ -77,7 +105,7 @@ function importOneClient(exported: ExportedClient, deps: ImportConfigDeps): Impo
               host: t.host,
               port: t.port,
               username: t.username,
-              privateKeyPath: t.privateKeyPath,
+              privateKeyPath,
               remotePath: t.remotePath ?? '',
               remoteFilePattern: t.remoteFilePattern,
               knownHostFingerprint: t.knownHostFingerprint,
@@ -88,7 +116,7 @@ function importOneClient(exported: ExportedClient, deps: ImportConfigDeps): Impo
               host: t.host,
               port: t.port,
               username: t.username,
-              privateKeyPath: t.privateKeyPath,
+              privateKeyPath,
               remoteCommand: t.remoteCommand ?? '',
               remoteOutputPathTemplate: t.remoteOutputPathTemplate ?? '',
               remoteCleanup: t.remoteCleanup,
@@ -98,6 +126,9 @@ function importOneClient(exported: ExportedClient, deps: ImportConfigDeps): Impo
       result.transportsCreated++;
       if (t.hasPassphrase) {
         result.secretsNeedingReentry.push(`transport "${t.name}" needs its SSH key passphrase re-entered`);
+      }
+      if (needsManualCopy) {
+        result.secretsNeedingReentry.push(needsManualCopy);
       }
     } catch (err) {
       result.errors.push(`Transport "${t.name}": ${err instanceof Error ? err.message : String(err)}`);
@@ -137,6 +168,7 @@ function importOneClient(exported: ExportedClient, deps: ImportConfigDeps): Impo
         retentionDays: task.retentionDays,
       };
 
+      let created;
       if (task.strategy === 'direct_dump') {
         const databaseConnectionId = task.databaseConnectionName
           ? databaseConnectionIdByName.get(task.databaseConnectionName)
@@ -144,18 +176,28 @@ function importOneClient(exported: ExportedClient, deps: ImportConfigDeps): Impo
         if (!databaseConnectionId) {
           throw new Error(`references database connection "${task.databaseConnectionName}", which was not imported`);
         }
-        deps.tasksRepo.createDirectDump({ ...base, databaseConnectionId });
+        created = deps.tasksRepo.createDirectDump({ ...base, databaseConnectionId });
       } else {
         const transportId = task.transportName ? transportIdByName.get(task.transportName) : undefined;
         if (!transportId) {
           throw new Error(`references transport "${task.transportName}", which was not imported`);
         }
-        if (task.strategy === 'remote_dump') {
-          deps.tasksRepo.createRemoteDump({ ...base, transportId });
-        } else {
-          deps.tasksRepo.createFetchExisting({ ...base, transportId });
-        }
+        created =
+          task.strategy === 'remote_dump'
+            ? deps.tasksRepo.createRemoteDump({ ...base, transportId })
+            : deps.tasksRepo.createFetchExisting({ ...base, transportId });
       }
+
+      if (task.scheduleTime) {
+        deps.tasksRepo.setSchedule(created.id, {
+          scheduleTime: task.scheduleTime,
+          scheduleEnabled: task.scheduleEnabled,
+          scheduleFrequency: task.scheduleFrequency,
+          scheduleDaysOfWeek: task.scheduleDaysOfWeek,
+          scheduleDayOfMonth: task.scheduleDayOfMonth,
+        });
+      }
+
       result.tasksCreated++;
     } catch (err) {
       result.errors.push(`Task "${task.name}": ${err instanceof Error ? err.message : String(err)}`);
