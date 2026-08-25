@@ -12,11 +12,13 @@
 // is cached locally (.build-cache/, gitignored) so re-running this script
 // doesn't re-download 344MB every time — only the first run, or after
 // bumping PG_VERSION below, touches the network.
-import { execFileSync } from 'node:child_process';
+import extractZip from 'extract-zip';
 import { createWriteStream, existsSync, mkdirSync, readdirSync, copyFileSync, rmSync, statSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 
 const PG_VERSION = '18.6-1';
 const ZIP_URL = `https://get.enterprisedb.com/postgresql/postgresql-${PG_VERSION}-windows-x64-binaries.zip`;
@@ -40,12 +42,12 @@ async function ensureCache() {
   // block page, a redirect EDB serves for datacenter/cloud-runner IP ranges,
   // a transient truncated transfer, etc.) still comes back as an HTTP 200
   // with a body — silently writing that out and only failing two steps
-  // later inside `tar` (a cryptic "--strip-components=1: Not found in
-  // archive") is exactly what happened on this pipeline's first real CI
-  // run. Checking the actual byte count against a sane floor here fails
-  // fast with a diagnosable reason instead. A couple of retries covers a
-  // one-off transient blip; a real block/redirect will fail the same way
-  // every time and surface clearly rather than after several minutes.
+  // later inside extraction (a cryptic error) is exactly what happened on
+  // this pipeline's first real CI run. Checking the actual byte count
+  // against a sane floor here fails fast with a diagnosable reason
+  // instead. A couple of retries covers a one-off transient blip; a real
+  // block/redirect will fail the same way every time and surface clearly
+  // rather than after several minutes.
   const MIN_EXPECTED_BYTES = 250 * 1024 * 1024; // real zip is ~344MB; well under that means something's wrong
   const MAX_ATTEMPTS = 3;
 
@@ -78,30 +80,33 @@ async function ensureCache() {
   if (lastError) throw lastError;
 
   console.log('Extracting bin/ (pg_dump, pg_restore, psql, and their DLLs)...');
-  mkdirSync(cacheBinDir, { recursive: true });
-  // Root-caused 2026-08-25, after the release CI pipeline's first real run
-  // failed here on a GitHub-hosted Windows runner despite a byte-perfect
-  // download: `tar` on PATH resolves to two genuinely different
-  // implementations depending on the shell. Git Bash's own `tar` (used by
-  // every local dev-machine test that "worked") is real GNU tar, which
-  // accepts --strip-components anywhere on the command line. The GitHub
-  // Actions runner invokes this script through PowerShell, which resolves
-  // Windows' own bundled tar.exe (libarchive/bsdtar) instead -- and bsdtar
-  // requires --strip-components (and other options) to appear *before*
-  // the file operand list, or it silently ignores it and then fails to
-  // find the now-unstripped path, producing exactly the
-  // "--strip-components=1: Not found in archive" error this pipeline hit.
-  // Confirmed by hand against Windows' real System32\tar.exe on this
-  // machine: the old argument order failed with that identical error, and
-  // moving --strip-components before -xf fixed it. GNU tar (Git Bash)
-  // accepts either order, so this reordering is safe everywhere.
-  // --force-local: without it, GNU tar (what Git Bash/MSYS resolves on a
-  // dev machine) misparses a bare Windows drive-letter path like
-  // "C:\Users\..." as "host:path" remote-tar syntax and fails with
-  // "Cannot connect to C: resolve failed" -- confirmed by hand 2026-08-25.
-  // bsdtar (what the GitHub Actions runner's tar.exe resolves to) accepts
-  // the same flag as a harmless no-op, so this is safe everywhere.
-  execFileSync('tar', ['--force-local', '--strip-components=1', '-xf', zipPath, '-C', cacheDir, 'pgsql/bin'], { stdio: 'inherit' });
+  // Not `tar`: root-caused 2026-08-25 (see CLAUDE.md's "Packaging" note)
+  // that `tar` on PATH resolves to genuinely different implementations
+  // depending on the shell -- GNU tar (Git Bash/MSYS, what every local
+  // dev-machine test goes through) versus bsdtar (Windows' own tar.exe,
+  // what the GitHub Actions runner's PowerShell resolves) -- and they
+  // disagree on CLI argument ordering, `--force-local` support, and even
+  // raw zip-format support (confirmed separately for a different zip while
+  // building the auto-download feature). Rather than keep chasing
+  // per-runner tar quirks, this uses the same `extract-zip` npm package
+  // downloadTool.ts uses for its own runtime extraction -- deterministic
+  // regardless of the host environment. extract-zip has no
+  // partial-extraction support, so this pulls the entire ~344MB
+  // distribution into a throwaway temp dir even though only bin/ is kept;
+  // heavier than a selective tar extraction would be, but reliable, and
+  // the temp dir is deleted immediately after.
+  const tempExtractDir = join(tmpdir(), `arkode-pgtools-prep-${randomUUID()}`);
+  mkdirSync(tempExtractDir, { recursive: true });
+  try {
+    await extractZip(zipPath, { dir: tempExtractDir });
+    mkdirSync(cacheBinDir, { recursive: true });
+    const sourceBinDir = join(tempExtractDir, 'pgsql', 'bin');
+    for (const file of readdirSync(sourceBinDir)) {
+      copyFileSync(join(sourceBinDir, file), join(cacheBinDir, file));
+    }
+  } finally {
+    rmSync(tempExtractDir, { recursive: true, force: true });
+  }
   rmSync(zipPath, { force: true });
 }
 

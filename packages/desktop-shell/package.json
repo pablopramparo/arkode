@@ -9,6 +9,7 @@
     "prepare-pg-tools": "node scripts/prepare-pg-tools.mjs"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "extract-zip": "^2.0.1"
   }
 }
