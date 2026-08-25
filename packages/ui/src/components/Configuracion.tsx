@@ -8,7 +8,7 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
 import type { ImportConfigResult, SystemInfo } from 'engine-core';
 import {
-  CONFIG_EXPORT_URL,
+  configExportUrl,
   fetchSystemInfo,
   importConfig,
   fetchToolRegistry,
@@ -316,7 +316,7 @@ export function Configuracion() {
     await refreshToolRegistry();
   }
 
-  const exportUrl = exportClientId ? `${CONFIG_EXPORT_URL}?clientId=${exportClientId}` : CONFIG_EXPORT_URL;
+  const exportUrl = exportClientId ? `${configExportUrl()}?clientId=${exportClientId}` : configExportUrl();
 
   async function handleFileSelected(file: File) {
     setImportBusy(true);

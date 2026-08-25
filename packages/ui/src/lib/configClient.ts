@@ -1,18 +1,22 @@
 import type { ImportConfigResult, SystemInfo, PostgresToolPaths, MysqlToolPaths, MariaDbToolPaths } from 'engine-core';
+import { getApiBase } from './apiBase';
 
-// Dev-time only: talks to `engine-cli serve` directly over HTTP — see statusClient.ts.
-const BASE_URL = 'http://127.0.0.1:4287';
-
-export const CONFIG_EXPORT_URL = `${BASE_URL}/config/export`;
+// A function, not a precomputed constant: it's used to build an <a href>,
+// which needs the real (possibly fallback) port -- see apiBase.ts -- and a
+// module-level `const` would have frozen in whatever getApiBase() returned
+// at import time, before resolveApiBase() (in main.tsx) had a chance to run.
+export function configExportUrl(): string {
+  return `${getApiBase()}/config/export`;
+}
 
 export async function fetchSystemInfo(): Promise<SystemInfo> {
-  const res = await fetch(`${BASE_URL}/system`);
+  const res = await fetch(`${getApiBase()}/system`);
   if (!res.ok) throw new Error(`Request failed: ${res.status}`);
   return res.json();
 }
 
 export async function importConfig(data: unknown): Promise<ImportConfigResult> {
-  const res = await fetch(`${BASE_URL}/config/import`, {
+  const res = await fetch(`${getApiBase()}/config/import`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -37,7 +41,7 @@ async function handleToolRegistryJson<T>(res: Response): Promise<T> {
 }
 
 export async function fetchToolRegistry(): Promise<ToolRegistryData> {
-  return handleToolRegistryJson(await fetch(`${BASE_URL}/tool-registry`));
+  return handleToolRegistryJson(await fetch(`${getApiBase()}/tool-registry`));
 }
 
 /**
@@ -48,7 +52,7 @@ export async function fetchToolRegistry(): Promise<ToolRegistryData> {
  */
 export async function registerTool(engine: ToolRegistryEngine, version: string, paths: Record<string, string>): Promise<void> {
   await handleToolRegistryJson(
-    await fetch(`${BASE_URL}/tool-registry/${engine}/register`, {
+    await fetch(`${getApiBase()}/tool-registry/${engine}/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ version, ...paths }),
@@ -58,7 +62,7 @@ export async function registerTool(engine: ToolRegistryEngine, version: string, 
 
 export async function unregisterTool(engine: ToolRegistryEngine, version: string): Promise<void> {
   await handleToolRegistryJson(
-    await fetch(`${BASE_URL}/tool-registry/${engine}/unregister`, {
+    await fetch(`${getApiBase()}/tool-registry/${engine}/unregister`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ version }),

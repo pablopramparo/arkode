@@ -1,7 +1,5 @@
 import type { BackupTask, BackupStrategyKind, DbEngine, ScheduleFrequency, DirectDumpCompatibilityResult } from 'engine-core';
-
-// Dev-time only: talks to `engine-cli serve` directly over HTTP — see statusClient.ts.
-const BASE_URL = 'http://127.0.0.1:4287';
+import { getApiBase } from './apiBase';
 
 export interface TaskRow extends BackupTask {
   clientName: string;
@@ -59,12 +57,12 @@ async function handleJson<T>(res: Response): Promise<T> {
 
 export async function fetchTasks(opts: { includeInactive?: boolean } = {}): Promise<TaskRow[]> {
   const query = opts.includeInactive ? '?includeInactive=true' : '';
-  return handleJson(await fetch(`${BASE_URL}/tasks${query}`));
+  return handleJson(await fetch(`${getApiBase()}/tasks${query}`));
 }
 
 export async function createTask(input: TaskInput): Promise<CreatedTask> {
   return handleJson(
-    await fetch(`${BASE_URL}/tasks`, {
+    await fetch(`${getApiBase()}/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -74,7 +72,7 @@ export async function createTask(input: TaskInput): Promise<CreatedTask> {
 
 export async function updateTask(id: string, patch: TaskUpdateInput): Promise<BackupTask> {
   return handleJson(
-    await fetch(`${BASE_URL}/tasks/${id}`, {
+    await fetch(`${getApiBase()}/tasks/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -93,7 +91,7 @@ export interface SetTaskScheduleInput {
 }
 
 export async function setTaskSchedule(id: string, input: SetTaskScheduleInput): Promise<BackupTask> {
-  const res = await fetch(`${BASE_URL}/tasks/${id}/schedule`, {
+  const res = await fetch(`${getApiBase()}/tasks/${id}/schedule`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
@@ -107,9 +105,9 @@ export async function setTaskSchedule(id: string, input: SetTaskScheduleInput): 
 }
 
 export async function deactivateTask(id: string): Promise<void> {
-  await handleJson(await fetch(`${BASE_URL}/tasks/${id}/deactivate`, { method: 'POST' }));
+  await handleJson(await fetch(`${getApiBase()}/tasks/${id}/deactivate`, { method: 'POST' }));
 }
 
 export async function reactivateTask(id: string): Promise<void> {
-  await handleJson(await fetch(`${BASE_URL}/tasks/${id}/reactivate`, { method: 'POST' }));
+  await handleJson(await fetch(`${getApiBase()}/tasks/${id}/reactivate`, { method: 'POST' }));
 }

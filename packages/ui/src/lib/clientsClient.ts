@@ -1,7 +1,5 @@
 import type { Client } from 'engine-core';
-
-// Dev-time only: talks to `engine-cli serve` directly over HTTP — see statusClient.ts.
-const BASE_URL = 'http://127.0.0.1:4287';
+import { getApiBase } from './apiBase';
 
 export interface ClientWithTaskCount extends Client {
   taskCount: number;
@@ -23,12 +21,12 @@ async function handleJson<T>(res: Response): Promise<T> {
 
 export async function fetchClients(opts: { includeInactive?: boolean } = {}): Promise<ClientWithTaskCount[]> {
   const query = opts.includeInactive ? '?includeInactive=true' : '';
-  return handleJson(await fetch(`${BASE_URL}/clients${query}`));
+  return handleJson(await fetch(`${getApiBase()}/clients${query}`));
 }
 
 export async function createClient(input: ClientInput): Promise<Client> {
   return handleJson(
-    await fetch(`${BASE_URL}/clients`, {
+    await fetch(`${getApiBase()}/clients`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -38,7 +36,7 @@ export async function createClient(input: ClientInput): Promise<Client> {
 
 export async function updateClient(id: string, patch: Partial<ClientInput>): Promise<Client> {
   return handleJson(
-    await fetch(`${BASE_URL}/clients/${id}`, {
+    await fetch(`${getApiBase()}/clients/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -47,11 +45,11 @@ export async function updateClient(id: string, patch: Partial<ClientInput>): Pro
 }
 
 export async function deactivateClient(id: string): Promise<void> {
-  await handleJson(await fetch(`${BASE_URL}/clients/${id}/deactivate`, { method: 'POST' }));
+  await handleJson(await fetch(`${getApiBase()}/clients/${id}/deactivate`, { method: 'POST' }));
 }
 
 export async function reactivateClient(id: string): Promise<void> {
-  await handleJson(await fetch(`${BASE_URL}/clients/${id}/reactivate`, { method: 'POST' }));
+  await handleJson(await fetch(`${getApiBase()}/clients/${id}/reactivate`, { method: 'POST' }));
 }
 
 export type { Client };

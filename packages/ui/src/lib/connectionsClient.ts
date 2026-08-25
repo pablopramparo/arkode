@@ -1,7 +1,5 @@
 import type { ConnectionTestResult, Transport, DatabaseConnection } from 'engine-core';
-
-// Dev-time only: talks to `engine-cli serve` directly over HTTP — see statusClient.ts.
-const BASE_URL = 'http://127.0.0.1:4287';
+import { getApiBase } from './apiBase';
 
 export interface TransportWithClientName extends Transport {
   clientName: string;
@@ -56,12 +54,12 @@ async function handleJson<T>(res: Response): Promise<T> {
 
 export async function fetchConnections(opts: { includeInactive?: boolean } = {}): Promise<ConnectionsData> {
   const query = opts.includeInactive ? '?includeInactive=true' : '';
-  return handleJson(await fetch(`${BASE_URL}/connections${query}`));
+  return handleJson(await fetch(`${getApiBase()}/connections${query}`));
 }
 
 export async function createTransport(input: TransportInput): Promise<Transport> {
   return handleJson(
-    await fetch(`${BASE_URL}/transports`, {
+    await fetch(`${getApiBase()}/transports`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -71,7 +69,7 @@ export async function createTransport(input: TransportInput): Promise<Transport>
 
 export async function updateTransport(id: string, patch: Partial<TransportInput>): Promise<Transport> {
   return handleJson(
-    await fetch(`${BASE_URL}/transports/${id}`, {
+    await fetch(`${getApiBase()}/transports/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -80,15 +78,15 @@ export async function updateTransport(id: string, patch: Partial<TransportInput>
 }
 
 export async function deactivateTransport(id: string): Promise<void> {
-  await handleJson(await fetch(`${BASE_URL}/transports/${id}/deactivate`, { method: 'POST' }));
+  await handleJson(await fetch(`${getApiBase()}/transports/${id}/deactivate`, { method: 'POST' }));
 }
 
 export async function reactivateTransport(id: string): Promise<void> {
-  await handleJson(await fetch(`${BASE_URL}/transports/${id}/reactivate`, { method: 'POST' }));
+  await handleJson(await fetch(`${getApiBase()}/transports/${id}/reactivate`, { method: 'POST' }));
 }
 
 export async function testTransport(id: string): Promise<ConnectionTestResult> {
-  const res = await fetch(`${BASE_URL}/transports/${id}/test`, { method: 'POST' });
+  const res = await fetch(`${getApiBase()}/transports/${id}/test`, { method: 'POST' });
   const body = await res.json();
   if (res.status === 404 || res.status === 500) throw new Error(body.error ?? `Request failed: ${res.status}`);
   return body;
@@ -96,7 +94,7 @@ export async function testTransport(id: string): Promise<ConnectionTestResult> {
 
 export async function createDatabaseConnection(input: DatabaseConnectionInput): Promise<DatabaseConnection> {
   return handleJson(
-    await fetch(`${BASE_URL}/database-connections`, {
+    await fetch(`${getApiBase()}/database-connections`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -106,7 +104,7 @@ export async function createDatabaseConnection(input: DatabaseConnectionInput): 
 
 export async function updateDatabaseConnection(id: string, patch: Partial<DatabaseConnectionInput>): Promise<DatabaseConnection> {
   return handleJson(
-    await fetch(`${BASE_URL}/database-connections/${id}`, {
+    await fetch(`${getApiBase()}/database-connections/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -115,15 +113,15 @@ export async function updateDatabaseConnection(id: string, patch: Partial<Databa
 }
 
 export async function deactivateDatabaseConnection(id: string): Promise<void> {
-  await handleJson(await fetch(`${BASE_URL}/database-connections/${id}/deactivate`, { method: 'POST' }));
+  await handleJson(await fetch(`${getApiBase()}/database-connections/${id}/deactivate`, { method: 'POST' }));
 }
 
 export async function reactivateDatabaseConnection(id: string): Promise<void> {
-  await handleJson(await fetch(`${BASE_URL}/database-connections/${id}/reactivate`, { method: 'POST' }));
+  await handleJson(await fetch(`${getApiBase()}/database-connections/${id}/reactivate`, { method: 'POST' }));
 }
 
 export async function testDatabaseConnection(id: string): Promise<ConnectionTestResult> {
-  const res = await fetch(`${BASE_URL}/database-connections/${id}/test`, { method: 'POST' });
+  const res = await fetch(`${getApiBase()}/database-connections/${id}/test`, { method: 'POST' });
   const body = await res.json();
   if (res.status === 404 || res.status === 500) throw new Error(body.error ?? `Request failed: ${res.status}`);
   return body;

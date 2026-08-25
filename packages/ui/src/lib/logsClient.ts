@@ -1,7 +1,5 @@
 import type { LogEvent, LogEventLevel } from 'engine-core';
-
-// Dev-time only: talks to `engine-cli serve` directly over HTTP — see statusClient.ts.
-const BASE_URL = 'http://127.0.0.1:4287';
+import { getApiBase } from './apiBase';
 
 export interface LogEventRow extends LogEvent {
   clientId: string | null;
@@ -35,7 +33,7 @@ export async function fetchLogs(opts: FetchLogsOptions = {}): Promise<LogsResult
   if (opts.limit) params.set('limit', String(opts.limit));
   if (opts.offset) params.set('offset', String(opts.offset));
   const query = params.toString();
-  const res = await fetch(`${BASE_URL}/logs${query ? `?${query}` : ''}`);
+  const res = await fetch(`${getApiBase()}/logs${query ? `?${query}` : ''}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Request failed: ${res.status}`);

@@ -1631,18 +1631,36 @@ program
     // perspective (the webview just gets connection-refused on every fetch,
     // no diagnostic anywhere). Same class of gotcha already documented and
     // fixed for the raw ssh2 Client in transports/sshAdapter.ts.
+    //
+    // On EADDRINUSE for the *preferred* port, fall back to an OS-assigned
+    // free port (`listen(0, ...)`) instead of giving up outright -- a fixed
+    // port can always collide with something else on a client's machine.
+    // The actual bound port is then the one thing that matters to whoever
+    // needs to reach this server, so it's logged on its own machine-readable
+    // `PORT=<n>` line regardless of whether the preferred port or the
+    // fallback was used; the production Tauri shell parses that line out of
+    // the sidecar's stdout (see lib.rs) to learn where to actually point the
+    // webview instead of assuming the preferred port was free.
+    let usedFallback = false;
     server.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        console.error(`Port ${port} is already in use by another process on this machine -- cannot start the local server.`);
-      } else {
-        console.error(`Failed to start the local server: ${err.message}`);
+      if (err.code === 'EADDRINUSE' && !usedFallback) {
+        usedFallback = true;
+        console.error(`Port ${port} is already in use on this machine -- falling back to an OS-assigned free port.`);
+        server.listen(0, '127.0.0.1');
+        return;
       }
+      console.error(`Failed to start the local server: ${err.message}`);
       process.exit(1);
     });
 
-    server.listen(port, '127.0.0.1', () => {
-      console.log(`Serving dashboard status at http://127.0.0.1:${port}/status (Ctrl+C to stop)`);
+    server.on('listening', () => {
+      const addr = server.address();
+      const actualPort = addr && typeof addr === 'object' ? addr.port : port;
+      console.log(`PORT=${actualPort}`);
+      console.log(`Serving dashboard status at http://127.0.0.1:${actualPort}/status (Ctrl+C to stop)`);
     });
+
+    server.listen(port, '127.0.0.1');
   });
 
 program.parseAsync(process.argv).catch((err) => {

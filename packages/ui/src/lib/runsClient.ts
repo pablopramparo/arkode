@@ -1,7 +1,5 @@
 import type { BackupRun } from 'engine-core';
-
-// Dev-time only: talks to `engine-cli serve` directly over HTTP — see statusClient.ts.
-const BASE_URL = 'http://127.0.0.1:4287';
+import { getApiBase } from './apiBase';
 
 export interface RunRow extends BackupRun {
   clientName: string | null;
@@ -14,7 +12,7 @@ export async function fetchRuns(opts: { taskId?: string; clientId?: string; limi
   if (opts.clientId) params.set('clientId', opts.clientId);
   if (opts.limit) params.set('limit', String(opts.limit));
   const query = params.toString();
-  const res = await fetch(`${BASE_URL}/runs${query ? `?${query}` : ''}`);
+  const res = await fetch(`${getApiBase()}/runs${query ? `?${query}` : ''}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Request failed: ${res.status}`);
@@ -24,7 +22,7 @@ export async function fetchRuns(opts: { taskId?: string; clientId?: string; limi
 
 /** A direct download link — the file streams from the server, so this is used as a plain <a href>, never fetched via JS (a multi-GB dump has no business going through a JS Blob). */
 export function downloadRunUrl(runId: string): string {
-  return `${BASE_URL}/runs/${runId}/download`;
+  return `${getApiBase()}/runs/${runId}/download`;
 }
 
 export interface BackupsPage {
@@ -42,7 +40,7 @@ export async function fetchBackups(
   if (opts.limit) params.set('limit', String(opts.limit));
   if (opts.offset) params.set('offset', String(opts.offset));
   const query = params.toString();
-  const res = await fetch(`${BASE_URL}/backups${query ? `?${query}` : ''}`);
+  const res = await fetch(`${getApiBase()}/backups${query ? `?${query}` : ''}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Request failed: ${res.status}`);
