@@ -192,3 +192,13 @@ export function CloseIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function HelpCircleIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M9.3 9.3a2.7 2.7 0 0 1 5.2 1c0 1.7-2.5 1.9-2.5 3.5" />
+      <circle cx="12" cy="16.8" r="0.3" fill="currentColor" />
+    </svg>
+  );
+}

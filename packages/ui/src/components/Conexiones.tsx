@@ -15,9 +15,10 @@ import {
 import type { ConnectionTestResult } from 'engine-core';
 import { Switch } from './Switch';
 import { IconButton } from './IconButton';
-import { EditIcon, PulseIcon } from './icons';
+import { EditIcon, PulseIcon, HelpCircleIcon } from './icons';
 import { ConnectionEditModal } from './ConnectionEditModal';
 import { ConnectionCreateModal } from './ConnectionCreateModal';
+import { SshSetupGuide } from './SshSetupGuide';
 import { ClientLink } from './ClientLink';
 import { formatConnectionTestVersions } from '../lib/format';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
@@ -200,12 +201,15 @@ export function ConnectionFields({
   /** Pre-fills and locks the client selector — used when creating a connection from within a client's own ficha, where the client is already chosen. */
   fixedClientId?: string;
 }) {
+  const [showSshGuide, setShowSshGuide] = useState(false);
+
   function setKindAndType(kind: Kind, transportType: TransportType) {
     onChange({ kind, transportType, port: defaultPort(kind, values.engine, transportType) });
   }
 
   return (
     <div className="flex flex-col gap-3">
+      {showSshGuide && <SshSetupGuide onClose={() => setShowSshGuide(false)} />}
       {isCreate && (
         <Field label="Tipo *">
           <div className="flex gap-2">
@@ -337,6 +341,15 @@ export function ConnectionFields({
             </>
           ) : (
             <>
+              <button
+                type="button"
+                className="flex items-center gap-1.5 self-start text-xs"
+                style={{ color: 'var(--accent)' }}
+                onClick={() => setShowSshGuide(true)}
+              >
+                <HelpCircleIcon className="h-3.5 w-3.5" />
+                ¿Cómo configuro esto? (crear usuario, clave y comando de dump)
+              </button>
               <Field label="Comando remoto *">
                 <input
                   style={inputStyle}

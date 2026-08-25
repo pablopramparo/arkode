@@ -5,6 +5,8 @@ import { createTask, setTaskSchedule } from '../lib/tasksClient';
 import { createDatabaseConnection, createTransport, type ConnectionsData } from '../lib/connectionsClient';
 import { Modal } from './Modal';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
+import { HelpCircleIcon } from './icons';
+import { SshSetupGuide } from './SshSetupGuide';
 
 const STRATEGY_LABEL: Record<BackupStrategyKind, string> = {
   fetch_existing: 'SFTP existente',
@@ -170,8 +172,10 @@ function SegmentedButtons<T extends string>({
 
 /** The connection-specific fields for creating a brand-new transport/database connection inline — deliberately simpler than Conexiones.tsx's own form (no type/client selector; the strategy and client are already chosen one step up in this same wizard). */
 function NewConnectionFields({ values, onChange }: { values: FormValues; onChange: (patch: Partial<FormValues>) => void }) {
+  const [showSshGuide, setShowSshGuide] = useState(false);
   return (
     <>
+      {showSshGuide && <SshSetupGuide onClose={() => setShowSshGuide(false)} />}
       <Field label="Nombre de la conexión *">
         <input
           style={inputStyle}
@@ -285,6 +289,15 @@ function NewConnectionFields({ values, onChange }: { values: FormValues; onChang
             </Field>
           ) : (
             <>
+              <button
+                type="button"
+                className="flex items-center gap-1.5 self-start text-xs"
+                style={{ color: 'var(--accent)' }}
+                onClick={() => setShowSshGuide(true)}
+              >
+                <HelpCircleIcon className="h-3.5 w-3.5" />
+                ¿Cómo configuro esto? (crear usuario, clave y comando de dump)
+              </button>
               <Field label="Comando remoto *">
                 <input
                   style={inputStyle}
