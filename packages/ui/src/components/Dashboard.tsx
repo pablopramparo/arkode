@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
 import { fetchDashboardStatus, runTaskNow, testTaskConnection, type ConnectionTestResult, type DashboardRow } from '../lib/statusClient';
+import { IN_PROGRESS_RUN_STATUSES } from '../lib/tasksClient';
 import { formatAge, formatSize, ageInHours, formatConnectionTestVersions } from '../lib/format';
 import { StatusChip } from './StatusChip';
 import { StatCard } from './StatCard';
@@ -8,6 +9,7 @@ import { AlertTriangleIcon, CheckCircleIcon, ClipboardIcon, EyeIcon, PlayIcon, P
 import { primaryPillStyle } from '../lib/pillStyles';
 import { IconButton } from './IconButton';
 import { ClientLink } from './ClientLink';
+import { Spinner } from './Spinner';
 
 const POLL_INTERVAL_MS = 20_000;
 /** A daily backup task without a fresh file past this age is worth flagging, even if the last *attempt* technically succeeded a while ago. */
@@ -19,6 +21,15 @@ function isProblemRow(row: DashboardRow): boolean {
   if (row.status === 'Failed' || row.status === 'Warning' || row.status === 'NeverRun') return true;
   const hours = ageInHours(row.lastGoodBackupAt);
   return hours != null && hours > STALE_THRESHOLD_HOURS;
+}
+
+/**
+ * Whether the row's latest attempt is genuinely still going, per its own
+ * last-known status — see the same doc comment on isTaskInProgress in
+ * Tareas.tsx for why this is a UX nicety, not the real concurrency guard.
+ */
+function isRowInProgress(row: DashboardRow): boolean {
+  return (IN_PROGRESS_RUN_STATUSES as string[]).includes(row.status);
 }
 
 interface RowActionState {
@@ -212,11 +223,14 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                               size="sm"
                               className="rounded-full px-3"
                               style={primaryPillStyle}
-                              isDisabled={Boolean(state?.busy)}
+                              isDisabled={Boolean(state?.busy) || isRowInProgress(row)}
                               onPress={() => handleRun(row.taskId)}
                             >
-                              {state?.busy === 'run' ? (
-                                'Ejecutando…'
+                              {state?.busy === 'run' || isRowInProgress(row) ? (
+                                <span className="flex items-center gap-1.5">
+                                  <Spinner />
+                                  {isRowInProgress(row) && state?.busy !== 'run' ? 'En curso…' : 'Ejecutando…'}
+                                </span>
                               ) : (
                                 <span className="flex items-center gap-1.5">
                                   <PlayIcon className="h-3.5 w-3.5" />

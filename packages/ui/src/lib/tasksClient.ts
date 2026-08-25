@@ -1,10 +1,15 @@
-import type { BackupTask, BackupStrategyKind, DbEngine, ScheduleFrequency, DirectDumpCompatibilityResult } from 'engine-core';
+import type { BackupTask, BackupRunStatus, BackupStrategyKind, DbEngine, ScheduleFrequency, DirectDumpCompatibilityResult } from 'engine-core';
 import { getApiBase } from './apiBase';
+
+/** True while a run is genuinely in progress — matches runsRepo.ts's own listInProgress query, which is what runBackupTask.ts's app-level lock is built on. */
+export const IN_PROGRESS_RUN_STATUSES: BackupRunStatus[] = ['Running', 'Producing', 'Validating'];
 
 export interface TaskRow extends BackupTask {
   clientName: string;
   transportName: string | null;
   databaseConnectionName: string | null;
+  /** The task's latest attempt, whatever it is — null if it's never run. Lets the UI disable/relabel "Ejecutar ahora" while a run is genuinely in progress, without its own polling. */
+  latestRunStatus: BackupRunStatus | null;
 }
 
 export interface TaskInput {

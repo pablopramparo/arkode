@@ -1477,11 +1477,18 @@ program
             .map((t) => {
               const transport = t.transportId ? ctx.transportsRepo.getById(t.transportId) : null;
               const databaseConnection = t.databaseConnectionId ? ctx.databaseConnectionsRepo.getById(t.databaseConnectionId) : null;
+              // Lets a caller (the UI) disable/relabel "Ejecutar ahora" while a
+              // run is genuinely in progress, without needing its own polling
+              // loop — the engine's own app-level lock in runBackupTask.ts is
+              // still what actually prevents a double-run; this is purely a
+              // UX nicety on top of that already-safe guarantee.
+              const latestRun = ctx.runsRepo.getLatestByTask(t.id);
               return {
                 ...t,
                 clientName: client.name,
                 transportName: transport?.name ?? null,
                 databaseConnectionName: databaseConnection?.name ?? null,
+                latestRunStatus: latestRun?.status ?? null,
               };
             })
         );

@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
 import type { BackupStrategyKind, ConnectionTestResult, DirectDumpCompatibilityResult } from 'engine-core';
-import { deactivateTask, fetchTasks, reactivateTask, type TaskRow } from '../lib/tasksClient';
+import { deactivateTask, fetchTasks, reactivateTask, IN_PROGRESS_RUN_STATUSES, type TaskRow } from '../lib/tasksClient';
 import { fetchConnections, type ConnectionsData } from '../lib/connectionsClient';
 import { runTaskNow, testTaskConnection, testTaskCompatibility } from '../lib/statusClient';
 import { Switch } from './Switch';
@@ -13,12 +13,26 @@ import { formatSchedule, formatConnectionTestVersions } from '../lib/format';
 import { TaskCreateWizard } from './TaskCreateWizard';
 import { TaskEditModal } from './TaskEditModal';
 import { ClientLink } from './ClientLink';
+import { Spinner } from './Spinner';
 
 const STRATEGY_LABEL: Record<BackupStrategyKind, string> = {
   fetch_existing: 'SFTP existente',
   remote_dump: 'SSH remoto',
   direct_dump: 'Conexión directa a BD',
 };
+
+/**
+ * Whether the task's latest attempt is genuinely still going, per its own
+ * last-known status — not a guarantee (the list only refreshes on demand,
+ * not continuously), but enough to stop someone from clicking "Ejecutar
+ * ahora" a second time while one is already running. The real safety net
+ * is runBackupTask.ts's own app-level lock (which also recovers a status
+ * that got stuck because its owning process died) — this is a UX nicety
+ * on top of that, never the only thing preventing a double-run.
+ */
+export function isTaskInProgress(task: TaskRow): boolean {
+  return task.latestRunStatus != null && IN_PROGRESS_RUN_STATUSES.includes(task.latestRunStatus);
+}
 
 function StrategyBadge({ strategy }: { strategy: BackupStrategyKind }) {
   return (
@@ -191,11 +205,14 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
                                 size="sm"
                                 className="rounded-full px-3"
                                 style={primaryPillStyle}
-                                isDisabled={Boolean(state?.busy)}
+                                isDisabled={Boolean(state?.busy) || isTaskInProgress(task)}
                                 onPress={() => handleRun(task)}
                               >
-                                {state?.busy === 'run' ? (
-                                  'Ejecutando…'
+                                {state?.busy === 'run' || isTaskInProgress(task) ? (
+                                  <span className="flex items-center gap-1.5">
+                                    <Spinner />
+                                    {isTaskInProgress(task) && state?.busy !== 'run' ? 'En curso…' : 'Ejecutando…'}
+                                  </span>
                                 ) : (
                                   <span className="flex items-center gap-1.5">
                                     <PlayIcon className="h-3.5 w-3.5" />
