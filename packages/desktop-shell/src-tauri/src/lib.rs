@@ -1,8 +1,22 @@
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::Mutex;
 use tauri::{Manager, RunEvent};
 use tauri_plugin_autostart::MacosLauncher;
-use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+
+/// Mirrors engine-core's paths.ts logsDir() (CODEBIUS_APP_DATA_DIR override,
+/// else %PROGRAMDATA%\arkode\logs) without depending on any TypeScript code
+/// -- this is Rust-side only, used solely to find where to append the
+/// sidecar's own stdout/stderr.
+fn logs_dir() -> std::path::PathBuf {
+  let app_data_dir = std::env::var("CODEBIUS_APP_DATA_DIR").unwrap_or_else(|_| {
+    let program_data = std::env::var("PROGRAMDATA").unwrap_or_else(|_| "C:\\ProgramData".to_string());
+    format!("{program_data}\\arkode")
+  });
+  std::path::PathBuf::from(app_data_dir).join("logs")
+}
 
 /// Holds the spawned engine-cli sidecar's handle so it can be killed when
 /// the app exits — a real install has no dev-time process to fall back on,
@@ -67,7 +81,7 @@ pub fn run() {
             .to_string()
         };
 
-        let (_rx, child) = app
+        let (mut rx, child) = app
           .shell()
           .sidecar("engine-cli")
           .expect("failed to resolve the engine-cli sidecar binary")
@@ -80,6 +94,35 @@ pub fn run() {
           .spawn()
           .expect("failed to spawn the engine-cli sidecar");
         *app.state::<EngineProcess>().0.lock().unwrap() = Some(child);
+
+        // Without this, the sidecar's own stdout/stderr (e.g. the "Port 4287
+        // is already in use" message engine-cli's `serve` command now logs
+        // instead of crashing unhandled) went nowhere in a real install --
+        // there's no visible terminal here like there is in the dev
+        // workflow, so a startup failure was completely silent with no
+        // diagnostic trail anywhere, not even a log file. Appended to
+        // sidecar.log under the same app-data logs directory the rest of
+        // the app already uses, so there's one place to check.
+        tauri::async_runtime::spawn(async move {
+          let log_path = logs_dir().join("sidecar.log");
+          if let Some(parent) = log_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+          }
+          while let Some(event) = rx.recv().await {
+            let line = match event {
+              CommandEvent::Stdout(bytes) => Some(format!("[stdout] {}", String::from_utf8_lossy(&bytes))),
+              CommandEvent::Stderr(bytes) => Some(format!("[stderr] {}", String::from_utf8_lossy(&bytes))),
+              CommandEvent::Error(err) => Some(format!("[error] {err}")),
+              CommandEvent::Terminated(payload) => Some(format!("[terminated] code={:?} signal={:?}", payload.code, payload.signal)),
+              _ => None,
+            };
+            if let Some(line) = line {
+              if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
+                let _ = writeln!(file, "{}", line.trim_end());
+              }
+            }
+          }
+        });
       }
       Ok(())
     })

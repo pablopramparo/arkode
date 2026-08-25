@@ -1623,6 +1623,23 @@ program
       sendJson(res, 404, { error: 'not found' });
     });
 
+    // Without this, a bind failure (most commonly EADDRINUSE -- something
+    // else on the machine already holds this port) is an unhandled 'error'
+    // event on the underlying EventEmitter, which crashes the whole process
+    // with an opaque, uncaught-exception stack trace -- in production this
+    // is the Tauri sidecar, so that crash would be silent from the user's
+    // perspective (the webview just gets connection-refused on every fetch,
+    // no diagnostic anywhere). Same class of gotcha already documented and
+    // fixed for the raw ssh2 Client in transports/sshAdapter.ts.
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`Port ${port} is already in use by another process on this machine -- cannot start the local server.`);
+      } else {
+        console.error(`Failed to start the local server: ${err.message}`);
+      }
+      process.exit(1);
+    });
+
     server.listen(port, '127.0.0.1', () => {
       console.log(`Serving dashboard status at http://127.0.0.1:${port}/status (Ctrl+C to stop)`);
     });
