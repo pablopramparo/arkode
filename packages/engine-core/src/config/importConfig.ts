@@ -24,13 +24,21 @@ export interface ImportConfigDeps {
  * certainly wrong here) — `needsManualCopy` is set in that fallback case so
  * the caller can flag it, but only once the transport is actually created.
  */
-function resolveImportedPrivateKeyPath(t: ExportedTransport, keysDir: string): { path: string; needsManualCopy?: string } {
+function resolveImportedPrivateKeyPath(
+  t: ExportedTransport,
+  importedKeysDir: string | undefined,
+): { path: string; needsManualCopy?: string } {
   if (t.privateKeyContentBase64 == null) {
     return {
       path: t.privateKeyPath,
       needsManualCopy: `transport "${t.name}" — its private key file couldn't be included in the export (missing or unreadable at export time); copy "${t.privateKeyPath}" to this machine manually and update the transport's private key path`,
     };
   }
+  // paths.keysDir() (the real machine app-data directory) is only ever
+  // resolved here, in the one branch that actually writes a file — a
+  // transport with no key content to restore (the common case in this
+  // spec's own fixtures) must never touch it at all.
+  const keysDir = importedKeysDir ?? defaultKeysDir();
   mkdirSync(keysDir, { recursive: true });
   const localPath = join(keysDir, `${randomUUID()}.key`);
   writeFileSync(localPath, Buffer.from(t.privateKeyContentBase64, 'base64'), { mode: 0o600 });
@@ -95,14 +103,7 @@ function importOneClient(exported: ExportedClient, deps: ImportConfigDeps): Impo
   const transportIdByName = new Map<string, string>();
   for (const t of exported.transports) {
     try {
-      // Resolved per-transport, not once up front: a client with no
-      // transports (or none needing a restored key) must never touch
-      // paths.keysDir() at all — it resolves to the real machine app-data
-      // directory when deps.importedKeysDir isn't overridden, which is
-      // wrong both in tests (no PROGRAMDATA on a non-Windows CI runner) and
-      // for an import that never actually restores a key.
-      const keysDir = deps.importedKeysDir ?? defaultKeysDir();
-      const { path: privateKeyPath, needsManualCopy } = resolveImportedPrivateKeyPath(t, keysDir);
+      const { path: privateKeyPath, needsManualCopy } = resolveImportedPrivateKeyPath(t, deps.importedKeysDir);
       const created =
         t.type === 'sftp'
           ? deps.transportsRepo.createSftp({
