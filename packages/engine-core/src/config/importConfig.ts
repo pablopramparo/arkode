@@ -92,10 +92,16 @@ function importOneClient(exported: ExportedClient, deps: ImportConfigDeps): Impo
     return result; // nothing else can be created without a client
   }
 
-  const keysDir = deps.importedKeysDir ?? defaultKeysDir();
   const transportIdByName = new Map<string, string>();
   for (const t of exported.transports) {
     try {
+      // Resolved per-transport, not once up front: a client with no
+      // transports (or none needing a restored key) must never touch
+      // paths.keysDir() at all — it resolves to the real machine app-data
+      // directory when deps.importedKeysDir isn't overridden, which is
+      // wrong both in tests (no PROGRAMDATA on a non-Windows CI runner) and
+      // for an import that never actually restores a key.
+      const keysDir = deps.importedKeysDir ?? defaultKeysDir();
       const { path: privateKeyPath, needsManualCopy } = resolveImportedPrivateKeyPath(t, keysDir);
       const created =
         t.type === 'sftp'
