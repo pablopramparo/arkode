@@ -329,7 +329,7 @@ export function Configuracion() {
             <Switch
               checked={autostart ?? false}
               onChange={handleToggleAutostart}
-              label={autostartBusy ? 'Actualizando…' : 'Iniciar Arkode automáticamente al iniciar Windows'}
+              label={autostartBusy ? 'Actualizando…' : 'Iniciar arkode automáticamente al iniciar Windows'}
             />
             <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
               Esto solo afecta si el Dashboard se abre solo al prender la PC — los backups programados corren igual
@@ -364,7 +364,7 @@ export function Configuracion() {
               ) : (
                 <>
                   <span className="text-xs" style={{ color: 'var(--success)' }}>
-                    Instalada. Hay que reiniciar Arkode para aplicarla.
+                    Instalada. Hay que reiniciar arkode para aplicarla.
                   </span>
                   <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => relaunch()}>
                     Reiniciar ahora

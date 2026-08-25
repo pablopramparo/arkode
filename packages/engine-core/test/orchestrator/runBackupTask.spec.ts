@@ -9,7 +9,7 @@ import { createTestContext, type TestContext } from '../helpers/testContext.js';
 import { withTempDir } from '../helpers/tempDir.js';
 
 // runBackupTask logs via createRunLogger(), which resolves a real file path
-// under appDataDir() (normally %APPDATA%\CodebiusBackupManager). Redirect it
+// under appDataDir() (normally %PROGRAMDATA%\arkode). Redirect it
 // to a throwaway temp dir for the whole suite so tests never touch the
 // real app-data location.
 let appDataDir: string;

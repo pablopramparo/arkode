@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-const APP_DIR_NAME = 'CodebiusBackupManager';
+const APP_DIR_NAME = 'arkode';
 
 /**
  * All config/history/logs live under ProgramData, never inside the install

@@ -36,7 +36,7 @@ import { buildContext } from './context.js';
 import { confirmHostInteractively } from './confirmHost.js';
 
 const program = new Command();
-program.name('engine-cli').description('Codebius Backup Manager engine CLI').version('0.0.0');
+program.name('engine-cli').description('arkode engine CLI').version('0.0.0');
 
 program
   .command('migrate')
@@ -711,7 +711,7 @@ program
 
     await installScheduledTask({
       taskName,
-      description: `Codebius Backup Manager - scheduled run for task "${task.name}"`,
+      description: `arkode - scheduled run for task "${task.name}"`,
       scheduleTime: task.scheduleTime,
       command: process.execPath,
       arguments: isPkgExe ? `run-due --task ${taskId}` : `"${scriptPath}" run-due --task ${taskId}`,

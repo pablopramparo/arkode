@@ -10,7 +10,7 @@ const execFileAsync = promisify(execFile);
 
 /** Groups every task this app creates under one visible folder in Task Scheduler's own UI. */
 export function scheduledTaskNameForBackupTask(taskId: string): string {
-  return `\\CodebiusBackupManager\\${taskId}`;
+  return `\\arkode\\${taskId}`;
 }
 
 export interface InstallScheduledTaskInput extends TaskDefinitionInput {

@@ -1,4 +1,4 @@
--- Codebius Backup Manager — initial schema.
+-- arkode — initial schema.
 -- Three separate concepts: backup strategy (backup_tasks.strategy),
 -- transport (transports — SFTP/SSH byte movement), and database connection
 -- (database_connections — direct DB credentials, used only by direct_dump).
