@@ -1,0 +1,14 @@
+{
+  "name": "desktop-shell",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "prepare-sidecar": "node scripts/prepare-sidecar.mjs",
+    "prepare-pg-tools": "node scripts/prepare-pg-tools.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

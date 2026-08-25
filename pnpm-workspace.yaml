@@ -5,3 +5,4 @@ allowBuilds:
   cpu-features: true
   esbuild: true
   ssh2: true
+  "@primno/dpapi": true

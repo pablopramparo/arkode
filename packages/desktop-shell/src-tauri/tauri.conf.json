@@ -1,0 +1,65 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "arkode",
+  "version": "0.1.1",
+  "identifier": "com.codebius.arkode",
+  "build": {
+    "frontendDist": "../../ui/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm --filter ui dev",
+    "beforeBuildCommand": "pnpm --filter desktop-shell prepare-sidecar && pnpm --filter desktop-shell prepare-pg-tools && pnpm --filter ui build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "arkode by codebius",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "shadow": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "copyright": "© 2026 Codebius",
+    "externalBin": [
+      "binaries/engine-cli"
+    ],
+    "resources": [
+      "resources/pgsql/bin/*"
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh",
+        "headerImage": "installer-assets/header.bmp",
+        "sidebarImage": "installer-assets/sidebar.bmp",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "languages": [
+          "SpanishInternational",
+          "English"
+        ],
+        "installMode": "perMachine"
+      }
+    },
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}
