@@ -11,12 +11,10 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
     <div
       className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4"
       style={{ backgroundColor: 'color-mix(in oklab, black 60%, transparent)' }}
-      onClick={onClose}
     >
       <div
         className="flex max-h-[85vh] w-full max-w-md flex-col rounded-lg border shadow-xl"
         style={{ backgroundColor: 'var(--background)', borderColor: 'var(--border)' }}
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between px-5 pt-5">
           <h2 className="text-base font-semibold">{title}</h2>
