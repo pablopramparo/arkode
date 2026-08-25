@@ -104,11 +104,22 @@ export function createRunsRepo(db: Database): RunsRepo {
        (@id, @taskId, @clientId, @strategy, @transportId, @databaseConnectionId, 'Pending', strftime('%Y-%m-%dT%H:%M:%fZ','now'), @pid)`
   );
   const getStmt = db.prepare<[string], BackupRunRow>('SELECT * FROM backup_runs WHERE id = ?');
+  // `, rowid DESC` on every "newest first" query below is a real, hit-in-CI
+  // tiebreaker, not defensive styling: started_at's strftime('%f') resolution
+  // is milliseconds, and with an in-memory DB and a fake (zero-I/O-delay)
+  // executor, two runs in the same test can genuinely share a millisecond on
+  // a fast enough machine -- confirmed 2026-08-25 on a GitHub-hosted Windows
+  // runner (never reproduced on the slower dev machine this was built on).
+  // `ORDER BY started_at DESC` alone leaves ties in an unspecified order, so
+  // retention's "the newest run is never a delete candidate" invariant could
+  // pick the wrong run as "newest" on a tie. rowid reliably reflects
+  // insertion order for this table (TEXT PRIMARY KEY, no WITHOUT ROWID), so
+  // it's a free, always-correct tiebreaker with no schema change needed.
   const getLatestByTaskStmt = db.prepare<[string], BackupRunRow>(
-    'SELECT * FROM backup_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1'
+    'SELECT * FROM backup_runs WHERE task_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1'
   );
   const getLatestWithFileByTaskStmt = db.prepare<[string], BackupRunRow>(
-    `SELECT * FROM backup_runs WHERE task_id = ? AND local_path IS NOT NULL ORDER BY started_at DESC LIMIT 1`
+    `SELECT * FROM backup_runs WHERE task_id = ? AND local_path IS NOT NULL ORDER BY started_at DESC, rowid DESC LIMIT 1`
   );
   const setStatusStmt = db.prepare('UPDATE backup_runs SET status = ? WHERE id = ?');
   const markProducingStmt = db.prepare(`UPDATE backup_runs SET status = 'Producing' WHERE id = ?`);
@@ -141,7 +152,7 @@ export function createRunsRepo(db: Database): RunsRepo {
   // correspond to an actual file on disk and must never occupy a "kept
   // backup" slot for retention purposes.
   const successfulRunsStmt = db.prepare<[string], BackupRunRow>(
-    `SELECT * FROM backup_runs WHERE task_id = ? AND status = 'Success' AND local_path IS NOT NULL ORDER BY started_at DESC`
+    `SELECT * FROM backup_runs WHERE task_id = ? AND status = 'Success' AND local_path IS NOT NULL ORDER BY started_at DESC, rowid DESC`
   );
   const inProgressStmt = db.prepare<[string], BackupRunRow>(
     `SELECT * FROM backup_runs WHERE task_id = ? AND status IN ('Running','Producing','Validating')`
@@ -153,7 +164,7 @@ export function createRunsRepo(db: Database): RunsRepo {
     `SELECT * FROM backup_runs
      WHERE (@taskId IS NULL OR task_id = @taskId)
        AND (@clientId IS NULL OR client_id = @clientId)
-     ORDER BY started_at DESC
+     ORDER BY started_at DESC, rowid DESC
      LIMIT @limit`
   );
   const listBackupsWhereClause = `
@@ -163,7 +174,7 @@ export function createRunsRepo(db: Database): RunsRepo {
       AND local_path IS NOT NULL
   `;
   const listBackupsStmt = db.prepare<Record<string, unknown>, BackupRunRow>(
-    `SELECT * FROM backup_runs ${listBackupsWhereClause} ORDER BY started_at DESC LIMIT @limit OFFSET @offset`
+    `SELECT * FROM backup_runs ${listBackupsWhereClause} ORDER BY started_at DESC, rowid DESC LIMIT @limit OFFSET @offset`
   );
   const countBackupsStmt = db.prepare<Record<string, unknown>, { total: number }>(
     `SELECT COUNT(*) AS total FROM backup_runs ${listBackupsWhereClause}`
