@@ -140,4 +140,44 @@ describe('buildHostVerifier', () => {
     await callVerifier(verifier, rawKey);
     expect(fired).toBe(false);
   });
+
+  // Regression: a host already in known_hosts whose presented key no longer
+  // matches (the server's host key rotated, e.g. after a reprovision) used to
+  // fall straight to verify(false) without ever calling onUnknownHostPresented
+  // — the caller had no way to learn *what* changed, so a caller like the UI
+  // (which can't do an interactive terminal prompt) had nothing to show
+  // besides the raw ssh2 "Host denied (verification failed)" error, with no
+  // path to resolve it. This must go through the same presented/confirm flow
+  // as a genuinely new host, carrying the old fingerprint for context.
+  it('fires onUnknownHostPresented (with previousFingerprintSha256) when a known host presents a different key', async () => {
+    const knownHosts = createFakeKnownHostsRepo();
+    knownHosts.recordConfirmed('host', 22, 'ssh-ed25519', 'the-old-fingerprint');
+    let presented: { keyType: string; fingerprintSha256: string; previousFingerprintSha256?: string } | undefined;
+    const verifier = buildHostVerifier('host', 22, knownHosts, undefined, undefined, (p) => (presented = p));
+    await callVerifier(verifier, rawKey);
+    expect(presented).toEqual({
+      keyType: 'ssh-ed25519',
+      fingerprintSha256: fingerprint,
+      previousFingerprintSha256: 'the-old-fingerprint',
+    });
+  });
+
+  it('accepts a rotated host key when the confirmation callback approves it, and updates the stored fingerprint', async () => {
+    const knownHosts = createFakeKnownHostsRepo();
+    knownHosts.recordConfirmed('host', 22, 'ssh-ed25519', 'the-old-fingerprint');
+    const verifier = buildHostVerifier('host', 22, knownHosts, undefined, async () => true);
+    await expect(callVerifier(verifier, rawKey)).resolves.toBe(true);
+
+    // A later connection with the new key is now trusted without re-prompting.
+    const secondVerifier = buildHostVerifier('host', 22, knownHosts, undefined, undefined);
+    await expect(callVerifier(secondVerifier, rawKey)).resolves.toBe(true);
+  });
+
+  it('does not pass a previousFingerprintSha256 for a genuinely never-seen host', async () => {
+    const knownHosts = createFakeKnownHostsRepo();
+    let presented: { keyType: string; fingerprintSha256: string; previousFingerprintSha256?: string } | undefined;
+    const verifier = buildHostVerifier('host', 22, knownHosts, undefined, undefined, (p) => (presented = p));
+    await callVerifier(verifier, rawKey);
+    expect(presented?.previousFingerprintSha256).toBeUndefined();
+  });
 });

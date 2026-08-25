@@ -567,10 +567,25 @@ export function Conexiones({ onSelectClient }: { onSelectClient: (clientId: stri
                             </span>
                           )}
                           {state?.testResult?.unknownHost && (
-                            <div className="flex flex-wrap items-center gap-2" style={{ color: 'var(--warning)' }}>
+                            <div
+                              className="flex flex-wrap items-center gap-2"
+                              style={{ color: state.testResult.unknownHost.previousFingerprintSha256 ? 'var(--danger)' : 'var(--warning)' }}
+                            >
                               <span>
-                                Host desconocido — {state.testResult.unknownHost.keyType}{' '}
-                                {state.testResult.unknownHost.fingerprintSha256}. ¿Confiás en este host?
+                                {state.testResult.unknownHost.previousFingerprintSha256 ? (
+                                  <>
+                                    ⚠ La clave del host cambió desde la última vez ({state.testResult.unknownHost.keyType},
+                                    ahora {state.testResult.unknownHost.fingerprintSha256}, antes{' '}
+                                    {state.testResult.unknownHost.previousFingerprintSha256}). Esto puede ser normal (el
+                                    servidor fue reinstalado) o indicar un problema de seguridad — confirmá con quien
+                                    administra el servidor antes de confiar.
+                                  </>
+                                ) : (
+                                  <>
+                                    Host desconocido — {state.testResult.unknownHost.keyType}{' '}
+                                    {state.testResult.unknownHost.fingerprintSha256}. ¿Confiás en este host?
+                                  </>
+                                )}
                               </span>
                               <Button
                                 size="sm"

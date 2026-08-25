@@ -93,7 +93,7 @@ export function createSshAdapter(config: SshTransportConfig, knownHosts: KnownHo
   // rejected connect()/exec() promises below, not through this listener.
   client.on('error', () => {});
   let connected = false;
-  let lastUnknownHost: { keyType: string; fingerprintSha256: string } | undefined;
+  let lastUnknownHost: { keyType: string; fingerprintSha256: string; previousFingerprintSha256?: string } | undefined;
 
   return {
     kind: 'ssh',

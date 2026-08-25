@@ -23,7 +23,7 @@ export function createSftpAdapter(config: SftpTransportConfig, knownHosts: Known
   // callers surface real failures via rejected promises, so this is a no-op.
   const client = new SftpClient(undefined, { error: () => {} });
   let connected = false;
-  let lastUnknownHost: { keyType: string; fingerprintSha256: string } | undefined;
+  let lastUnknownHost: { keyType: string; fingerprintSha256: string; previousFingerprintSha256?: string } | undefined;
 
   return {
     kind: 'sftp',

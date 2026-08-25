@@ -38,15 +38,18 @@ export interface ConnectionTestResult {
   localToolVersion?: string;
   /**
    * Set only when the connection failed specifically because the remote
-   * host's key isn't yet trusted (no pinned fingerprint, not already in
-   * knownHosts, and either no onUnknownHost handler was supplied or it
-   * declined) — never set for any other kind of failure. Lets a caller
-   * that can't do an interactive terminal prompt (the UI, going through
-   * serve) show its own "trust this host?" confirmation and retry with
-   * trustHost instead, rather than the raw ssh2 "Host denied
-   * (verification failed)" error being the end of the story.
+   * host's key isn't trusted — either genuinely never seen before, or
+   * already in knownHosts under a *different* fingerprint (the server's
+   * host key rotated, e.g. after a reprovision) — and either no
+   * onUnknownHost handler was supplied or it declined. Never set for any
+   * other kind of failure. Lets a caller that can't do an interactive
+   * terminal prompt (the UI, going through serve) show its own "trust this
+   * host?" confirmation and retry with trustHost instead, rather than the
+   * raw ssh2 "Host denied (verification failed)" error being the end of the
+   * story. previousFingerprintSha256 is set only for the "key changed" case,
+   * so the caller can warn more strongly than for a first-time trust.
    */
-  unknownHost?: { keyType: string; fingerprintSha256: string };
+  unknownHost?: { keyType: string; fingerprintSha256: string; previousFingerprintSha256?: string };
 }
 
 /** Capability every transport adapter provides, regardless of kind. */
@@ -98,7 +101,11 @@ export interface BaseTransportConfig {
   passphrase?: string;
   /** Pinned fingerprint; undefined means "unknown host, ask before proceeding." */
   knownHostFingerprint?: string;
-  onUnknownHost?: (presented: { keyType: string; fingerprintSha256: string }) => Promise<boolean>;
+  onUnknownHost?: (presented: {
+    keyType: string;
+    fingerprintSha256: string;
+    previousFingerprintSha256?: string;
+  }) => Promise<boolean>;
 }
 
 export interface SftpTransportConfig extends BaseTransportConfig {

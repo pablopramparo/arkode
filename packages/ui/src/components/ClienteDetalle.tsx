@@ -454,8 +454,13 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   </span>
                                 )}
                                 {state?.testResult?.unknownHost && (
-                                  <span className="flex flex-wrap items-center gap-2 text-xs" style={{ color: 'var(--warning)' }}>
-                                    Host desconocido — {state.testResult.unknownHost.fingerprintSha256}
+                                  <span
+                                    className="flex flex-wrap items-center gap-2 text-xs"
+                                    style={{ color: state.testResult.unknownHost.previousFingerprintSha256 ? 'var(--danger)' : 'var(--warning)' }}
+                                  >
+                                    {state.testResult.unknownHost.previousFingerprintSha256
+                                      ? `⚠ La clave del host cambió — ahora ${state.testResult.unknownHost.fingerprintSha256}, antes ${state.testResult.unknownHost.previousFingerprintSha256}`
+                                      : `Host desconocido — ${state.testResult.unknownHost.fingerprintSha256}`}
                                     <Button
                                       size="sm"
                                       className="rounded-full px-3"

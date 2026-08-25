@@ -26,15 +26,29 @@ export function buildHostVerifier(
   port: number,
   knownHosts: KnownHostsRepo,
   pinnedFingerprint: string | undefined,
-  onUnknownHost?: (presented: { keyType: string; fingerprintSha256: string }) => Promise<boolean>,
+  onUnknownHost?: (presented: {
+    keyType: string;
+    fingerprintSha256: string;
+    previousFingerprintSha256?: string;
+  }) => Promise<boolean>,
   /**
-   * Fired for an unrecognized host regardless of what onUnknownHost decides
-   * (or whether one was even supplied) — lets a caller that can't do an
-   * interactive prompt (see ConnectionTestResult.unknownHost) still learn
-   * what was presented, so it can offer its own "trust this host?" flow
-   * instead of just seeing a generic rejected connection.
+   * Fired whenever the presented key isn't already trusted — either a
+   * genuinely never-seen host, or one already in known_hosts whose stored
+   * fingerprint no longer matches (the server's host key rotated, e.g. after
+   * a reprovision) — regardless of what onUnknownHost decides, or whether one
+   * was even supplied. Lets a caller that can't do an interactive prompt (see
+   * ConnectionTestResult.unknownHost) still learn what was presented, so it
+   * can offer its own "trust this host?" flow instead of just seeing a
+   * generic rejected connection. A previously-known host whose key changed
+   * carries previousFingerprintSha256, so the caller can warn more strongly
+   * than for a first-time trust (this is exactly the case a real ssh client
+   * screams about, since it can also mean a MITM, not just a reprovision).
    */
-  onUnknownHostPresented?: (presented: { keyType: string; fingerprintSha256: string }) => void
+  onUnknownHostPresented?: (presented: {
+    keyType: string;
+    fingerprintSha256: string;
+    previousFingerprintSha256?: string;
+  }) => void
 ): HostVerifier {
   return (rawKey, verify) => {
     const fingerprint = createHash('sha256').update(rawKey).digest('base64');
@@ -46,19 +60,20 @@ export function buildHostVerifier(
     }
 
     const existing = knownHosts.find(host, port);
-    if (existing) {
-      verify(existing.fingerprintSha256 === fingerprint);
+    if (existing && existing.fingerprintSha256 === fingerprint) {
+      verify(true);
       return;
     }
 
-    onUnknownHostPresented?.({ keyType, fingerprintSha256: fingerprint });
+    const previousFingerprintSha256 = existing ? existing.fingerprintSha256 : undefined;
+    onUnknownHostPresented?.({ keyType, fingerprintSha256: fingerprint, previousFingerprintSha256 });
 
     if (!onUnknownHost) {
       verify(false);
       return;
     }
 
-    onUnknownHost({ keyType, fingerprintSha256: fingerprint })
+    onUnknownHost({ keyType, fingerprintSha256: fingerprint, previousFingerprintSha256 })
       .then((approved) => {
         if (approved) knownHosts.recordConfirmed(host, port, keyType, fingerprint);
         verify(approved);
