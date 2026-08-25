@@ -91,10 +91,10 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
     }
   }
 
-  async function handleTest(task: TaskRow) {
+  async function handleTest(task: TaskRow, trustHost?: boolean) {
     patchAction(task.id, { busy: 'test', actionError: undefined, testResult: undefined, compatibilityResult: undefined });
     try {
-      const result = await testTaskConnection(task.id);
+      const result = await testTaskConnection(task.id, trustHost);
       patchAction(task.id, { busy: undefined, testResult: result });
     } catch (err) {
       patchAction(task.id, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
@@ -241,13 +241,43 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
                       <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
                         <td colSpan={6} className="px-4 py-2 text-xs">
                           {state?.actionError && <span style={{ color: 'var(--danger)' }}>Error: {state.actionError}</span>}
-                          {state?.testResult && (
+                          {state?.testResult && !state.testResult.unknownHost && (
                             <span style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                               {state.testResult.ok ? 'Conexión OK' : 'Conexión fallida'}
                               {state.testResult.message ? ` — ${state.testResult.message}` : ''}
                               {state.testResult.latencyMs != null ? ` (${state.testResult.latencyMs} ms)` : ''}
                               {formatConnectionTestVersions(state.testResult)}
                             </span>
+                          )}
+                          {state?.testResult?.unknownHost && (
+                            <div
+                              className="flex flex-wrap items-center gap-2"
+                              style={{ color: state.testResult.unknownHost.previousFingerprintSha256 ? 'var(--danger)' : 'var(--warning)' }}
+                            >
+                              <span>
+                                {state.testResult.unknownHost.previousFingerprintSha256 ? (
+                                  <>
+                                    ⚠ La clave del host cambió — ahora {state.testResult.unknownHost.fingerprintSha256}, antes{' '}
+                                    {state.testResult.unknownHost.previousFingerprintSha256}. Confirmá con quien administra el
+                                    servidor antes de confiar.
+                                  </>
+                                ) : (
+                                  <>
+                                    Host desconocido — {state.testResult.unknownHost.keyType} {state.testResult.unknownHost.fingerprintSha256}.
+                                    ¿Confiás en este host?
+                                  </>
+                                )}
+                              </span>
+                              <Button
+                                size="sm"
+                                className="rounded-full px-3"
+                                style={primaryPillStyle}
+                                isDisabled={state.busy === 'test'}
+                                onPress={() => handleTest(task, true)}
+                              >
+                                Confiar y probar de nuevo
+                              </Button>
+                            </div>
                           )}
                           {state?.compatibilityResult && (
                             <span style={{ color: state.compatibilityResult.ok ? 'var(--success)' : 'var(--danger)' }}>

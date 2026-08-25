@@ -586,8 +586,12 @@ program
     if (result.run.status === 'Failed') process.exitCode = 1;
   });
 
-/** Shared by the `task:test-connection` CLI command and the `serve` HTTP endpoint. Throws if the task or its transport/database connection can't be resolved. */
-async function testTaskConnection(ctx: ReturnType<typeof buildContext>, task: NonNullable<ReturnType<typeof ctx.tasksRepo.getById>>): Promise<ConnectionTestResult> {
+/** Shared by the `task:test-connection` CLI command and the `serve` HTTP endpoint. Throws if the task or its transport/database connection can't be resolved. trustHost mirrors testTransportConnection's — irrelevant for direct_dump (no host-key concept for a DB connection). */
+async function testTaskConnection(
+  ctx: ReturnType<typeof buildContext>,
+  task: NonNullable<ReturnType<typeof ctx.tasksRepo.getById>>,
+  trustHost?: boolean
+): Promise<ConnectionTestResult> {
   if (task.strategy === 'direct_dump') {
     const connection = task.databaseConnectionId ? ctx.databaseConnectionsRepo.getById(task.databaseConnectionId) : null;
     if (!connection) throw new Error(`Task ${task.id} has no valid database connection configured.`);
@@ -595,7 +599,7 @@ async function testTaskConnection(ctx: ReturnType<typeof buildContext>, task: No
   }
   const transport = task.transportId ? ctx.transportsRepo.getById(task.transportId) : null;
   if (!transport) throw new Error(`Task ${task.id} has no valid transport configured.`);
-  return testTransportConnection(ctx, transport);
+  return testTransportConnection(ctx, transport, trustHost);
 }
 
 /**
@@ -1185,7 +1189,8 @@ program
             const result = await runTaskNow(ctx, task);
             sendJson(res, 200, result.run);
           } else if (action === 'test-connection') {
-            const result = await testTaskConnection(ctx, task);
+            const body = await readJsonBody(req).catch(() => ({}));
+            const result = await testTaskConnection(ctx, task, Boolean((body as { trustHost?: boolean }).trustHost));
             sendJson(res, result.ok ? 200 : 502, result);
           } else {
             const result = await testTaskCompatibility(ctx, task);

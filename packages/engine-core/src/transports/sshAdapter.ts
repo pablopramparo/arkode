@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import type { KnownHostsRepo } from '../db/repositories/knownHostsRepo.js';
 import type { SecretStore } from '../secrets/types.js';
 import type { Transport } from '../types.js';
-import { buildHostVerifier } from './hostKeyVerification.js';
+import { buildHostVerifier, describeUnknownHostError } from './hostKeyVerification.js';
 import { HashingProgressTransform } from './hashingProgressTransform.js';
 import type {
   SshAdapter,
@@ -101,21 +101,31 @@ export function createSshAdapter(config: SshTransportConfig, knownHosts: KnownHo
     async connect() {
       lastUnknownHost = undefined;
       const privateKey = await readFile(config.privateKeyPath);
-      await connectClient(client, {
-        host: config.host,
-        port: config.port,
-        username: config.username,
-        privateKey,
-        passphrase: config.passphrase,
-        hostVerifier: buildHostVerifier(
-          config.host,
-          config.port,
-          knownHosts,
-          config.knownHostFingerprint,
-          config.onUnknownHost,
-          (presented) => (lastUnknownHost = presented)
-        ),
-      });
+      try {
+        await connectClient(client, {
+          host: config.host,
+          port: config.port,
+          username: config.username,
+          privateKey,
+          passphrase: config.passphrase,
+          hostVerifier: buildHostVerifier(
+            config.host,
+            config.port,
+            knownHosts,
+            config.knownHostFingerprint,
+            config.onUnknownHost,
+            (presented) => (lastUnknownHost = presented)
+          ),
+        });
+      } catch (err) {
+        // lastUnknownHost is only ever set right before a host-verification
+        // rejection, so its presence here means *that* was the failure
+        // reason — replace ssh2's opaque error with something actionable
+        // for a caller (task:run, a schedule) that has no trust-and-retry
+        // option of its own.
+        if (lastUnknownHost) throw new Error(describeUnknownHostError(lastUnknownHost));
+        throw err;
+      }
       connected = true;
     },
 

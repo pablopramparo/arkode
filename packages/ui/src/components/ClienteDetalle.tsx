@@ -173,10 +173,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
     }
   }
 
-  async function handleTestTask(taskId: string) {
+  async function handleTestTask(taskId: string, trustHost?: boolean) {
     patchAction(taskId, { busy: true, actionError: undefined, testResult: undefined, compatibilityResult: undefined });
     try {
-      const result = await testTaskConnection(taskId);
+      const result = await testTaskConnection(taskId, trustHost);
       patchAction(taskId, { busy: false, testResult: result });
     } catch (err) {
       patchAction(taskId, { busy: false, actionError: err instanceof Error ? err.message : String(err) });
@@ -384,9 +384,28 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   label="Exportar (conexión + tarea, para adjuntar a otro cliente)"
                                   href={taskExportUrl(task.id)}
                                 />
-                                {state?.testResult && (
+                                {state?.testResult && !state.testResult.unknownHost && (
                                   <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                                     {state.testResult.ok ? 'OK' : state.testResult.message}
+                                  </span>
+                                )}
+                                {state?.testResult?.unknownHost && (
+                                  <span
+                                    className="flex flex-wrap items-center gap-2 text-xs"
+                                    style={{ color: state.testResult.unknownHost.previousFingerprintSha256 ? 'var(--danger)' : 'var(--warning)' }}
+                                  >
+                                    {state.testResult.unknownHost.previousFingerprintSha256
+                                      ? `⚠ La clave del host cambió — ahora ${state.testResult.unknownHost.fingerprintSha256}, antes ${state.testResult.unknownHost.previousFingerprintSha256}`
+                                      : `Host desconocido — ${state.testResult.unknownHost.fingerprintSha256}`}
+                                    <Button
+                                      size="sm"
+                                      className="rounded-full px-3"
+                                      style={primaryPillStyle}
+                                      isDisabled={state.busy}
+                                      onPress={() => handleTestTask(task.id, true)}
+                                    >
+                                      Confiar y probar de nuevo
+                                    </Button>
                                   </span>
                                 )}
                                 {state?.compatibilityResult && (

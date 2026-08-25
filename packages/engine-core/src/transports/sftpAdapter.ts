@@ -5,7 +5,7 @@ import { pipeline } from 'node:stream/promises';
 import type { KnownHostsRepo } from '../db/repositories/knownHostsRepo.js';
 import type { SecretStore } from '../secrets/types.js';
 import type { Transport } from '../types.js';
-import { buildHostVerifier } from './hostKeyVerification.js';
+import { buildHostVerifier, describeUnknownHostError } from './hostKeyVerification.js';
 import { HashingProgressTransform } from './hashingProgressTransform.js';
 import type {
   SftpAdapter,
@@ -31,21 +31,28 @@ export function createSftpAdapter(config: SftpTransportConfig, knownHosts: Known
     async connect() {
       lastUnknownHost = undefined;
       const privateKey = await readFile(config.privateKeyPath);
-      await client.connect({
-        host: config.host,
-        port: config.port,
-        username: config.username,
-        privateKey,
-        passphrase: config.passphrase,
-        hostVerifier: buildHostVerifier(
-          config.host,
-          config.port,
-          knownHosts,
-          config.knownHostFingerprint,
-          config.onUnknownHost,
-          (presented) => (lastUnknownHost = presented)
-        ),
-      });
+      try {
+        await client.connect({
+          host: config.host,
+          port: config.port,
+          username: config.username,
+          privateKey,
+          passphrase: config.passphrase,
+          hostVerifier: buildHostVerifier(
+            config.host,
+            config.port,
+            knownHosts,
+            config.knownHostFingerprint,
+            config.onUnknownHost,
+            (presented) => (lastUnknownHost = presented)
+          ),
+        });
+      } catch (err) {
+        // See sshAdapter.ts's connect() for why: lastUnknownHost being set
+        // here means host verification was specifically the failure reason.
+        if (lastUnknownHost) throw new Error(describeUnknownHostError(lastUnknownHost));
+        throw err;
+      }
       connected = true;
     },
 

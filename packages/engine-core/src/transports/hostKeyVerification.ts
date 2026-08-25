@@ -81,3 +81,28 @@ export function buildHostVerifier(
       .catch(() => verify(false));
   };
 }
+
+/**
+ * Builds a clear, actionable message for a connect() failure caused
+ * specifically by an untrusted host key — replacing ssh2's own opaque "Host
+ * denied (verification failed)". Used on the "Ejecutar ahora"/scheduled-run
+ * path, which never offers a trust-and-retry option itself (trust is only
+ * ever established explicitly, via a connection test) — so the person
+ * seeing this needs to know *why* it failed and where to go fix it, not
+ * just that it failed.
+ */
+export function describeUnknownHostError(presented: {
+  keyType: string;
+  fingerprintSha256: string;
+  previousFingerprintSha256?: string;
+}): string {
+  const where = 'Test the connection (from Conexiones, or the task\'s own "Probar conexión") and trust it there before running this task.';
+  if (presented.previousFingerprintSha256) {
+    return (
+      `This host's SSH key changed since it was last trusted (now ${presented.keyType} ${presented.fingerprintSha256}, ` +
+      `was ${presented.previousFingerprintSha256}). This can be routine (the server was reprovisioned) or a real security ` +
+      `concern — confirm with whoever administers it before trusting the new key. ${where}`
+    );
+  }
+  return `This host's SSH key (${presented.keyType} ${presented.fingerprintSha256}) isn't trusted yet. ${where}`;
+}
