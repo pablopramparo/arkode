@@ -64,11 +64,11 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex h-screen flex-col overflow-hidden">
       <TitleBar />
       <div className="flex min-h-0 flex-1">
         <aside
-          className="flex w-60 shrink-0 flex-col border-r px-3 py-5"
+          className="flex w-60 shrink-0 flex-col overflow-y-auto border-r px-3 py-5"
           style={{
             borderColor: "var(--border)",
             backgroundColor:

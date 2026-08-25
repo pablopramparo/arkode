@@ -3,6 +3,9 @@ import { Button } from '@heroui/react';
 import { isTauri } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { isEnabled as isAutostartEnabled, enable as enableAutostart, disable as disableAutostart } from '@tauri-apps/plugin-autostart';
+import { check as checkForUpdate, type Update } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { getVersion } from '@tauri-apps/api/app';
 import type { ImportConfigResult, SystemInfo } from 'engine-core';
 import {
   CONFIG_EXPORT_URL,
@@ -203,6 +206,10 @@ export function Configuracion() {
   const [toolRegistry, setToolRegistry] = useState<ToolRegistryData | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [autostartBusy, setAutostartBusy] = useState(false);
+  const [updateCheck, setUpdateCheck] = useState<'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'ready'>('idle');
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
 
   const refreshToolRegistry = () => fetchToolRegistry().then(setToolRegistry);
 
@@ -218,6 +225,9 @@ export function Configuracion() {
       isAutostartEnabled()
         .then(setAutostart)
         .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      getVersion()
+        .then(setAppVersion)
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }
   }, []);
 
@@ -232,6 +242,36 @@ export function Configuracion() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setAutostartBusy(false);
+    }
+  }
+
+  async function handleCheckForUpdate() {
+    setUpdateCheck('checking');
+    setUpdateError(null);
+    try {
+      const update = await checkForUpdate();
+      if (update?.available) {
+        setAvailableUpdate(update);
+        setUpdateCheck('available');
+      } else {
+        setUpdateCheck('none');
+      }
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : String(err));
+      setUpdateCheck('idle');
+    }
+  }
+
+  async function handleInstallUpdate() {
+    if (!availableUpdate) return;
+    setUpdateCheck('downloading');
+    setUpdateError(null);
+    try {
+      await availableUpdate.downloadAndInstall();
+      setUpdateCheck('ready');
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : String(err));
+      setUpdateCheck('available');
     }
   }
 
@@ -295,6 +335,53 @@ export function Configuracion() {
               Esto solo afecta si el Dashboard se abre solo al prender la PC — los backups programados corren igual
               como tarea de Windows, con la app cerrada o no.
             </p>
+          </div>
+
+          <div className="mt-4 rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm">Versión actual: {appVersion ?? '—'}</span>
+              {updateCheck === 'idle' || updateCheck === 'none' ? (
+                <Button size="sm" variant="ghost" className="rounded-full px-4" onPress={handleCheckForUpdate}>
+                  Buscar actualizaciones
+                </Button>
+              ) : updateCheck === 'checking' ? (
+                <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                  Buscando…
+                </span>
+              ) : updateCheck === 'available' ? (
+                <>
+                  <span className="text-xs" style={{ color: 'var(--success)' }}>
+                    Nueva versión disponible: {availableUpdate?.version}
+                  </span>
+                  <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={handleInstallUpdate}>
+                    Descargar e instalar
+                  </Button>
+                </>
+              ) : updateCheck === 'downloading' ? (
+                <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                  Descargando e instalando…
+                </span>
+              ) : (
+                <>
+                  <span className="text-xs" style={{ color: 'var(--success)' }}>
+                    Instalada. Hay que reiniciar Arkode para aplicarla.
+                  </span>
+                  <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => relaunch()}>
+                    Reiniciar ahora
+                  </Button>
+                </>
+              )}
+            </div>
+            {updateCheck === 'none' && (
+              <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
+                Ya tenés la última versión.
+              </p>
+            )}
+            {updateError && (
+              <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
+                {updateError}
+              </p>
+            )}
           </div>
         </section>
       )}

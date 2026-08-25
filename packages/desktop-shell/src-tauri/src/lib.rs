@@ -32,6 +32,8 @@ pub fn run() {
     // changes Windows' startup behavior when the user explicitly opts in
     // via the toggle in Configuración; nothing here enables it silently.
     .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+    .plugin(tauri_plugin_updater::Builder::new().build())
+    .plugin(tauri_plugin_process::init())
     .manage(EngineProcess(Mutex::new(None)))
     .setup(|app| {
       if cfg!(debug_assertions) {

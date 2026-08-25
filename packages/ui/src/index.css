@@ -36,3 +36,33 @@ body {
 button:not(:disabled) {
   cursor: pointer;
 }
+
+/*
+ * WebView2 (Chromium) renders a plain light-gray scrollbar by default,
+ * which stands out against this app's dark-blue theme. Themed with the
+ * same surface/border tokens the rest of the UI already uses, rather than
+ * a hardcoded gray.
+ */
+* {
+  scrollbar-color: var(--border) var(--surface);
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 9999px;
+  border: 2px solid var(--surface);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--accent);
+}

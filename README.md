@@ -1,6 +1,6 @@
-# Arkode
+# arkode
 
-**Arkode** (by [Codebius](https://codebius.com)) is a local, internal Windows desktop app that centralizes database backups across multiple clients/servers: it connects to remote servers, fetches or generates DB dumps, stores them locally, validates them, applies retention, and shows status clearly — a real deployment tool, not server administration or a general monitoring product.
+**arkode** is a local, internal Windows desktop app that centralizes database backups across multiple clients/servers: it connects to remote servers, fetches or generates DB dumps, stores them locally, validates them, applies retention, and shows status clearly — a real deployment tool, not server administration or a general monitoring product.
 
 Core pipeline: **connect → fetch/generate backup → store locally → validate → apply retention → show status.**
 
@@ -52,4 +52,4 @@ See [CLAUDE.md](./CLAUDE.md) for the full architecture, command reference, and d
 
 ## License
 
-Internal tool, proprietary to Codebius. Not for external distribution.
+Internal tool, proprietary. Not for external distribution.
