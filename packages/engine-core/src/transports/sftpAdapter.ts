@@ -23,11 +23,13 @@ export function createSftpAdapter(config: SftpTransportConfig, knownHosts: Known
   // callers surface real failures via rejected promises, so this is a no-op.
   const client = new SftpClient(undefined, { error: () => {} });
   let connected = false;
+  let lastUnknownHost: { keyType: string; fingerprintSha256: string } | undefined;
 
   return {
     kind: 'sftp',
 
     async connect() {
+      lastUnknownHost = undefined;
       const privateKey = await readFile(config.privateKeyPath);
       await client.connect({
         host: config.host,
@@ -40,7 +42,8 @@ export function createSftpAdapter(config: SftpTransportConfig, knownHosts: Known
           config.port,
           knownHosts,
           config.knownHostFingerprint,
-          config.onUnknownHost
+          config.onUnknownHost,
+          (presented) => (lastUnknownHost = presented)
         ),
       });
       connected = true;
@@ -60,7 +63,7 @@ export function createSftpAdapter(config: SftpTransportConfig, knownHosts: Known
         await this.disconnect();
         return { ok: true, message: 'Connection succeeded.', latencyMs: Date.now() - startedAt };
       } catch (err) {
-        return { ok: false, message: err instanceof Error ? err.message : String(err) };
+        return { ok: false, message: err instanceof Error ? err.message : String(err), unknownHost: lastUnknownHost };
       }
     },
 

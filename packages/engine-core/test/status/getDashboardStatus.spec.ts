@@ -94,4 +94,16 @@ describe('getDashboardStatus', () => {
 
     expect(getDashboardStatus(ctx)).toHaveLength(0);
   });
+
+  it('excludes a deactivated task even though its client is still active', () => {
+    // Real bug, reported directly: Tareas.tsx and the ficha de cliente both
+    // correctly hid a deactivated task, but the Dashboard kept showing it
+    // forever -- listByClient() (used by getDashboardStatus, unlike the
+    // other two screens) never filtered by is_active at all.
+    const ctx = createTestContext();
+    const { client, task } = seedTask(ctx);
+    ctx.tasksRepo.deactivate(task.id);
+
+    expect(getDashboardStatus(ctx)).toHaveLength(0);
+  });
 });

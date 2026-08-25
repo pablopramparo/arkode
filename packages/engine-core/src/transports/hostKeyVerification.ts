@@ -26,7 +26,15 @@ export function buildHostVerifier(
   port: number,
   knownHosts: KnownHostsRepo,
   pinnedFingerprint: string | undefined,
-  onUnknownHost?: (presented: { keyType: string; fingerprintSha256: string }) => Promise<boolean>
+  onUnknownHost?: (presented: { keyType: string; fingerprintSha256: string }) => Promise<boolean>,
+  /**
+   * Fired for an unrecognized host regardless of what onUnknownHost decides
+   * (or whether one was even supplied) — lets a caller that can't do an
+   * interactive prompt (see ConnectionTestResult.unknownHost) still learn
+   * what was presented, so it can offer its own "trust this host?" flow
+   * instead of just seeing a generic rejected connection.
+   */
+  onUnknownHostPresented?: (presented: { keyType: string; fingerprintSha256: string }) => void
 ): HostVerifier {
   return (rawKey, verify) => {
     const fingerprint = createHash('sha256').update(rawKey).digest('base64');
@@ -42,6 +50,8 @@ export function buildHostVerifier(
       verify(existing.fingerprintSha256 === fingerprint);
       return;
     }
+
+    onUnknownHostPresented?.({ keyType, fingerprintSha256: fingerprint });
 
     if (!onUnknownHost) {
       verify(false);

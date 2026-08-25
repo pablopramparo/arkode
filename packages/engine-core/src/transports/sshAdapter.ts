@@ -93,11 +93,13 @@ export function createSshAdapter(config: SshTransportConfig, knownHosts: KnownHo
   // rejected connect()/exec() promises below, not through this listener.
   client.on('error', () => {});
   let connected = false;
+  let lastUnknownHost: { keyType: string; fingerprintSha256: string } | undefined;
 
   return {
     kind: 'ssh',
 
     async connect() {
+      lastUnknownHost = undefined;
       const privateKey = await readFile(config.privateKeyPath);
       await connectClient(client, {
         host: config.host,
@@ -110,7 +112,8 @@ export function createSshAdapter(config: SshTransportConfig, knownHosts: KnownHo
           config.port,
           knownHosts,
           config.knownHostFingerprint,
-          config.onUnknownHost
+          config.onUnknownHost,
+          (presented) => (lastUnknownHost = presented)
         ),
       });
       connected = true;
@@ -133,7 +136,7 @@ export function createSshAdapter(config: SshTransportConfig, knownHosts: KnownHo
         }
         return { ok: true, message: 'Connection succeeded.', latencyMs: Date.now() - startedAt };
       } catch (err) {
-        return { ok: false, message: err instanceof Error ? err.message : String(err) };
+        return { ok: false, message: err instanceof Error ? err.message : String(err), unknownHost: lastUnknownHost };
       }
     },
 

@@ -36,6 +36,17 @@ export interface ConnectionTestResult {
   serverVersion?: string;
   /** The local CLI tool's own reported version (`psql --version` / `mysql --version`), for eyeballing alongside serverVersion — same scope caveat as above. */
   localToolVersion?: string;
+  /**
+   * Set only when the connection failed specifically because the remote
+   * host's key isn't yet trusted (no pinned fingerprint, not already in
+   * knownHosts, and either no onUnknownHost handler was supplied or it
+   * declined) — never set for any other kind of failure. Lets a caller
+   * that can't do an interactive terminal prompt (the UI, going through
+   * serve) show its own "trust this host?" confirmation and retry with
+   * trustHost instead, rather than the raw ssh2 "Host denied
+   * (verification failed)" error being the end of the story.
+   */
+  unknownHost?: { keyType: string; fingerprintSha256: string };
 }
 
 /** Capability every transport adapter provides, regardless of kind. */

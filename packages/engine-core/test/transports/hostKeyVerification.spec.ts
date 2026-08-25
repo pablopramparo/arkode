@@ -111,4 +111,33 @@ describe('buildHostVerifier', () => {
     });
     await expect(callVerifier(verifier, rawKey)).resolves.toBe(false);
   });
+
+  // onUnknownHostPresented: lets a caller that can't do an interactive
+  // terminal prompt (the UI, via serve) still learn what was presented so
+  // it can offer its own "trust this host?" flow — see
+  // ConnectionTestResult.unknownHost.
+  it('fires onUnknownHostPresented for an unrecognized host, with no confirmation callback at all', async () => {
+    const knownHosts = createFakeKnownHostsRepo();
+    let presented: { keyType: string; fingerprintSha256: string } | undefined;
+    const verifier = buildHostVerifier('host', 22, knownHosts, undefined, undefined, (p) => (presented = p));
+    await callVerifier(verifier, rawKey);
+    expect(presented).toEqual({ keyType: 'ssh-ed25519', fingerprintSha256: fingerprint });
+  });
+
+  it('fires onUnknownHostPresented even when the confirmation callback declines', async () => {
+    const knownHosts = createFakeKnownHostsRepo();
+    let presented: { keyType: string; fingerprintSha256: string } | undefined;
+    const verifier = buildHostVerifier('host', 22, knownHosts, undefined, async () => false, (p) => (presented = p));
+    await callVerifier(verifier, rawKey);
+    expect(presented?.fingerprintSha256).toBe(fingerprint);
+  });
+
+  it('does not fire onUnknownHostPresented for a pinned or already-known host', async () => {
+    const knownHosts = createFakeKnownHostsRepo();
+    knownHosts.recordConfirmed('host', 22, 'ssh-ed25519', fingerprint);
+    let fired = false;
+    const verifier = buildHostVerifier('host', 22, knownHosts, undefined, undefined, () => (fired = true));
+    await callVerifier(verifier, rawKey);
+    expect(fired).toBe(false);
+  });
 });

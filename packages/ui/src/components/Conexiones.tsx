@@ -446,10 +446,11 @@ export function Conexiones({ onSelectClient }: { onSelectClient: (clientId: stri
     }
   }
 
-  async function handleTest(row: ConnectionRow) {
+  async function handleTest(row: ConnectionRow, trustHost?: boolean) {
     patchAction(row.id, { busy: 'test', actionError: undefined, testResult: undefined });
     try {
-      const result = row.kind === 'transport' ? await testTransport(row.id) : await testDatabaseConnection(row.id);
+      const result =
+        row.kind === 'transport' ? await testTransport(row.id, trustHost) : await testDatabaseConnection(row.id);
       patchAction(row.id, { busy: undefined, testResult: result });
     } catch (err) {
       patchAction(row.id, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
@@ -557,13 +558,30 @@ export function Conexiones({ onSelectClient }: { onSelectClient: (clientId: stri
                       <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
                         <td colSpan={5} className="px-4 py-2 text-xs">
                           {state?.actionError && <span style={{ color: 'var(--danger)' }}>Error: {state.actionError}</span>}
-                          {state?.testResult && (
+                          {state?.testResult && !state.testResult.unknownHost && (
                             <span style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                               {state.testResult.ok ? 'Conexión OK' : 'Conexión fallida'}
                               {state.testResult.message ? ` — ${state.testResult.message}` : ''}
                               {state.testResult.latencyMs != null ? ` (${state.testResult.latencyMs} ms)` : ''}
                               {formatConnectionTestVersions(state.testResult)}
                             </span>
+                          )}
+                          {state?.testResult?.unknownHost && (
+                            <div className="flex flex-wrap items-center gap-2" style={{ color: 'var(--warning)' }}>
+                              <span>
+                                Host desconocido — {state.testResult.unknownHost.keyType}{' '}
+                                {state.testResult.unknownHost.fingerprintSha256}. ¿Confiás en este host?
+                              </span>
+                              <Button
+                                size="sm"
+                                className="rounded-full px-3"
+                                style={primaryPillStyle}
+                                isDisabled={state.busy === 'test'}
+                                onPress={() => handleTest(row, true)}
+                              >
+                                Confiar y probar de nuevo
+                              </Button>
+                            </div>
                           )}
                         </td>
                       </tr>

@@ -88,8 +88,13 @@ export async function reactivateTransport(id: string): Promise<void> {
   await handleJson(await fetch(`${getApiBase()}/transports/${id}/reactivate`, { method: 'POST' }));
 }
 
-export async function testTransport(id: string): Promise<ConnectionTestResult> {
-  const res = await fetch(`${getApiBase()}/transports/${id}/test`, { method: 'POST' });
+/** trustHost: true retries an unknown-host rejection (see ConnectionTestResult.unknownHost) as an explicit "yes, trust this host" — only ever call it after the person has seen the presented fingerprint and confirmed it. */
+export async function testTransport(id: string, trustHost?: boolean): Promise<ConnectionTestResult> {
+  const res = await fetch(`${getApiBase()}/transports/${id}/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trustHost: Boolean(trustHost) }),
+  });
   const body = await res.json();
   if (res.status === 404 || res.status === 500) throw new Error(body.error ?? `Request failed: ${res.status}`);
   return body;

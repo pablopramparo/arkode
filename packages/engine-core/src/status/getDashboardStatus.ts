@@ -35,22 +35,25 @@ export interface GetDashboardStatusDeps {
 
 export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[] {
   return deps.clientsRepo.listActive().flatMap((client) =>
-    deps.tasksRepo.listByClient(client.id).map((task): DashboardRow => {
-      const latestRun = deps.runsRepo.getLatestByTask(task.id);
-      const latestGoodRun = deps.runsRepo.getLatestWithFileByTask(task.id);
-      return {
-        clientId: client.id,
-        client: client.name,
-        taskId: task.id,
-        task: task.name,
-        strategy: task.strategy,
-        status: latestRun?.status ?? 'NeverRun',
-        sizeBytes: latestGoodRun?.sizeBytes ?? null,
-        checksumSha256: latestGoodRun?.checksumSha256 ?? null,
-        lastGoodBackupAt: latestGoodRun?.downloadedAt ?? null,
-        latestAttemptAt: latestRun?.finishedAt ?? null,
-        latestErrorMessage: latestRun?.errorMessage ?? null,
-      };
-    })
+    deps.tasksRepo
+      .listByClient(client.id)
+      .filter((task) => task.isActive)
+      .map((task): DashboardRow => {
+        const latestRun = deps.runsRepo.getLatestByTask(task.id);
+        const latestGoodRun = deps.runsRepo.getLatestWithFileByTask(task.id);
+        return {
+          clientId: client.id,
+          client: client.name,
+          taskId: task.id,
+          task: task.name,
+          strategy: task.strategy,
+          status: latestRun?.status ?? 'NeverRun',
+          sizeBytes: latestGoodRun?.sizeBytes ?? null,
+          checksumSha256: latestGoodRun?.checksumSha256 ?? null,
+          lastGoodBackupAt: latestGoodRun?.downloadedAt ?? null,
+          latestAttemptAt: latestRun?.finishedAt ?? null,
+          latestErrorMessage: latestRun?.errorMessage ?? null,
+        };
+      })
   );
 }

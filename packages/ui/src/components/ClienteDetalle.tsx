@@ -193,10 +193,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
     }
   }
 
-  async function handleTestConnection(id: string, kind: 'transport' | 'database') {
+  async function handleTestConnection(id: string, kind: 'transport' | 'database', trustHost?: boolean) {
     patchAction(id, { busy: true, actionError: undefined, testResult: undefined });
     try {
-      const result = kind === 'transport' ? await testTransport(id) : await testDatabaseConnection(id);
+      const result = kind === 'transport' ? await testTransport(id, trustHost) : await testDatabaseConnection(id);
       patchAction(id, { busy: false, testResult: result });
     } catch (err) {
       patchAction(id, { busy: false, actionError: err instanceof Error ? err.message : String(err) });
@@ -448,9 +448,23 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   onPress={() => handleTestConnection(row.id, row.kind)}
                                 />
                                 <IconButton icon={<EditIcon />} label="Editar" onPress={() => setEditingConnectionRow(row)} />
-                                {state?.testResult && (
+                                {state?.testResult && !state.testResult.unknownHost && (
                                   <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                                     {state.testResult.ok ? 'OK' : state.testResult.message}
+                                  </span>
+                                )}
+                                {state?.testResult?.unknownHost && (
+                                  <span className="flex flex-wrap items-center gap-2 text-xs" style={{ color: 'var(--warning)' }}>
+                                    Host desconocido — {state.testResult.unknownHost.fingerprintSha256}
+                                    <Button
+                                      size="sm"
+                                      className="rounded-full px-3"
+                                      style={primaryPillStyle}
+                                      isDisabled={state.busy}
+                                      onPress={() => handleTestConnection(row.id, row.kind, true)}
+                                    >
+                                      Confiar y probar de nuevo
+                                    </Button>
                                   </span>
                                 )}
                               </div>

@@ -481,13 +481,27 @@ program
     console.log(`Reactivated task ${taskId}.`);
   });
 
-function testTransportConnection(ctx: ReturnType<typeof buildContext>, transport: Transport): Promise<ConnectionTestResult> {
+/**
+ * trustHost: true bypasses confirmHostInteractively entirely and trusts
+ * whatever host key is presented — used only for the UI's explicit "trust
+ * this host" retry (see POST /transports/:id/test), *after* the person has
+ * already seen the fingerprint from a first test's ConnectionTestResult.unknownHost
+ * and chosen to accept it. confirmHostInteractively's own non-TTY rejection
+ * (see confirmHost.ts) is what a plain `serve` request would otherwise hit
+ * with no way to ever get past it — this is the actual fix for that gap.
+ */
+function testTransportConnection(
+  ctx: ReturnType<typeof buildContext>,
+  transport: Transport,
+  trustHost?: boolean
+): Promise<ConnectionTestResult> {
+  const onUnknownHost = trustHost ? async () => true : confirmHostInteractively;
   const adapter =
     transport.type === 'ssh'
-      ? createSshAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, confirmHostInteractively)
+      ? createSshAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, onUnknownHost)
       : transport.type === 'ftp'
         ? createFtpAdapterFromTransport(transport, ctx.secretStore)
-        : createSftpAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, confirmHostInteractively);
+        : createSftpAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, onUnknownHost);
   return adapter.testConnection();
 }
 
@@ -1355,7 +1369,8 @@ program
           return;
         }
         try {
-          const result = await testTransportConnection(ctx, transport);
+          const body = await readJsonBody(req).catch(() => ({}));
+          const result = await testTransportConnection(ctx, transport, Boolean((body as { trustHost?: boolean }).trustHost));
           sendJson(res, result.ok ? 200 : 502, result);
         } catch (err) {
           sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
