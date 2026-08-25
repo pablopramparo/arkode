@@ -42,7 +42,7 @@ export function TitleBar() {
   return (
     <div
       data-tauri-drag-region
-      className="flex h-9 shrink-0 items-center justify-between select-none"
+      className="relative z-60 flex h-9 shrink-0 items-center justify-between select-none"
       style={{ backgroundColor: 'var(--surface)', borderBottom: '1px solid var(--border)' }}
     >
       <div data-tauri-drag-region className="flex items-center gap-2 pl-3 text-xs" style={{ color: 'var(--muted)' }}>
