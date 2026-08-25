@@ -20,6 +20,7 @@ import {
 import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { Switch } from './Switch';
+import arkodeIsotipo from '../assets/arkode-isotipo.png';
 
 const inputStyle: React.CSSProperties = {
   backgroundColor: 'var(--background)',
@@ -194,6 +195,35 @@ function ToolStatusBadge({ path, exists }: { path: string | null; exists: boolea
 
 const monoStyle: React.CSSProperties = { fontFamily: 'monospace', fontSize: '0.8125rem', color: 'var(--muted)' };
 
+type ConfigTab = 'general' | 'herramientas' | 'clientes';
+
+function TabBar({ active, onChange }: { active: ConfigTab; onChange: (tab: ConfigTab) => void }) {
+  const tabs: { id: ConfigTab; label: string }[] = [
+    { id: 'general', label: 'General' },
+    { id: 'herramientas', label: 'Herramientas' },
+    { id: 'clientes', label: 'Clientes' },
+  ];
+  return (
+    <div className="mb-6 flex gap-1" style={{ borderBottom: '1px solid var(--separator)' }}>
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          onClick={() => onChange(tab.id)}
+          className="px-3 py-2 text-sm font-medium"
+          style={{
+            color: active === tab.id ? 'var(--foreground)' : 'var(--muted)',
+            borderBottom: active === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+            marginBottom: -1,
+          }}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Configuracion() {
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [clients, setClients] = useState<ClientWithTaskCount[] | null>(null);
@@ -210,6 +240,7 @@ export function Configuracion() {
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<ConfigTab>('general');
 
   const refreshToolRegistry = () => fetchToolRegistry().then(setToolRegistry);
 
@@ -309,7 +340,7 @@ export function Configuracion() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold">Configuración</h1>
         <p className="text-sm" style={{ color: 'var(--muted)' }}>
-          Diagnóstico del sistema y respaldo/restauración de la configuración de clientes.
+          Versión y actualizaciones, diagnóstico de herramientas, y respaldo/restauración de la configuración de clientes.
         </p>
       </header>
 
@@ -322,255 +353,290 @@ export function Configuracion() {
         </div>
       )}
 
-      {isTauri() && (
-        <section className="mb-8">
-          <h2 className="mb-2 text-sm font-semibold">Aplicación</h2>
-          <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
-            <Switch
-              checked={autostart ?? false}
-              onChange={handleToggleAutostart}
-              label={autostartBusy ? 'Actualizando…' : 'Iniciar arkode automáticamente al iniciar Windows'}
-            />
-            <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
-              Esto solo afecta si el Dashboard se abre solo al prender la PC — los backups programados corren igual
-              como tarea de Windows, con la app cerrada o no.
-            </p>
-          </div>
+      <TabBar active={activeTab} onChange={setActiveTab} />
 
-          <div className="mt-4 rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+      {activeTab === 'general' && (
+        <div className="flex flex-col gap-4">
+          {isTauri() ? (
+            <>
+              <section className="flex items-center gap-4 rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+                <img src={arkodeIsotipo} alt="" className="h-12 w-12 shrink-0" />
+                <div>
+                  <h2 className="text-sm font-semibold">arkode by codebius</h2>
+                  <p className="text-sm" style={{ color: 'var(--muted)' }}>
+                    Versión {appVersion ?? '—'}
+                  </p>
+                  <a
+                    href="https://codebius.com"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs hover:underline"
+                    style={{ color: 'var(--muted)' }}
+                  >
+                    codebius.com
+                  </a>
+                </div>
+              </section>
+
+              <section className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+                <h2 className="mb-3 text-sm font-semibold">Actualizaciones</h2>
+                <div className="flex flex-wrap items-center gap-3">
+                  {updateCheck === 'idle' || updateCheck === 'none' ? (
+                    <Button size="sm" variant="ghost" className="rounded-full px-4" onPress={handleCheckForUpdate}>
+                      Buscar actualizaciones
+                    </Button>
+                  ) : updateCheck === 'checking' ? (
+                    <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                      Buscando…
+                    </span>
+                  ) : updateCheck === 'available' ? (
+                    <>
+                      <span className="text-xs" style={{ color: 'var(--success)' }}>
+                        Nueva versión disponible: {availableUpdate?.version}
+                      </span>
+                      <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={handleInstallUpdate}>
+                        Descargar e instalar
+                      </Button>
+                    </>
+                  ) : updateCheck === 'downloading' ? (
+                    <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                      Descargando e instalando…
+                    </span>
+                  ) : (
+                    <>
+                      <span className="text-xs" style={{ color: 'var(--success)' }}>
+                        Instalada. Hay que reiniciar arkode para aplicarla.
+                      </span>
+                      <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => relaunch()}>
+                        Reiniciar ahora
+                      </Button>
+                    </>
+                  )}
+                </div>
+                {updateCheck === 'none' && (
+                  <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
+                    Ya tenés la última versión.
+                  </p>
+                )}
+                {updateError && (
+                  <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
+                    {updateError}
+                  </p>
+                )}
+              </section>
+
+              <section className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+                <h2 className="mb-3 text-sm font-semibold">Inicio automático</h2>
+                <Switch
+                  checked={autostart ?? false}
+                  onChange={handleToggleAutostart}
+                  label={autostartBusy ? 'Actualizando…' : 'Iniciar arkode automáticamente al iniciar Windows'}
+                />
+                <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
+                  Esto solo afecta si el Dashboard se abre solo al prender la PC — los backups programados corren igual
+                  como tarea de Windows, con la app cerrada o no.
+                </p>
+              </section>
+            </>
+          ) : (
+            <p className="text-sm" style={{ color: 'var(--muted)' }}>
+              Versión, actualizaciones e inicio automático solo están disponibles corriendo la app de escritorio (Tauri), no en este modo de desarrollo web.
+            </p>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'herramientas' && (
+        <div className="flex flex-col gap-8">
+          <section>
+            <h2 className="mb-2 text-sm font-semibold">Ubicación de datos</h2>
+            {system && (
+              <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+                <div className="grid grid-cols-[140px_1fr] gap-y-2 text-sm">
+                  <span style={{ color: 'var(--muted)' }}>Carpeta de datos</span>
+                  <span style={monoStyle}>{system.appDataDir}</span>
+                  <span style={{ color: 'var(--muted)' }}>Base de datos</span>
+                  <span style={monoStyle}>{system.dbFilePath}</span>
+                  <span style={{ color: 'var(--muted)' }}>Logs</span>
+                  <span style={monoStyle}>{system.logsDir}</span>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section>
+            <h2 className="mb-2 text-sm font-semibold">Herramientas de línea de comandos (direct_dump)</h2>
+            {system && (
+              <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="text-left" style={{ color: 'var(--muted)' }}>
+                      <th className="px-4 py-2 font-medium">Herramienta</th>
+                      <th className="px-4 py-2 font-medium">Variable de entorno</th>
+                      <th className="px-4 py-2 font-medium">Ruta configurada</th>
+                      <th className="px-4 py-2 font-medium">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {system.tools.map((tool) => (
+                      <tr key={tool.envVar} style={{ borderTop: '1px solid var(--separator)' }}>
+                        <td className="px-4 py-2.5">{tool.label}</td>
+                        <td className="px-4 py-2.5" style={monoStyle}>
+                          {tool.envVar}
+                        </td>
+                        <td className="px-4 py-2.5" style={monoStyle}>
+                          {tool.path ?? '—'}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <ToolStatusBadge path={tool.path} exists={tool.exists} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
+              Solo aplica a tareas direct_dump. Estas rutas se configuran hoy por variable de entorno, no desde esta pantalla.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="mb-2 text-sm font-semibold">Herramientas por versión (direct_dump)</h2>
+            <p className="mb-3 text-xs" style={{ color: 'var(--muted)' }}>
+              Cuando un cliente usa una versión que no coincide con la ruta por defecto de arriba, registrá acá la herramienta
+              correcta para esa versión — se elige automáticamente según la versión detectada del servidor, sin tocar la tarea.
+            </p>
+            {toolRegistry && (
+              <div className="flex flex-col gap-4">
+                <ToolRegistrySection
+                  title="PostgreSQL"
+                  description='Versión mayor (ej. "18", "15", o "9.6" para versiones previas a la 10).'
+                  fields={[
+                    { key: 'pgDumpPath', label: 'pg_dump' },
+                    { key: 'pgRestorePath', label: 'pg_restore' },
+                  ]}
+                  rows={toolRegistry.postgres as unknown as Record<string, Record<string, string>>}
+                  onRegister={(version, values) => handleRegisterTool('postgres', version, values)}
+                  onUnregister={(version) => handleUnregisterTool('postgres', version)}
+                />
+                <ToolRegistrySection
+                  title="MySQL"
+                  description='Versión mayor.menor (ej. "8.0", "9.1").'
+                  fields={[{ key: 'mysqldumpPath', label: 'mysqldump' }]}
+                  rows={toolRegistry.mysql as unknown as Record<string, Record<string, string>>}
+                  onRegister={(version, values) => handleRegisterTool('mysql', version, values)}
+                  onUnregister={(version) => handleUnregisterTool('mysql', version)}
+                />
+                <ToolRegistrySection
+                  title="MariaDB"
+                  description='Versión mayor.menor (ej. "10.11", "11.5").'
+                  fields={[{ key: 'mariaDbDumpPath', label: 'mariadb-dump' }]}
+                  rows={toolRegistry.mariadb as unknown as Record<string, Record<string, string>>}
+                  onRegister={(version, values) => handleRegisterTool('mariadb', version, values)}
+                  onUnregister={(version) => handleUnregisterTool('mariadb', version)}
+                />
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {activeTab === 'clientes' && (
+        <section>
+          <h2 className="mb-2 text-sm font-semibold">Configuración de clientes</h2>
+          <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
             <div className="flex flex-wrap items-center gap-3">
-              <span className="text-sm">Versión actual: {appVersion ?? '—'}</span>
-              {updateCheck === 'idle' || updateCheck === 'none' ? (
-                <Button size="sm" variant="ghost" className="rounded-full px-4" onPress={handleCheckForUpdate}>
-                  Buscar actualizaciones
+              <select
+                style={{
+                  backgroundColor: 'var(--background)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 9999,
+                  padding: '6px 14px',
+                  color: 'var(--foreground)',
+                }}
+                value={exportClientId}
+                onChange={(e) => setExportClientId(e.target.value)}
+              >
+                <option value="">Todos los clientes</option>
+                {clients?.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <a href={exportUrl}>
+                <Button size="sm" className="rounded-full px-4" style={primaryPillStyle}>
+                  {exportClientId ? 'Exportar cliente' : 'Exportar todos'}
                 </Button>
-              ) : updateCheck === 'checking' ? (
-                <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                  Buscando…
-                </span>
-              ) : updateCheck === 'available' ? (
-                <>
-                  <span className="text-xs" style={{ color: 'var(--success)' }}>
-                    Nueva versión disponible: {availableUpdate?.version}
-                  </span>
-                  <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={handleInstallUpdate}>
-                    Descargar e instalar
-                  </Button>
-                </>
-              ) : updateCheck === 'downloading' ? (
-                <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                  Descargando e instalando…
-                </span>
-              ) : (
-                <>
-                  <span className="text-xs" style={{ color: 'var(--success)' }}>
-                    Instalada. Hay que reiniciar arkode para aplicarla.
-                  </span>
-                  <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => relaunch()}>
-                    Reiniciar ahora
-                  </Button>
-                </>
-              )}
+              </a>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="rounded-full px-4"
+                isDisabled={importBusy}
+                onPress={() => fileInputRef.current?.click()}
+              >
+                {importBusy ? 'Importando…' : 'Importar desde archivo'}
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleFileSelected(file);
+                }}
+              />
             </div>
-            {updateCheck === 'none' && (
-              <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
-                Ya tenés la última versión.
+            <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
+              El export nunca incluye contraseñas ni passphrases — hay que volver a cargarlas después de importar.
+              Importar siempre crea clientes nuevos; si ya existe un cliente con ese nombre, ese ítem falla sin afectar al resto.
+            </p>
+
+            {importError && (
+              <p className="mt-3 text-sm" style={{ color: 'var(--danger)' }}>
+                {importError}
               </p>
             )}
-            {updateError && (
-              <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
-                {updateError}
-              </p>
+
+            {importResult && (
+              <div className="mt-4 overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--border)' }}>
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="text-left" style={{ color: 'var(--muted)' }}>
+                      <th className="px-4 py-2 font-medium">Cliente</th>
+                      <th className="px-4 py-2 font-medium">Resultado</th>
+                      <th className="px-4 py-2 font-medium">Secretos a re-ingresar</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importResult.clients.map((client) => (
+                      <tr key={client.name} style={{ borderTop: '1px solid var(--separator)' }}>
+                        <td className="px-4 py-2.5 font-medium">{client.name}</td>
+                        <td className="px-4 py-2.5">
+                          {client.errors.length > 0 ? (
+                            <span style={{ color: 'var(--danger)' }}>{client.errors.join('; ')}</span>
+                          ) : (
+                            <span style={{ color: 'var(--success)' }}>
+                              {client.transportsCreated} transporte(s), {client.databaseConnectionsCreated} conexión(es) de BD,{' '}
+                              {client.tasksCreated} tarea(s) creadas
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                          {client.secretsNeedingReentry.length > 0 ? client.secretsNeedingReentry.join(', ') : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </section>
       )}
-
-      <section className="mb-8">
-        <h2 className="mb-2 text-sm font-semibold">Ubicación de datos</h2>
-        {system && (
-          <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
-            <div className="grid grid-cols-[140px_1fr] gap-y-2 text-sm">
-              <span style={{ color: 'var(--muted)' }}>Carpeta de datos</span>
-              <span style={monoStyle}>{system.appDataDir}</span>
-              <span style={{ color: 'var(--muted)' }}>Base de datos</span>
-              <span style={monoStyle}>{system.dbFilePath}</span>
-              <span style={{ color: 'var(--muted)' }}>Logs</span>
-              <span style={monoStyle}>{system.logsDir}</span>
-            </div>
-          </div>
-        )}
-      </section>
-
-      <section className="mb-8">
-        <h2 className="mb-2 text-sm font-semibold">Herramientas de línea de comandos (direct_dump)</h2>
-        {system && (
-          <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr className="text-left" style={{ color: 'var(--muted)' }}>
-                  <th className="px-4 py-2 font-medium">Herramienta</th>
-                  <th className="px-4 py-2 font-medium">Variable de entorno</th>
-                  <th className="px-4 py-2 font-medium">Ruta configurada</th>
-                  <th className="px-4 py-2 font-medium">Estado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {system.tools.map((tool) => (
-                  <tr key={tool.envVar} style={{ borderTop: '1px solid var(--separator)' }}>
-                    <td className="px-4 py-2.5">{tool.label}</td>
-                    <td className="px-4 py-2.5" style={monoStyle}>
-                      {tool.envVar}
-                    </td>
-                    <td className="px-4 py-2.5" style={monoStyle}>
-                      {tool.path ?? '—'}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <ToolStatusBadge path={tool.path} exists={tool.exists} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
-          Solo aplica a tareas direct_dump. Estas rutas se configuran hoy por variable de entorno, no desde esta pantalla.
-        </p>
-      </section>
-
-      <section className="mb-8">
-        <h2 className="mb-2 text-sm font-semibold">Herramientas por versión (direct_dump)</h2>
-        <p className="mb-3 text-xs" style={{ color: 'var(--muted)' }}>
-          Cuando un cliente usa una versión que no coincide con la ruta por defecto de arriba, registrá acá la herramienta
-          correcta para esa versión — se elige automáticamente según la versión detectada del servidor, sin tocar la tarea.
-        </p>
-        {toolRegistry && (
-          <div className="flex flex-col gap-4">
-            <ToolRegistrySection
-              title="PostgreSQL"
-              description='Versión mayor (ej. "18", "15", o "9.6" para versiones previas a la 10).'
-              fields={[
-                { key: 'pgDumpPath', label: 'pg_dump' },
-                { key: 'pgRestorePath', label: 'pg_restore' },
-              ]}
-              rows={toolRegistry.postgres as unknown as Record<string, Record<string, string>>}
-              onRegister={(version, values) => handleRegisterTool('postgres', version, values)}
-              onUnregister={(version) => handleUnregisterTool('postgres', version)}
-            />
-            <ToolRegistrySection
-              title="MySQL"
-              description='Versión mayor.menor (ej. "8.0", "9.1").'
-              fields={[{ key: 'mysqldumpPath', label: 'mysqldump' }]}
-              rows={toolRegistry.mysql as unknown as Record<string, Record<string, string>>}
-              onRegister={(version, values) => handleRegisterTool('mysql', version, values)}
-              onUnregister={(version) => handleUnregisterTool('mysql', version)}
-            />
-            <ToolRegistrySection
-              title="MariaDB"
-              description='Versión mayor.menor (ej. "10.11", "11.5").'
-              fields={[{ key: 'mariaDbDumpPath', label: 'mariadb-dump' }]}
-              rows={toolRegistry.mariadb as unknown as Record<string, Record<string, string>>}
-              onRegister={(version, values) => handleRegisterTool('mariadb', version, values)}
-              onUnregister={(version) => handleUnregisterTool('mariadb', version)}
-            />
-          </div>
-        )}
-      </section>
-
-      <section>
-        <h2 className="mb-2 text-sm font-semibold">Configuración de clientes</h2>
-        <div className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
-          <div className="flex flex-wrap items-center gap-3">
-            <select
-              style={{
-                backgroundColor: 'var(--background)',
-                border: '1px solid var(--border)',
-                borderRadius: 9999,
-                padding: '6px 14px',
-                color: 'var(--foreground)',
-              }}
-              value={exportClientId}
-              onChange={(e) => setExportClientId(e.target.value)}
-            >
-              <option value="">Todos los clientes</option>
-              {clients?.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <a href={exportUrl}>
-              <Button size="sm" className="rounded-full px-4" style={primaryPillStyle}>
-                {exportClientId ? 'Exportar cliente' : 'Exportar todos'}
-              </Button>
-            </a>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="rounded-full px-4"
-              isDisabled={importBusy}
-              onPress={() => fileInputRef.current?.click()}
-            >
-              {importBusy ? 'Importando…' : 'Importar desde archivo'}
-            </Button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="application/json"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleFileSelected(file);
-              }}
-            />
-          </div>
-          <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
-            El export nunca incluye contraseñas ni passphrases — hay que volver a cargarlas después de importar.
-            Importar siempre crea clientes nuevos; si ya existe un cliente con ese nombre, ese ítem falla sin afectar al resto.
-          </p>
-
-          {importError && (
-            <p className="mt-3 text-sm" style={{ color: 'var(--danger)' }}>
-              {importError}
-            </p>
-          )}
-
-          {importResult && (
-            <div className="mt-4 overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--border)' }}>
-              <table className="w-full border-collapse text-sm">
-                <thead>
-                  <tr className="text-left" style={{ color: 'var(--muted)' }}>
-                    <th className="px-4 py-2 font-medium">Cliente</th>
-                    <th className="px-4 py-2 font-medium">Resultado</th>
-                    <th className="px-4 py-2 font-medium">Secretos a re-ingresar</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {importResult.clients.map((client) => (
-                    <tr key={client.name} style={{ borderTop: '1px solid var(--separator)' }}>
-                      <td className="px-4 py-2.5 font-medium">{client.name}</td>
-                      <td className="px-4 py-2.5">
-                        {client.errors.length > 0 ? (
-                          <span style={{ color: 'var(--danger)' }}>{client.errors.join('; ')}</span>
-                        ) : (
-                          <span style={{ color: 'var(--success)' }}>
-                            {client.transportsCreated} transporte(s), {client.databaseConnectionsCreated} conexión(es) de BD,{' '}
-                            {client.tasksCreated} tarea(s) creadas
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                        {client.secretsNeedingReentry.length > 0 ? client.secretsNeedingReentry.join(', ') : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </section>
     </div>
   );
 }
