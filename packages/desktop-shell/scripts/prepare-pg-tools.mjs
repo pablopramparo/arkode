@@ -79,8 +79,23 @@ async function ensureCache() {
 
   console.log('Extracting bin/ (pg_dump, pg_restore, psql, and their DLLs)...');
   mkdirSync(cacheBinDir, { recursive: true });
-  // tar (bundled with Windows 10+ and Git Bash) reads zip via bsdtar under the hood on Windows.
-  execFileSync('tar', ['-xf', zipPath, '-C', cacheDir, 'pgsql/bin', '--strip-components=1'], { stdio: 'inherit' });
+  // Root-caused 2026-08-25, after the release CI pipeline's first real run
+  // failed here on a GitHub-hosted Windows runner despite a byte-perfect
+  // download: `tar` on PATH resolves to two genuinely different
+  // implementations depending on the shell. Git Bash's own `tar` (used by
+  // every local dev-machine test that "worked") is real GNU tar, which
+  // accepts --strip-components anywhere on the command line. The GitHub
+  // Actions runner invokes this script through PowerShell, which resolves
+  // Windows' own bundled tar.exe (libarchive/bsdtar) instead -- and bsdtar
+  // requires --strip-components (and other options) to appear *before*
+  // the file operand list, or it silently ignores it and then fails to
+  // find the now-unstripped path, producing exactly the
+  // "--strip-components=1: Not found in archive" error this pipeline hit.
+  // Confirmed by hand against Windows' real System32\tar.exe on this
+  // machine: the old argument order failed with that identical error, and
+  // moving --strip-components before -xf fixed it. GNU tar (Git Bash)
+  // accepts either order, so this reordering is safe everywhere.
+  execFileSync('tar', ['--strip-components=1', '-xf', zipPath, '-C', cacheDir, 'pgsql/bin'], { stdio: 'inherit' });
   rmSync(zipPath, { force: true });
 }
 
