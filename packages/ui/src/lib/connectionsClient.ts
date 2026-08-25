@@ -16,14 +16,17 @@ export interface ConnectionsData {
 }
 
 export interface TransportInput {
-  type: 'sftp' | 'ssh';
+  type: 'sftp' | 'ssh' | 'ftp';
   clientId: string;
   name: string;
   host: string;
   port?: number;
   username: string;
-  privateKeyPath: string;
+  /** sftp/ssh only. */
+  privateKeyPath?: string;
   passphrase?: string;
+  /** ftp only. */
+  password?: string;
   remotePath?: string;
   remoteFilePattern?: string | null;
   remoteCommand?: string;

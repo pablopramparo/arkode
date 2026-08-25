@@ -23,7 +23,7 @@ import { formatConnectionTestVersions } from '../lib/format';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 
 type Kind = 'transport' | 'database';
-type TransportType = 'sftp' | 'ssh';
+type TransportType = 'sftp' | 'ssh' | 'ftp';
 type Engine = 'postgres' | 'mysql' | 'mariadb';
 
 export type ConnectionRow =
@@ -51,8 +51,8 @@ export interface FormValues {
   sslMode: string;
 }
 
-function defaultPort(kind: Kind, engine: Engine): string {
-  if (kind === 'transport') return '22';
+function defaultPort(kind: Kind, engine: Engine, transportType: TransportType = 'sftp'): string {
+  if (kind === 'transport') return transportType === 'ftp' ? '21' : '22';
   return engine === 'postgres' ? '5432' : '3306';
 }
 
@@ -87,7 +87,7 @@ export function transportToFormValues(t: TransportWithClientName): FormValues {
     host: t.host,
     port: String(t.port),
     username: t.username,
-    privateKeyPath: t.privateKeyPath,
+    privateKeyPath: t.privateKeyPath ?? '',
     remotePath: t.remotePath ?? '',
     remoteFilePattern: t.remoteFilePattern ?? '',
     remoteCommand: t.remoteCommand ?? '',
@@ -112,6 +112,7 @@ export function databaseToFormValues(d: DatabaseConnectionWithClientName): FormV
 }
 
 export function toTransportInput(values: FormValues) {
+  const usesRemotePath = values.transportType === 'sftp' || values.transportType === 'ftp';
   return {
     type: values.transportType,
     clientId: values.clientId,
@@ -119,10 +120,11 @@ export function toTransportInput(values: FormValues) {
     host: values.host.trim(),
     port: values.port.trim() ? Number(values.port) : undefined,
     username: values.username.trim(),
-    privateKeyPath: values.privateKeyPath.trim(),
-    passphrase: values.passphrase.trim() || undefined,
-    remotePath: values.transportType === 'sftp' ? values.remotePath.trim() : undefined,
-    remoteFilePattern: values.transportType === 'sftp' ? values.remoteFilePattern.trim() || null : undefined,
+    privateKeyPath: values.transportType === 'ftp' ? undefined : values.privateKeyPath.trim(),
+    passphrase: values.transportType === 'ftp' ? undefined : values.passphrase.trim() || undefined,
+    password: values.transportType === 'ftp' ? values.password.trim() || undefined : undefined,
+    remotePath: usesRemotePath ? values.remotePath.trim() : undefined,
+    remoteFilePattern: usesRemotePath ? values.remoteFilePattern.trim() || null : undefined,
     remoteCommand: values.transportType === 'ssh' ? values.remoteCommand.trim() : undefined,
     remoteOutputPathTemplate: values.transportType === 'ssh' ? values.remoteOutputPathTemplate.trim() : undefined,
     remoteCleanup: values.transportType === 'ssh' ? values.remoteCleanup : undefined,
@@ -146,6 +148,7 @@ export function toDatabaseInput(values: FormValues) {
 export function isFormValid(values: FormValues): boolean {
   if (!values.clientId || !values.name.trim() || !values.host.trim() || !values.username.trim()) return false;
   if (values.kind === 'transport') {
+    if (values.transportType === 'ftp') return Boolean(values.remotePath.trim());
     if (!values.privateKeyPath.trim()) return false;
     if (values.transportType === 'sftp') return Boolean(values.remotePath.trim());
     return Boolean(values.remoteCommand.trim() && values.remoteOutputPathTemplate.trim());
@@ -198,7 +201,7 @@ export function ConnectionFields({
   fixedClientId?: string;
 }) {
   function setKindAndType(kind: Kind, transportType: TransportType) {
-    onChange({ kind, transportType, port: defaultPort(kind, values.engine) });
+    onChange({ kind, transportType, port: defaultPort(kind, values.engine, transportType) });
   }
 
   return (
@@ -210,6 +213,7 @@ export function ConnectionFields({
               [
                 { label: 'SFTP', onClick: () => setKindAndType('transport', 'sftp'), active: values.kind === 'transport' && values.transportType === 'sftp' },
                 { label: 'SSH', onClick: () => setKindAndType('transport', 'ssh'), active: values.kind === 'transport' && values.transportType === 'ssh' },
+                { label: 'FTP', onClick: () => setKindAndType('transport', 'ftp'), active: values.kind === 'transport' && values.transportType === 'ftp' },
                 { label: 'Base de datos', onClick: () => onChange({ kind: 'database', port: defaultPort('database', values.engine) }), active: values.kind === 'database' },
               ] as const
             ).map((opt) => (
@@ -282,23 +286,37 @@ export function ConnectionFields({
 
       {values.kind === 'transport' ? (
         <>
-          <Field label="Ruta de clave privada *">
-            <input
-              style={inputStyle}
-              placeholder="Ej: C:/keys/id_rsa"
-              value={values.privateKeyPath}
-              onChange={(e) => onChange({ privateKeyPath: e.target.value })}
-            />
-          </Field>
-          <Field label={isCreate ? 'Passphrase' : 'Passphrase (dejar en blanco para no cambiar)'}>
-            <input
-              style={inputStyle}
-              type="password"
-              value={values.passphrase}
-              onChange={(e) => onChange({ passphrase: e.target.value })}
-            />
-          </Field>
-          {values.transportType === 'sftp' ? (
+          {values.transportType === 'ftp' ? (
+            <Field label={isCreate ? 'Contraseña' : 'Contraseña (dejar en blanco para no cambiar)'}>
+              <input
+                style={inputStyle}
+                type="password"
+                placeholder="Dejar en blanco para FTP anónimo"
+                value={values.password}
+                onChange={(e) => onChange({ password: e.target.value })}
+              />
+            </Field>
+          ) : (
+            <>
+              <Field label="Ruta de clave privada *">
+                <input
+                  style={inputStyle}
+                  placeholder="Ej: C:/keys/id_rsa"
+                  value={values.privateKeyPath}
+                  onChange={(e) => onChange({ privateKeyPath: e.target.value })}
+                />
+              </Field>
+              <Field label={isCreate ? 'Passphrase' : 'Passphrase (dejar en blanco para no cambiar)'}>
+                <input
+                  style={inputStyle}
+                  type="password"
+                  value={values.passphrase}
+                  onChange={(e) => onChange({ passphrase: e.target.value })}
+                />
+              </Field>
+            </>
+          )}
+          {values.transportType === 'sftp' || values.transportType === 'ftp' ? (
             <>
               <Field label="Ruta remota *">
                 <input

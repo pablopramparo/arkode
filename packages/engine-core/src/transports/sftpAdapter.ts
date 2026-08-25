@@ -110,6 +110,9 @@ export function createSftpAdapterFromTransport(
   if (!transport.remotePath) {
     throw new Error('SFTP transport is missing remotePath.');
   }
+  if (!transport.privateKeyPath) {
+    throw new Error('SFTP transport is missing privateKeyPath.');
+  }
 
   const passphrase = transport.passphraseSecretRef
     ? (secretStore.get(transport.passphraseSecretRef) ?? undefined)

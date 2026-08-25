@@ -93,4 +93,58 @@ describe('transportsRepo', () => {
     const ctx = createTestContext();
     expect(() => ctx.transportsRepo.reactivate('nonexistent')).toThrow(/not found/i);
   });
+
+  it('createFtp() creates a transport with no private key, distinct from sftp/ssh', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+
+    const transport = ctx.transportsRepo.createFtp({
+      clientId: client.id,
+      name: 'ftp',
+      host: 'h',
+      username: 'u',
+      remotePath: '/backups',
+    });
+
+    expect(transport.type).toBe('ftp');
+    expect(transport.privateKeyPath).toBeNull();
+    expect(transport.port).toBe(21); // ftp's own default, distinct from sftp/ssh's 22
+    expect(transport.remotePath).toBe('/backups');
+  });
+
+  it('createFtp() round-trips passwordSecretRef and remoteFilePattern', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+
+    const transport = ctx.transportsRepo.createFtp({
+      clientId: client.id,
+      name: 'ftp',
+      host: 'h',
+      username: 'u',
+      passwordSecretRef: 'transport:password:secret-ref-1',
+      remotePath: '/backups',
+      remoteFilePattern: '.*\\.zip',
+    });
+
+    expect(transport.passwordSecretRef).toBe('transport:password:secret-ref-1');
+    expect(transport.remoteFilePattern).toBe('.*\\.zip');
+  });
+
+  it('update() can set and clear passwordSecretRef on an ftp transport', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+    const transport = ctx.transportsRepo.createFtp({
+      clientId: client.id,
+      name: 'ftp',
+      host: 'h',
+      username: 'u',
+      remotePath: '/backups',
+    });
+
+    const updated = ctx.transportsRepo.update(transport.id, { passwordSecretRef: 'transport:password:secret-ref-2' });
+    expect(updated.passwordSecretRef).toBe('transport:password:secret-ref-2');
+
+    const cleared = ctx.transportsRepo.update(transport.id, { passwordSecretRef: null });
+    expect(cleared.passwordSecretRef).toBeNull();
+  });
 });

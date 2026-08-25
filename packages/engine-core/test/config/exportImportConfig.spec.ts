@@ -1,8 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { exportConfig } from '../../src/config/exportConfig.js';
-import { importConfig } from '../../src/config/importConfig.js';
+import { exportConfig, exportTask } from '../../src/config/exportConfig.js';
+import { importConfig, importTaskBundle } from '../../src/config/importConfig.js';
 import { createTestContext, type TestContext } from '../helpers/testContext.js';
 import { withTempDir } from '../helpers/tempDir.js';
 
@@ -320,6 +320,7 @@ describe('importConfig private key restoration', () => {
           privateKeyPath: '/original/machine/path/id_rsa',
           privateKeyContentBase64: null,
           hasPassphrase: false,
+          hasPassword: false,
           remotePath: '/backups',
           remoteFilePattern: null,
           remoteCommand: null,
@@ -341,5 +342,138 @@ describe('importConfig private key restoration', () => {
     const importedClient = ctx.clientsRepo.getByName('NoKeyContent')!;
     const importedTransport = ctx.transportsRepo.listByClient(importedClient.id)[0];
     expect(importedTransport.privateKeyPath).toBe('/original/machine/path/id_rsa');
+  });
+});
+
+describe('exportTask / importTaskBundle', () => {
+  it('exports a fetch_existing task with its transport, not the whole client', () => {
+    const ctx = createTestContext();
+    const { fetchTask } = seedFullClient(ctx);
+
+    const bundle = exportTask(fetchTask.id, ctx);
+
+    expect(bundle.task.name).toBe('Fetch task');
+    expect(bundle.task.strategy).toBe('fetch_existing');
+    expect(bundle.task.transportName).toBe('SFTP main');
+    expect(bundle.transport).not.toBeNull();
+    expect(bundle.transport!.name).toBe('SFTP main');
+    expect(bundle.transport!.type).toBe('sftp');
+    expect(bundle.databaseConnection).toBeNull();
+  });
+
+  it('exports a direct_dump task with its database connection, not a transport', () => {
+    const ctx = createTestContext();
+    const { directTask } = seedFullClient(ctx);
+
+    const bundle = exportTask(directTask.id, ctx);
+
+    expect(bundle.task.strategy).toBe('direct_dump');
+    expect(bundle.transport).toBeNull();
+    expect(bundle.databaseConnection).not.toBeNull();
+    expect(bundle.databaseConnection!.name).toBe('Postgres direct');
+    expect(bundle.databaseConnection!.hasPassword).toBe(true);
+  });
+
+  it('throws a clean error exporting a nonexistent task', () => {
+    const ctx = createTestContext();
+    expect(() => exportTask('nonexistent', ctx)).toThrow(/not found/i);
+  });
+
+  it('attaches an exported task+transport to an existing client on a different machine, restoring its schedule and flagging secrets', () => {
+    const sourceCtx = createTestContext();
+    const { fetchTask } = seedFullClient(sourceCtx);
+    const bundle = exportTask(fetchTask.id, sourceCtx);
+
+    const targetCtx = createTestContext();
+    const existingClient = targetCtx.clientsRepo.create({ name: 'Already Here', localBasePath: 'D:/x' });
+
+    const result = importTaskBundle(bundle, existingClient.id, targetCtx);
+
+    expect(result.errors).toEqual([]);
+    expect(result.transportCreated).toBe(true);
+    expect(result.databaseConnectionCreated).toBe(false);
+    expect(result.taskId).not.toBeNull();
+    // 'k1' isn't a real file in this fixture (manual copy needed) + the passphrase itself.
+    expect(result.secretsNeedingReentry).toHaveLength(2);
+    expect(result.secretsNeedingReentry.some((s) => s.includes('passphrase'))).toBe(true);
+
+    // No new client was created -- it landed on the one that already existed.
+    expect(targetCtx.clientsRepo.listActive().map((c) => c.name)).toEqual(['Already Here']);
+
+    const importedTask = targetCtx.tasksRepo.listByClient(existingClient.id).find((t) => t.name === 'Fetch task')!;
+    expect(importedTask.scheduleTime).toBe('03:00');
+    expect(importedTask.scheduleFrequency).toBe('weekly');
+    expect(importedTask.scheduleDaysOfWeek).toEqual([1, 3, 5]);
+
+    const importedTransport = targetCtx.transportsRepo.listByClient(existingClient.id)[0];
+    expect(importedTransport.name).toBe('SFTP main');
+    expect(importedTransport.type).toBe('sftp');
+  });
+
+  it('attaches an exported direct_dump task+database connection to an existing client', () => {
+    const sourceCtx = createTestContext();
+    const { directTask } = seedFullClient(sourceCtx);
+    const bundle = exportTask(directTask.id, sourceCtx);
+
+    const targetCtx = createTestContext();
+    const existingClient = targetCtx.clientsRepo.create({ name: 'Already Here', localBasePath: 'D:/x' });
+
+    const result = importTaskBundle(bundle, existingClient.id, targetCtx);
+
+    expect(result.errors).toEqual([]);
+    expect(result.databaseConnectionCreated).toBe(true);
+    expect(result.transportCreated).toBe(false);
+    expect(result.secretsNeedingReentry).toEqual(['database connection "Postgres direct" needs its password re-entered']);
+
+    const importedConn = targetCtx.databaseConnectionsRepo.listByClient(existingClient.id)[0];
+    expect(importedConn.name).toBe('Postgres direct');
+  });
+
+  it('fails cleanly, creating nothing, when the target client does not exist', () => {
+    const sourceCtx = createTestContext();
+    const { fetchTask } = seedFullClient(sourceCtx);
+    const bundle = exportTask(fetchTask.id, sourceCtx);
+
+    const targetCtx = createTestContext();
+    const result = importTaskBundle(bundle, 'nonexistent-client-id', targetCtx);
+
+    expect(result.taskId).toBeNull();
+    expect(result.transportCreated).toBe(false);
+    expect(result.errors).toEqual(['Client nonexistent-client-id not found.']);
+  });
+
+  it('round-trips an ftp transport, with no private key and a password re-entry flag', () => {
+    const sourceCtx = createTestContext();
+    const client = sourceCtx.clientsRepo.create({ name: 'FtpSource', localBasePath: 'D:/x' });
+    const ftp = sourceCtx.transportsRepo.createFtp({
+      clientId: client.id,
+      name: 'FTP main',
+      host: 'h',
+      username: 'u',
+      remotePath: '/backups',
+      passwordSecretRef: 'transport:password:secret-ref-9',
+    });
+    const task = sourceCtx.tasksRepo.createFetchExisting({
+      clientId: client.id,
+      transportId: ftp.id,
+      name: 'FTP fetch task',
+      dbEngine: 'unknown',
+    });
+
+    const bundle = exportTask(task.id, sourceCtx);
+    expect(bundle.transport!.type).toBe('ftp');
+    expect(bundle.transport!.privateKeyPath).toBeNull();
+    expect(bundle.transport!.hasPassword).toBe(true);
+
+    const targetCtx = createTestContext();
+    const existingClient = targetCtx.clientsRepo.create({ name: 'FtpTarget', localBasePath: 'D:/y' });
+    const result = importTaskBundle(bundle, existingClient.id, targetCtx);
+
+    expect(result.errors).toEqual([]);
+    expect(result.secretsNeedingReentry).toEqual(['transport "FTP main" needs its FTP password re-entered']);
+
+    const importedTransport = targetCtx.transportsRepo.listByClient(existingClient.id)[0];
+    expect(importedTransport.type).toBe('ftp');
+    expect(importedTransport.privateKeyPath).toBeNull();
   });
 });

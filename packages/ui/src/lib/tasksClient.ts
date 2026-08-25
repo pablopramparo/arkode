@@ -111,3 +111,28 @@ export async function deactivateTask(id: string): Promise<void> {
 export async function reactivateTask(id: string): Promise<void> {
   await handleJson(await fetch(`${getApiBase()}/tasks/${id}/reactivate`, { method: 'POST' }));
 }
+
+/** A function, not a precomputed constant — see apiBase.ts's own note on why (must read the base URL fresh at call time, not at import time). */
+export function taskExportUrl(taskId: string): string {
+  return `${getApiBase()}/tasks/${taskId}/export`;
+}
+
+export interface ImportedTaskBundleResult {
+  taskId: string | null;
+  transportCreated: boolean;
+  databaseConnectionCreated: boolean;
+  secretsNeedingReentry: string[];
+  errors: string[];
+}
+
+/** Attaches an exported task+connection (see taskExportUrl) to an existing client — unlike config import, this never creates a new client. `bundle` is the parsed JSON from a task:export file. */
+export async function importTaskBundle(clientId: string, bundle: unknown): Promise<ImportedTaskBundleResult> {
+  const res = await fetch(`${getApiBase()}/tasks/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientId, bundle }),
+  });
+  const body = await res.json();
+  if (res.status >= 500) throw new Error(body.error ?? `Request failed: ${res.status}`);
+  return body;
+}

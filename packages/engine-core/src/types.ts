@@ -1,5 +1,5 @@
 export type BackupStrategyKind = 'fetch_existing' | 'remote_dump' | 'direct_dump';
-export type TransportType = 'sftp' | 'ssh';
+export type TransportType = 'sftp' | 'ssh' | 'ftp';
 export type DbEngine = 'postgres' | 'mysql' | 'mariadb' | 'unknown';
 export type ScheduleFrequency = 'daily' | 'weekly' | 'monthly';
 /**
@@ -42,8 +42,11 @@ export interface Transport {
   host: string;
   port: number;
   username: string;
-  privateKeyPath: string;
+  /** sftp/ssh only — null for ftp, which authenticates with passwordSecretRef instead. */
+  privateKeyPath: string | null;
   passphraseSecretRef: string | null;
+  /** ftp only. */
+  passwordSecretRef: string | null;
   remotePath: string | null;
   remoteFilePattern: string | null;
   remoteCommand: string | null;

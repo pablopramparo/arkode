@@ -21,11 +21,13 @@ export interface ExportedTransport {
   host: string;
   port: number;
   username: string;
-  /** The source machine's own path — kept for reference, but never reused directly on import (see privateKeyContentBase64). */
-  privateKeyPath: string;
-  /** The private key file's own content, base64-encoded, so import can write a working copy on the target machine — null if the file couldn't be read at export time (moved, permissions, etc.), in which case the import falls back to today's path-only behavior and flags it in secretsNeedingReentry. */
+  /** sftp/ssh only — null for ftp, which has no key at all. The source machine's own path — kept for reference, but never reused directly on import (see privateKeyContentBase64). */
+  privateKeyPath: string | null;
+  /** The private key file's own content, base64-encoded, so import can write a working copy on the target machine — null if the file couldn't be read at export time (moved, permissions, etc.), in which case the import falls back to today's path-only behavior and flags it in secretsNeedingReentry. Always null for ftp. */
   privateKeyContentBase64: string | null;
   hasPassphrase: boolean;
+  /** ftp only. */
+  hasPassword: boolean;
   remotePath: string | null;
   remoteFilePattern: string | null;
   remoteCommand: string | null;
@@ -70,4 +72,19 @@ export interface ExportedClient {
   transports: ExportedTransport[];
   databaseConnections: ExportedDatabaseConnection[];
   tasks: ExportedTask[];
+}
+
+/**
+ * A single task plus the one transport or database connection it depends
+ * on — portable independently of a whole client, unlike ConfigExport
+ * (which always carries a complete client). Meant to be attached to an
+ * *existing* client on import (see importConfig.ts's importTaskBundle),
+ * not to recreate a client the way ConfigExport's import does.
+ */
+export interface ExportedTaskBundle {
+  schemaVersion: 1;
+  exportedAt: string;
+  task: ExportedTask;
+  transport: ExportedTransport | null;
+  databaseConnection: ExportedDatabaseConnection | null;
 }

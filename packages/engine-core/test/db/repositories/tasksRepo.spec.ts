@@ -50,7 +50,29 @@ describe('tasksRepo transport/database-connection invariants', () => {
         name: 'task',
         dbEngine: 'unknown',
       })
-    ).toThrow(/require a sftp transport/);
+    ).toThrow(/require a sftp or ftp transport/);
+  });
+
+  it('accepts a fetch_existing task against an ftp transport, like sftp', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+    const transport = ctx.transportsRepo.createFtp({
+      clientId: client.id,
+      name: 'ftp',
+      host: 'h',
+      username: 'u',
+      remotePath: '/backups',
+    });
+
+    const task = ctx.tasksRepo.createFetchExisting({
+      clientId: client.id,
+      transportId: transport.id,
+      name: 'task',
+      dbEngine: 'unknown',
+    });
+
+    expect(task.strategy).toBe('fetch_existing');
+    expect(task.transportId).toBe(transport.id);
   });
 
   it('rejects a remote_dump task against an sftp transport', () => {

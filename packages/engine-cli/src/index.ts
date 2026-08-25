@@ -9,9 +9,12 @@ import {
   runBackupTask,
   createSftpAdapterFromTransport,
   createSshAdapterFromTransport,
+  createFtpAdapterFromTransport,
   testDatabaseConnection,
   exportConfig,
+  exportTask,
   importConfig,
+  importTaskBundle,
   runDueTasks,
   scheduledTaskNameForBackupTask,
   installScheduledTask,
@@ -28,6 +31,7 @@ import {
   type Transport,
   type ConnectionTestResult,
   type ConfigExport,
+  type ExportedTaskBundle,
   type RunBackupTaskDeps,
   type BackupTask,
   type DirectDumpCompatibilityResult,
@@ -128,6 +132,10 @@ function resolvePassphraseSecretRef(ctx: ReturnType<typeof buildContext>, passph
   return resolveSecretRef(ctx, passphrase, 'transport:passphrase');
 }
 
+function resolveFtpPasswordSecretRef(ctx: ReturnType<typeof buildContext>, password: string | undefined): string | null {
+  return resolveSecretRef(ctx, password, 'transport:password');
+}
+
 program
   .command('transport:create-sftp')
   .description('Create an SFTP transport for a client (fetch_existing strategy).')
@@ -190,6 +198,32 @@ program
   });
 
 program
+  .command('transport:create-ftp')
+  .description('Create a plain-FTP transport for a client (fetch_existing strategy).')
+  .requiredOption('--client <clientId>')
+  .requiredOption('--name <name>')
+  .requiredOption('--host <host>')
+  .option('--port <port>', 'default 21', '21')
+  .requiredOption('--username <username>')
+  .requiredOption('--remote-path <remotePath>')
+  .option('--remote-file-pattern <regex>')
+  .option('--password <password>', 'FTP password — stored via Windows Credential Manager, never in SQLite; omit for anonymous FTP')
+  .action((opts) => {
+    const ctx = buildContext();
+    const transport = ctx.transportsRepo.createFtp({
+      clientId: opts.client,
+      name: opts.name,
+      host: opts.host,
+      port: Number(opts.port),
+      username: opts.username,
+      passwordSecretRef: resolveFtpPasswordSecretRef(ctx, opts.password),
+      remotePath: opts.remotePath,
+      remoteFilePattern: opts.remoteFilePattern ?? null,
+    });
+    console.log(JSON.stringify(transport, null, 2));
+  });
+
+program
   .command('database-connection:create')
   .description('Create a direct DB connection for a client (direct_dump strategy).')
   .requiredOption('--client <clientId>')
@@ -227,8 +261,9 @@ program
   .option('--username <username>')
   .option('--private-key-path <path>')
   .option('--passphrase <passphrase>', 'set a new SSH key passphrase — omit to leave the existing one untouched')
-  .option('--remote-path <remotePath>', 'sftp only')
-  .option('--remote-file-pattern <regex>', 'sftp only')
+  .option('--password <password>', 'set a new FTP password — omit to leave the existing one untouched')
+  .option('--remote-path <remotePath>', 'sftp/ftp only')
+  .option('--remote-file-pattern <regex>', 'sftp/ftp only')
   .option('--remote-command <command>', 'ssh only')
   .option('--remote-output-path-template <template>', 'ssh only')
   .option('--remote-cleanup <bool>', 'ssh only: true|false')
@@ -241,6 +276,7 @@ program
       username: opts.username,
       privateKeyPath: opts.privateKeyPath ? copyPrivateKeyIntoAppStorage(opts.privateKeyPath) : undefined,
       passphraseSecretRef: opts.passphrase ? resolvePassphraseSecretRef(ctx, opts.passphrase) : undefined,
+      passwordSecretRef: opts.password ? resolveFtpPasswordSecretRef(ctx, opts.password) : undefined,
       remotePath: opts.remotePath,
       remoteFilePattern: opts.remoteFilePattern,
       remoteCommand: opts.remoteCommand,
@@ -447,7 +483,9 @@ function testTransportConnection(ctx: ReturnType<typeof buildContext>, transport
   const adapter =
     transport.type === 'ssh'
       ? createSshAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, confirmHostInteractively)
-      : createSftpAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, confirmHostInteractively);
+      : transport.type === 'ftp'
+        ? createFtpAdapterFromTransport(transport, ctx.secretStore)
+        : createSftpAdapterFromTransport(transport, ctx.secretStore, ctx.knownHostsRepo, confirmHostInteractively);
   return adapter.testConnection();
 }
 
@@ -860,6 +898,51 @@ program
   });
 
 program
+  .command('task:export')
+  .description(
+    'Export one task plus the one transport or database connection it depends on — a portable unit, unlike config:export which always carries a whole client. Never includes secrets. See task:import.'
+  )
+  .argument('<taskId>')
+  .option('--output <path>', 'write to this file instead of stdout')
+  .action(async (taskId: string, opts) => {
+    const ctx = buildContext();
+    const bundle = exportTask(taskId, ctx);
+    const json = JSON.stringify(bundle, null, 2);
+    if (opts.output) {
+      await writeFile(opts.output, json, 'utf8');
+      console.log(`Wrote task "${bundle.task.name}" to ${opts.output}`);
+    } else {
+      console.log(json);
+    }
+  });
+
+program
+  .command('task:import')
+  .description('Import a task:export JSON file, attaching it to an existing client (unlike config:import, which always creates a new one).')
+  .requiredOption('--file <path>')
+  .requiredOption('--client <clientId>', 'existing client to attach the imported task to')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    const raw = await readFile(opts.file, 'utf8');
+    const data = JSON.parse(raw) as ExportedTaskBundle;
+    if (data.schemaVersion !== 1) {
+      console.error(`Unsupported task export schemaVersion: ${data.schemaVersion}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const result = importTaskBundle(data, opts.client, ctx);
+    console.log(JSON.stringify(result, null, 2));
+
+    if (result.secretsNeedingReentry.length > 0) {
+      console.error(
+        '\nSecrets (SSH key passphrases, FTP/DB passwords) are never exported and must be re-entered for the items listed above under "secretsNeedingReentry".'
+      );
+    }
+    if (result.errors.length > 0) process.exitCode = 1;
+  });
+
+program
   .command('status')
   .description('Show the latest run per active client/task.')
   .option('--json', 'output as JSON')
@@ -1148,46 +1231,67 @@ program
       if (req.method === 'POST' && pathname === '/transports') {
         try {
           const body = await readJsonBody(req);
-          if (!body.clientId || !body.name || !body.host || !body.username || !body.privateKeyPath) {
-            sendJson(res, 400, { error: 'clientId, name, host, username, and privateKeyPath are required.' });
+          if (!body.clientId || !body.name || !body.host || !body.username) {
+            sendJson(res, 400, { error: 'clientId, name, host, and username are required.' });
             return;
           }
-          const passphraseSecretRef = resolvePassphraseSecretRef(ctx, body.passphrase);
-          const privateKeyPath = copyPrivateKeyIntoAppStorage(body.privateKeyPath);
           let transport;
-          if (body.type === 'ssh') {
-            if (!body.remoteCommand || !body.remoteOutputPathTemplate) {
-              sendJson(res, 400, { error: 'remoteCommand and remoteOutputPathTemplate are required for an ssh transport.' });
-              return;
-            }
-            transport = ctx.transportsRepo.createSsh({
-              clientId: body.clientId,
-              name: body.name,
-              host: body.host,
-              port: body.port,
-              username: body.username,
-              privateKeyPath,
-              passphraseSecretRef,
-              remoteCommand: body.remoteCommand,
-              remoteOutputPathTemplate: body.remoteOutputPathTemplate,
-              remoteCleanup: Boolean(body.remoteCleanup),
-            });
-          } else {
+          if (body.type === 'ftp') {
             if (!body.remotePath) {
-              sendJson(res, 400, { error: 'remotePath is required for an sftp transport.' });
+              sendJson(res, 400, { error: 'remotePath is required for an ftp transport.' });
               return;
             }
-            transport = ctx.transportsRepo.createSftp({
+            transport = ctx.transportsRepo.createFtp({
               clientId: body.clientId,
               name: body.name,
               host: body.host,
               port: body.port,
               username: body.username,
-              privateKeyPath,
-              passphraseSecretRef,
+              passwordSecretRef: resolveFtpPasswordSecretRef(ctx, body.password),
               remotePath: body.remotePath,
               remoteFilePattern: body.remoteFilePattern ?? null,
             });
+          } else {
+            if (!body.privateKeyPath) {
+              sendJson(res, 400, { error: 'privateKeyPath is required for an sftp/ssh transport.' });
+              return;
+            }
+            const passphraseSecretRef = resolvePassphraseSecretRef(ctx, body.passphrase);
+            const privateKeyPath = copyPrivateKeyIntoAppStorage(body.privateKeyPath);
+            if (body.type === 'ssh') {
+              if (!body.remoteCommand || !body.remoteOutputPathTemplate) {
+                sendJson(res, 400, { error: 'remoteCommand and remoteOutputPathTemplate are required for an ssh transport.' });
+                return;
+              }
+              transport = ctx.transportsRepo.createSsh({
+                clientId: body.clientId,
+                name: body.name,
+                host: body.host,
+                port: body.port,
+                username: body.username,
+                privateKeyPath,
+                passphraseSecretRef,
+                remoteCommand: body.remoteCommand,
+                remoteOutputPathTemplate: body.remoteOutputPathTemplate,
+                remoteCleanup: Boolean(body.remoteCleanup),
+              });
+            } else {
+              if (!body.remotePath) {
+                sendJson(res, 400, { error: 'remotePath is required for an sftp transport.' });
+                return;
+              }
+              transport = ctx.transportsRepo.createSftp({
+                clientId: body.clientId,
+                name: body.name,
+                host: body.host,
+                port: body.port,
+                username: body.username,
+                privateKeyPath,
+                passphraseSecretRef,
+                remotePath: body.remotePath,
+                remoteFilePattern: body.remoteFilePattern ?? null,
+              });
+            }
           }
           sendJson(res, 201, transport);
         } catch (err) {
@@ -1228,9 +1332,10 @@ program
       const transportIdMatch = req.method === 'PATCH' && pathname.match(/^\/transports\/([^/]+)$/);
       if (transportIdMatch) {
         try {
-          const { passphrase, ...rest } = await readJsonBody(req);
+          const { passphrase, password, ...rest } = await readJsonBody(req);
           const patch: Record<string, unknown> = { ...rest };
           if (passphrase) patch.passphraseSecretRef = resolvePassphraseSecretRef(ctx, passphrase);
+          if (password) patch.passwordSecretRef = resolveFtpPasswordSecretRef(ctx, password);
           if (patch.privateKeyPath) patch.privateKeyPath = copyPrivateKeyIntoAppStorage(patch.privateKeyPath as string);
           const transport = ctx.transportsRepo.update(transportIdMatch[1], patch);
           sendJson(res, 200, transport);
@@ -1499,6 +1604,43 @@ program
           }
           const result = importConfig(body as ConfigExport, ctx);
           sendJson(res, 200, result);
+        } catch (err) {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      const taskExportMatch = req.method === 'GET' && pathname.match(/^\/tasks\/([^/]+)\/export$/);
+      if (taskExportMatch) {
+        try {
+          const bundle = exportTask(taskExportMatch[1], ctx);
+          const filename = `arkode-task-export-${bundle.task.name.replace(/[^a-z0-9-_]+/gi, '_')}.json`;
+          res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Content-Disposition': `attachment; filename="${filename}"`,
+          });
+          res.end(JSON.stringify(bundle, null, 2));
+        } catch (err) {
+          sendJson(res, err instanceof Error && /not found/i.test(err.message) ? 404 : 500, {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/tasks/import') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.clientId) {
+            sendJson(res, 400, { error: 'clientId is required.' });
+            return;
+          }
+          if (body.bundle?.schemaVersion !== 1) {
+            sendJson(res, 400, { error: `Unsupported task export schemaVersion: ${body.bundle?.schemaVersion}` });
+            return;
+          }
+          const result = importTaskBundle(body.bundle as ExportedTaskBundle, body.clientId, ctx);
+          sendJson(res, result.errors.length > 0 && !result.taskId ? 400 : 200, result);
         } catch (err) {
           sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
         }

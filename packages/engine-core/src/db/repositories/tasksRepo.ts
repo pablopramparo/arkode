@@ -184,18 +184,21 @@ export function createTasksRepo(
 
   function insertTransportBackedTask(
     strategy: 'fetch_existing' | 'remote_dump',
-    requiredTransportType: 'sftp' | 'ssh',
+    allowedTransportTypes: readonly ('sftp' | 'ssh' | 'ftp')[],
     input: CreateFetchExistingTaskInput | CreateRemoteDumpTaskInput
   ): BackupTask {
     // App-level invariant the schema's CHECK can't express across tables:
-    // each strategy requires a specific transport type.
+    // each strategy requires a specific transport type (or, for
+    // fetch_existing, one of two -- sftp and ftp are both "connect, list,
+    // download the newest match" protocols; remote_dump has no FTP
+    // equivalent since FTP has no remote-command-execution concept).
     const transport = transportsRepo.getById(input.transportId);
     if (!transport) {
       throw new Error(`Transport ${input.transportId} not found.`);
     }
-    if (transport.type !== requiredTransportType) {
+    if (!allowedTransportTypes.includes(transport.type)) {
       throw new Error(
-        `${strategy} tasks require a ${requiredTransportType} transport; transport ${input.transportId} is "${transport.type}".`
+        `${strategy} tasks require a ${allowedTransportTypes.join(' or ')} transport; transport ${input.transportId} is "${transport.type}".`
       );
     }
 
@@ -204,11 +207,11 @@ export function createTasksRepo(
 
   return {
     createFetchExisting(input) {
-      return insertTransportBackedTask('fetch_existing', 'sftp', input);
+      return insertTransportBackedTask('fetch_existing', ['sftp', 'ftp'], input);
     },
 
     createRemoteDump(input) {
-      return insertTransportBackedTask('remote_dump', 'ssh', input);
+      return insertTransportBackedTask('remote_dump', ['ssh'], input);
     },
 
     createDirectDump(input) {

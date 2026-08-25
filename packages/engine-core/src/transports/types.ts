@@ -1,4 +1,4 @@
-export type TransportKind = 'sftp' | 'ssh';
+export type TransportKind = 'sftp' | 'ssh' | 'ftp';
 
 export interface RemoteFile {
   remotePath: string;
@@ -65,6 +65,19 @@ export interface SshAdapter extends TransportAdapter {
   removeRemoteFile(remotePath: string): Promise<void>;
 }
 
+/**
+ * fetch_existing strategy, same role as SftpAdapter — plain FTP (no
+ * SFTP/FTPS/TLS), for a remote host that only exposes an old-style FTP
+ * server for its existing dumps. Deliberately a separate kind, not an
+ * SftpAdapter variant: FTP authenticates with a username+password, not an
+ * SSH key, and has no host-key concept at all, so the config/adapter shape
+ * genuinely differs rather than just the wire protocol underneath.
+ */
+export interface FtpAdapter extends TransportAdapter {
+  kind: 'ftp';
+  listRemoteFiles(remoteDir: string, pattern?: RegExp): Promise<RemoteFile[]>;
+}
+
 export interface BaseTransportConfig {
   host: string;
   port: number;
@@ -86,4 +99,18 @@ export interface SshTransportConfig extends BaseTransportConfig {
   remoteCommand: string;
   remoteOutputPathTemplate: string;
   remoteCleanup: boolean;
+}
+
+/**
+ * Deliberately not a BaseTransportConfig variant — that base bundles
+ * privateKeyPath/host-key verification, neither of which applies to FTP.
+ */
+export interface FtpTransportConfig {
+  host: string;
+  port: number;
+  username: string;
+  /** Resolved from SecretStore by the caller — never read from disk here. Undefined means anonymous FTP. */
+  password?: string;
+  remotePath: string;
+  remoteFilePattern?: RegExp;
 }

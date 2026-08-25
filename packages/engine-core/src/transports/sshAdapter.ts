@@ -185,6 +185,9 @@ export function createSshAdapterFromTransport(
   if (!transport.remoteCommand || !transport.remoteOutputPathTemplate) {
     throw new Error('SSH transport is missing remoteCommand or remoteOutputPathTemplate.');
   }
+  if (!transport.privateKeyPath) {
+    throw new Error('SSH transport is missing privateKeyPath.');
+  }
 
   const passphrase = transport.passphraseSecretRef
     ? (secretStore.get(transport.passphraseSecretRef) ?? undefined)

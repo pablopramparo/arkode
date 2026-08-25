@@ -53,6 +53,7 @@ export { MachineDpapiSecretStore } from './secrets/machineDpapiStore.js';
 export * from './transports/types.js';
 export { createSftpAdapter, createSftpAdapterFromTransport } from './transports/sftpAdapter.js';
 export { createSshAdapter, createSshAdapterFromTransport } from './transports/sshAdapter.js';
+export { createFtpAdapter, createFtpAdapterFromTransport } from './transports/ftpAdapter.js';
 export { buildHostVerifier } from './transports/hostKeyVerification.js';
 export { resolveOutputPathTemplate } from './transports/outputPathTemplate.js';
 export { copyPrivateKeyIntoAppStorage } from './transports/copyPrivateKey.js';
@@ -112,7 +113,7 @@ export { runBackupTask } from './orchestrator/runBackupTask.js';
 export type { RunBackupTaskDeps, RunBackupTaskResult } from './orchestrator/runBackupTask.js';
 
 export * from './config/types.js';
-export { exportConfig } from './config/exportConfig.js';
+export { exportConfig, exportTask } from './config/exportConfig.js';
 export type { ExportConfigDeps } from './config/exportConfig.js';
-export { importConfig } from './config/importConfig.js';
-export type { ImportConfigDeps, ImportConfigResult, ImportedClientResult } from './config/importConfig.js';
+export { importConfig, importTaskBundle } from './config/importConfig.js';
+export type { ImportConfigDeps, ImportConfigResult, ImportedClientResult, ImportedTaskBundleResult } from './config/importConfig.js';

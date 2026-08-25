@@ -5,8 +5,9 @@ import { deactivateTask, fetchTasks, reactivateTask, type TaskRow } from '../lib
 import { fetchConnections, type ConnectionsData } from '../lib/connectionsClient';
 import { runTaskNow, testTaskConnection, testTaskCompatibility } from '../lib/statusClient';
 import { Switch } from './Switch';
-import { IconButton } from './IconButton';
-import { EditIcon, PlayIcon, PulseIcon, CheckCircleIcon } from './icons';
+import { IconButton, IconLinkButton } from './IconButton';
+import { EditIcon, PlayIcon, PulseIcon, CheckCircleIcon, DownloadIcon } from './icons';
+import { taskExportUrl } from '../lib/tasksClient';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { formatSchedule, formatConnectionTestVersions } from '../lib/format';
 import { TaskCreateWizard } from './TaskCreateWizard';
@@ -217,6 +218,11 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
                                 />
                               )}
                               <IconButton icon={<EditIcon />} label="Editar" onPress={() => setEditingTask(task)} />
+                              <IconLinkButton
+                                icon={<DownloadIcon />}
+                                label="Exportar (conexión + tarea, para adjuntar a otro cliente)"
+                                href={taskExportUrl(task.id)}
+                              />
                             </>
                           )}
                           <Button

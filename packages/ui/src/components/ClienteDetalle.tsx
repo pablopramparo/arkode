@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@heroui/react';
 import { isTauri } from '@tauri-apps/api/core';
 import { openPath } from '@tauri-apps/plugin-opener';
 import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
-import { fetchTasks, type TaskRow } from '../lib/tasksClient';
+import { fetchTasks, taskExportUrl, importTaskBundle, type TaskRow } from '../lib/tasksClient';
 import { fetchConnections, testTransport, testDatabaseConnection, type ConnectionsData } from '../lib/connectionsClient';
 import { downloadRunUrl, fetchBackups, fetchRuns, type RunRow } from '../lib/runsClient';
 import { runTaskNow, testTaskConnection, testTaskCompatibility } from '../lib/statusClient';
@@ -81,6 +81,32 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   const [editingTask, setEditingTask] = useState<TaskRow | null>(null);
   const [editingConnectionRow, setEditingConnectionRow] = useState<ConnectionRow | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importResult, setImportResult] = useState<Awaited<ReturnType<typeof importTaskBundle>> | null>(null);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleImportTaskFile(file: File) {
+    setImportBusy(true);
+    setImportResult(null);
+    try {
+      const text = await file.text();
+      const bundle = JSON.parse(text);
+      const result = await importTaskBundle(clientId, bundle);
+      setImportResult(result);
+      if (result.taskId) await refresh();
+    } catch (err) {
+      setImportResult({
+        taskId: null,
+        transportCreated: false,
+        databaseConnectionCreated: false,
+        secretsNeedingReentry: [],
+        errors: [err instanceof Error ? err.message : String(err)],
+      });
+    } finally {
+      setImportBusy(false);
+      if (importFileInputRef.current) importFileInputRef.current.value = '';
+    }
+  }
 
   async function handleOpenFolder(path: string) {
     setFolderError(null);
@@ -245,9 +271,30 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                 <Switch checked={showInactive} onChange={() => setShowInactive((v) => !v)} label="Mostrar inactivas" />
               )}
               {activeTab === 'tareas' && (
-                <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setShowCreate(true)}>
-                  + Agregar backup
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="rounded-full px-4"
+                    isDisabled={importBusy}
+                    onPress={() => importFileInputRef.current?.click()}
+                  >
+                    {importBusy ? 'Importando…' : 'Importar tarea'}
+                  </Button>
+                  <input
+                    ref={importFileInputRef}
+                    type="file"
+                    accept="application/json"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleImportTaskFile(file);
+                    }}
+                  />
+                  <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setShowCreate(true)}>
+                    + Agregar backup
+                  </Button>
+                </>
               )}
               {activeTab === 'conexiones' && (
                 <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setShowCreateConnection(true)}>
@@ -256,6 +303,27 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
               )}
             </div>
           </div>
+
+          {activeTab === 'tareas' && importResult && (
+            <div
+              className="mb-4 rounded-md border px-4 py-3 text-sm"
+              style={{
+                borderColor: importResult.errors.length > 0 ? 'var(--danger)' : 'var(--success)',
+                backgroundColor: `color-mix(in oklab, ${importResult.errors.length > 0 ? 'var(--danger)' : 'var(--success)'} 10%, transparent)`,
+              }}
+            >
+              {importResult.taskId ? (
+                <span style={{ color: 'var(--success)' }}>Tarea importada correctamente.</span>
+              ) : (
+                <span style={{ color: 'var(--danger)' }}>No se pudo importar: {importResult.errors.join('; ')}</span>
+              )}
+              {importResult.secretsNeedingReentry.length > 0 && (
+                <p className="mt-1 text-xs" style={{ color: 'var(--muted)' }}>
+                  Hay que volver a ingresar: {importResult.secretsNeedingReentry.join('; ')}
+                </p>
+              )}
+            </div>
+          )}
 
           {activeTab === 'tareas' &&
             (visibleTasks && visibleTasks.length > 0 ? (
@@ -311,6 +379,11 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   />
                                 )}
                                 <IconButton icon={<EditIcon />} label="Editar" onPress={() => setEditingTask(task)} />
+                                <IconLinkButton
+                                  icon={<DownloadIcon />}
+                                  label="Exportar (conexión + tarea, para adjuntar a otro cliente)"
+                                  href={taskExportUrl(task.id)}
+                                />
                                 {state?.testResult && (
                                   <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                                     {state.testResult.ok ? 'OK' : state.testResult.message}

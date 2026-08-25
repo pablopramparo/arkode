@@ -27,7 +27,9 @@ export interface FormValues {
   host: string;
   port: string;
   username: string;
-  // "new" mode — sftp/ssh
+  // "new" mode — sftp/ssh/ftp
+  /** Only meaningful when strategy is fetch_existing — remote_dump is always ssh, direct_dump has no transport at all. */
+  newTransportType: 'sftp' | 'ftp';
   privateKeyPath: string;
   passphrase: string;
   remotePath: string;
@@ -35,7 +37,7 @@ export interface FormValues {
   remoteCommand: string;
   remoteOutputPathTemplate: string;
   remoteCleanup: boolean;
-  // "new" mode — direct_dump
+  // "new" mode — direct_dump, and reused for ftp's password (see newTransportType)
   databaseName: string;
   password: string;
   sslMode: string;
@@ -63,6 +65,7 @@ export const EMPTY_FORM: FormValues = {
   host: '',
   port: '22',
   username: '',
+  newTransportType: 'sftp',
   privateKeyPath: '',
   passphrase: '',
   remotePath: '',
@@ -109,6 +112,9 @@ function isCreateValid(values: FormValues): boolean {
   if (!values.connectionName.trim() || !values.host.trim() || !values.username.trim()) return false;
   if (values.strategy === 'direct_dump') {
     return Boolean(values.databaseName.trim() && values.port.trim() && values.dbEngine !== 'unknown');
+  }
+  if (values.strategy === 'fetch_existing' && values.newTransportType === 'ftp') {
+    return Boolean(values.remotePath.trim());
   }
   if (!values.privateKeyPath.trim()) return false;
   if (values.strategy === 'fetch_existing') return Boolean(values.remotePath.trim());
@@ -226,22 +232,48 @@ function NewConnectionFields({ values, onChange }: { values: FormValues; onChang
         </>
       ) : (
         <>
-          <Field label="Ruta de clave privada *">
-            <input
-              style={inputStyle}
-              placeholder="Ej: C:/keys/id_rsa"
-              value={values.privateKeyPath}
-              onChange={(e) => onChange({ privateKeyPath: e.target.value })}
-            />
-          </Field>
-          <Field label="Passphrase">
-            <input
-              style={inputStyle}
-              type="password"
-              value={values.passphrase}
-              onChange={(e) => onChange({ passphrase: e.target.value })}
-            />
-          </Field>
+          {values.strategy === 'fetch_existing' && (
+            <Field label="Protocolo">
+              <SegmentedButtons
+                value={values.newTransportType}
+                onChange={(newTransportType) => onChange({ newTransportType })}
+                options={[
+                  { value: 'sftp', label: 'SFTP' },
+                  { value: 'ftp', label: 'FTP' },
+                ]}
+              />
+            </Field>
+          )}
+          {values.strategy === 'fetch_existing' && values.newTransportType === 'ftp' ? (
+            <Field label="Contraseña">
+              <input
+                style={inputStyle}
+                type="password"
+                placeholder="Dejar en blanco para FTP anónimo"
+                value={values.password}
+                onChange={(e) => onChange({ password: e.target.value })}
+              />
+            </Field>
+          ) : (
+            <>
+              <Field label="Ruta de clave privada *">
+                <input
+                  style={inputStyle}
+                  placeholder="Ej: C:/keys/id_rsa"
+                  value={values.privateKeyPath}
+                  onChange={(e) => onChange({ privateKeyPath: e.target.value })}
+                />
+              </Field>
+              <Field label="Passphrase">
+                <input
+                  style={inputStyle}
+                  type="password"
+                  value={values.passphrase}
+                  onChange={(e) => onChange({ passphrase: e.target.value })}
+                />
+              </Field>
+            </>
+          )}
           {values.strategy === 'fetch_existing' ? (
             <Field label="Ruta remota *">
               <input
@@ -397,9 +429,10 @@ function CreateFields({
 }) {
   const clientTransports = connections.transports.filter((t) => t.clientId === values.clientId && t.isActive);
   const clientDbConnections = connections.databaseConnections.filter((d) => d.clientId === values.clientId && d.isActive);
-  const sftpTransports = clientTransports.filter((t) => t.type === 'sftp');
+  // sftp and ftp are both valid transports for fetch_existing — see the "sftp/ftp are both connect-list-download protocols" note in engine-core's fetchExistingExecutor.ts.
+  const fetchExistingTransports = clientTransports.filter((t) => t.type === 'sftp' || t.type === 'ftp');
   const sshTransports = clientTransports.filter((t) => t.type === 'ssh');
-  const existingOptions = values.strategy === 'direct_dump' ? clientDbConnections : values.strategy === 'fetch_existing' ? sftpTransports : sshTransports;
+  const existingOptions = values.strategy === 'direct_dump' ? clientDbConnections : values.strategy === 'fetch_existing' ? fetchExistingTransports : sshTransports;
   const fixedClientName = fixedClientId ? connections.clients.find((c) => c.id === fixedClientId)?.name : undefined;
 
   return (
@@ -574,15 +607,17 @@ export function TaskCreateWizard({
           });
           databaseConnectionId = conn.id;
         } else {
+          const transportType = form.strategy === 'remote_dump' ? 'ssh' : form.newTransportType;
           const conn = await createTransport({
-            type: form.strategy === 'remote_dump' ? 'ssh' : 'sftp',
+            type: transportType,
             clientId: form.clientId,
             name: form.connectionName.trim(),
             host: form.host.trim(),
             port: form.port.trim() ? Number(form.port) : undefined,
             username: form.username.trim(),
-            privateKeyPath: form.privateKeyPath.trim(),
-            passphrase: form.passphrase.trim() || undefined,
+            privateKeyPath: transportType === 'ftp' ? undefined : form.privateKeyPath.trim(),
+            passphrase: transportType === 'ftp' ? undefined : form.passphrase.trim() || undefined,
+            password: transportType === 'ftp' ? form.password.trim() || undefined : undefined,
             remotePath: form.strategy === 'fetch_existing' ? form.remotePath.trim() : undefined,
             remoteCommand: form.strategy === 'remote_dump' ? form.remoteCommand.trim() : undefined,
             remoteOutputPathTemplate: form.strategy === 'remote_dump' ? form.remoteOutputPathTemplate.trim() : undefined,

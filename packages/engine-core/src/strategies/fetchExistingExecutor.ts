@@ -5,6 +5,7 @@ import type { SecretStore } from '../secrets/types.js';
 import type { KnownHostsRepo } from '../db/repositories/knownHostsRepo.js';
 import type { RunsRepo } from '../db/repositories/runsRepo.js';
 import { createSftpAdapterFromTransport } from '../transports/sftpAdapter.js';
+import { createFtpAdapterFromTransport } from '../transports/ftpAdapter.js';
 import { NoNewDumpAvailableError, type BackupStrategyContext, type BackupStrategyExecutor, type ProducedDump } from './types.js';
 
 export function createFetchExistingExecutor(
@@ -19,10 +20,17 @@ export function createFetchExistingExecutor(
 
     async produce(ctx: BackupStrategyContext): Promise<ProducedDump> {
       if (!transport.remotePath) {
-        throw new Error('SFTP transport is missing remotePath.');
+        throw new Error(`${transport.type} transport is missing remotePath.`);
       }
       const filePattern = transport.remoteFilePattern ? new RegExp(transport.remoteFilePattern) : undefined;
-      const adapter = createSftpAdapterFromTransport(transport, secretStore, knownHosts, onUnknownHost);
+      // fetch_existing supports either an sftp or an ftp transport -- both
+      // are "connect, list, download the newest match" protocols; remote_dump
+      // (ssh exec + download in one connection) has no FTP equivalent, since
+      // FTP has no remote-command-execution concept at all.
+      const adapter =
+        transport.type === 'ftp'
+          ? createFtpAdapterFromTransport(transport, secretStore)
+          : createSftpAdapterFromTransport(transport, secretStore, knownHosts, onUnknownHost);
 
       await adapter.connect();
       try {
