@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-exe/
+.build-cache/
 *.tsbuildinfo
 build/
 target/
@@ -14,3 +16,7 @@ src-tauri/target/
 Thumbs.db
 /SRC/
 /.tmp-appdata/
+
+# Tauri updater signing key — MUST NEVER be committed. The .pub file is safe
+# (it's embedded in tauri.conf.json), only the private .pem matters here.
+.tauri-updater-key.pem
