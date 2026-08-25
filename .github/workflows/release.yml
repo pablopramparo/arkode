@@ -22,7 +22,13 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: windows-latest
+    # Pinned, not windows-latest: that image moved to a Visual Studio
+    # version node-gyp's VS-finder doesn't recognize yet ("unknown version
+    # 'undefined' found at C:\Program Files\Microsoft Visual Studio\18\..."),
+    # which broke better-sqlite3's native build — confirmed 2026-08-25 on a
+    # real run. windows-2022 is the same VS2022 toolchain this app is built
+    # with on the actual dev machine.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with:
