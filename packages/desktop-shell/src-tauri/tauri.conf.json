@@ -7,7 +7,7 @@
     "frontendDist": "../../ui/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "pnpm --filter ui dev",
-    "beforeBuildCommand": "pnpm --filter desktop-shell prepare-sidecar && pnpm --filter desktop-shell prepare-pg-tools && pnpm --filter ui build"
+    "beforeBuildCommand": "pnpm --filter desktop-shell prepare-sidecar && pnpm --filter desktop-shell prepare-pg-tools && pnpm --filter desktop-shell prepare-restic && pnpm --filter ui build"
   },
   "app": {
     "windows": [
@@ -43,7 +43,8 @@
       "binaries/engine-cli"
     ],
     "resources": [
-      "resources/pgsql/bin/*"
+      "resources/pgsql/bin/*",
+      "resources/restic/*"
     ],
     "windows": {
       "nsis": {

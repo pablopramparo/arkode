@@ -77,6 +77,12 @@ jobs:
           path: packages/desktop-shell/.build-cache
           key: pgsql-tools-${{ hashFiles('packages/desktop-shell/scripts/prepare-pg-tools.mjs') }}
 
+      - name: Cache vendored restic binary
+        uses: actions/cache@v4
+        with:
+          path: packages/desktop-shell/.build-cache
+          key: restic-tool-${{ hashFiles('packages/desktop-shell/scripts/prepare-restic.mjs') }}
+
       - name: Cache pkg base binaries
         uses: actions/cache@v4
         with:
@@ -85,7 +91,19 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Vendors the real Windows restic.exe (see prepare-restic.mjs) here,
+      # ahead of the release gate below, so the real-restic-gated
+      # file-backup tests actually run instead of self-skipping for lack of
+      # RESTIC_PATH -- previously true even on this Windows job, since
+      # nothing set it. The later "Build signed installer" step's own
+      # beforeBuildCommand still calls prepare-restic again, harmlessly --
+      # confirmed idempotent (it just reuses this same cache).
+      - name: Vendor restic (also needed for the release-gate tests below)
+        run: pnpm --filter desktop-shell prepare-restic
+
       - name: Run engine-core tests (release gate)
+        env:
+          RESTIC_PATH: ${{ github.workspace }}\packages\desktop-shell\src-tauri\resources\restic\restic.exe
         run: |
           pnpm --filter engine-core build
           pnpm --filter engine-cli build

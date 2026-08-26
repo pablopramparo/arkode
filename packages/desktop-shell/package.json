@@ -6,7 +6,8 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "prepare-sidecar": "node scripts/prepare-sidecar.mjs",
-    "prepare-pg-tools": "node scripts/prepare-pg-tools.mjs"
+    "prepare-pg-tools": "node scripts/prepare-pg-tools.mjs",
+    "prepare-restic": "node scripts/prepare-restic.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

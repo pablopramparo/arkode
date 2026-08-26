@@ -21,6 +21,22 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # engine-core/test/fileBackup/**/*.spec.ts's real-restic suites
+      # self-skip when RESTIC_PATH isn't set (see resticClient.spec.ts) --
+      # without this they've never actually run in CI, only by hand on the
+      # dev machine. Windows packaging vendors restic via
+      # scripts/prepare-restic.mjs (a .zip), but this job runs on
+      # ubuntu-latest, so it needs restic's separate Linux release asset
+      # (a single bzip2-compressed binary, not a zip -- confirmed by hand
+      # against a real release) instead of reusing that script.
+      - name: Fetch restic (for the real-restic-gated file-backup tests)
+        run: |
+          curl -fL -o /tmp/restic.bz2 https://github.com/restic/restic/releases/download/v0.19.1/restic_0.19.1_linux_amd64.bz2
+          bunzip2 /tmp/restic.bz2
+          chmod +x /tmp/restic
+          /tmp/restic version
+          echo "RESTIC_PATH=/tmp/restic" >> "$GITHUB_ENV"
+
       - run: pnpm --filter engine-core build
       - run: pnpm --filter engine-cli build
       - run: pnpm --filter engine-core test

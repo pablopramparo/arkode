@@ -125,6 +125,23 @@ pub fn run() {
             .to_string()
         };
 
+        // Vendored by prepare-restic.mjs (see that script + CLAUDE.md's
+        // file-backup "Packaging" notes) — restic.exe is BSD-2-Clause
+        // (unlike mysqldump/mariadb-dump's GPLv2, which is why those two
+        // stay unvendored), a single static binary, so this needs no
+        // per-file exclusion list the way pgsql's DLL vendoring does.
+        // engine-core already reads RESTIC_PATH as its default restic
+        // binary location (see fileBackup/restic/resticClient.ts), so no
+        // engine-core code needed to change for this to "just work."
+        let resolve_restic_tool = |name: &str| {
+          app
+            .path()
+            .resolve(format!("resources/restic/{name}"), tauri::path::BaseDirectory::Resource)
+            .unwrap_or_else(|_| panic!("failed to resolve vendored {name} path"))
+            .to_string_lossy()
+            .to_string()
+        };
+
         let (mut rx, child) = app
           .shell()
           .sidecar("engine-cli")
@@ -134,6 +151,7 @@ pub fn run() {
             ("PG_DUMP_PATH", resolve_pg_tool("pg_dump.exe")),
             ("PG_RESTORE_PATH", resolve_pg_tool("pg_restore.exe")),
             ("PSQL_PATH", resolve_pg_tool("psql.exe")),
+            ("RESTIC_PATH", resolve_restic_tool("restic.exe")),
           ])
           .spawn()
           .expect("failed to spawn the engine-cli sidecar");
