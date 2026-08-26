@@ -195,9 +195,6 @@ export function createSshAdapterFromTransport(
   if (transport.type !== 'ssh') {
     throw new Error(`Expected an ssh transport, got "${transport.type}".`);
   }
-  if (!transport.remoteCommand || !transport.remoteOutputPathTemplate) {
-    throw new Error('SSH transport is missing remoteCommand or remoteOutputPathTemplate.');
-  }
   if (!transport.privateKeyPath) {
     throw new Error('SSH transport is missing privateKeyPath.');
   }
@@ -213,9 +210,6 @@ export function createSshAdapterFromTransport(
       username: transport.username,
       privateKeyPath: transport.privateKeyPath,
       passphrase,
-      remoteCommand: transport.remoteCommand,
-      remoteOutputPathTemplate: transport.remoteOutputPathTemplate,
-      remoteCleanup: transport.remoteCleanup,
       knownHostFingerprint: transport.knownHostFingerprint ?? undefined,
       onUnknownHost,
     },

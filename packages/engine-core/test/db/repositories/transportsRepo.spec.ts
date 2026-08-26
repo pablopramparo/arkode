@@ -6,7 +6,7 @@ function seedClient(ctx: ReturnType<typeof createTestContext>) {
 }
 
 describe('transportsRepo', () => {
-  it('updates only the fields provided, leaving type-specific fields for the other type untouched', () => {
+  it('updates only the fields provided, leaving other fields untouched', () => {
     const ctx = createTestContext();
     const client = seedClient(ctx);
     const transport = ctx.transportsRepo.createSftp({
@@ -15,14 +15,13 @@ describe('transportsRepo', () => {
       host: 'h1',
       username: 'u1',
       privateKeyPath: 'k1',
-      remotePath: '/backups',
     });
 
     const updated = ctx.transportsRepo.update(transport.id, { host: 'h2' });
 
     expect(updated.host).toBe('h2');
     expect(updated.username).toBe('u1'); // untouched
-    expect(updated.remotePath).toBe('/backups'); // untouched
+    expect(updated.privateKeyPath).toBe('k1'); // untouched
     expect(updated.type).toBe('sftp'); // update() has no way to change this
   });
 
@@ -35,13 +34,12 @@ describe('transportsRepo', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'k',
-      remotePath: '/backups',
-      remoteFilePattern: '.*\\.dump',
+      passphraseSecretRef: 'transport:passphrase:secret-ref-1',
     });
 
-    const updated = ctx.transportsRepo.update(transport.id, { remoteFilePattern: null });
+    const updated = ctx.transportsRepo.update(transport.id, { passphraseSecretRef: null });
 
-    expect(updated.remoteFilePattern).toBeNull();
+    expect(updated.passphraseSecretRef).toBeNull();
   });
 
   it('throws a clean error when updating a nonexistent transport', () => {
@@ -58,7 +56,6 @@ describe('transportsRepo', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'k',
-      remotePath: '/backups',
     });
 
     ctx.transportsRepo.deactivate(transport.id);
@@ -80,7 +77,6 @@ describe('transportsRepo', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'k',
-      remotePath: '/backups',
     });
     ctx.transportsRepo.deactivate(transport.id);
 
@@ -103,16 +99,14 @@ describe('transportsRepo', () => {
       name: 'ftp',
       host: 'h',
       username: 'u',
-      remotePath: '/backups',
     });
 
     expect(transport.type).toBe('ftp');
     expect(transport.privateKeyPath).toBeNull();
     expect(transport.port).toBe(21); // ftp's own default, distinct from sftp/ssh's 22
-    expect(transport.remotePath).toBe('/backups');
   });
 
-  it('createFtp() round-trips passwordSecretRef and remoteFilePattern', () => {
+  it('createFtp() round-trips passwordSecretRef', () => {
     const ctx = createTestContext();
     const client = seedClient(ctx);
 
@@ -122,12 +116,9 @@ describe('transportsRepo', () => {
       host: 'h',
       username: 'u',
       passwordSecretRef: 'transport:password:secret-ref-1',
-      remotePath: '/backups',
-      remoteFilePattern: '.*\\.zip',
     });
 
     expect(transport.passwordSecretRef).toBe('transport:password:secret-ref-1');
-    expect(transport.remoteFilePattern).toBe('.*\\.zip');
   });
 
   it('update() can set and clear passwordSecretRef on an ftp transport', () => {
@@ -138,7 +129,6 @@ describe('transportsRepo', () => {
       name: 'ftp',
       host: 'h',
       username: 'u',
-      remotePath: '/backups',
     });
 
     const updated = ctx.transportsRepo.update(transport.id, { passwordSecretRef: 'transport:password:secret-ref-2' });

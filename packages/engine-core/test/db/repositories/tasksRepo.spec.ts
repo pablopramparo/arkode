@@ -15,7 +15,6 @@ describe('tasksRepo transport/database-connection invariants', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'k',
-      remotePath: '/backups',
     });
 
     const task = ctx.tasksRepo.createFetchExisting({
@@ -23,11 +22,13 @@ describe('tasksRepo transport/database-connection invariants', () => {
       transportId: transport.id,
       name: 'task',
       dbEngine: 'unknown',
+      remotePath: '/backups',
     });
 
     expect(task.strategy).toBe('fetch_existing');
     expect(task.transportId).toBe(transport.id);
     expect(task.databaseConnectionId).toBeNull();
+    expect(task.remotePath).toBe('/backups');
   });
 
   it('rejects a fetch_existing task against an ssh transport', () => {
@@ -39,8 +40,6 @@ describe('tasksRepo transport/database-connection invariants', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'k',
-      remoteCommand: 'pg_dump ...',
-      remoteOutputPathTemplate: '/tmp/x.dump',
     });
 
     expect(() =>
@@ -61,7 +60,6 @@ describe('tasksRepo transport/database-connection invariants', () => {
       name: 'ftp',
       host: 'h',
       username: 'u',
-      remotePath: '/backups',
     });
 
     const task = ctx.tasksRepo.createFetchExisting({
@@ -69,6 +67,7 @@ describe('tasksRepo transport/database-connection invariants', () => {
       transportId: transport.id,
       name: 'task',
       dbEngine: 'unknown',
+      remotePath: '/backups',
     });
 
     expect(task.strategy).toBe('fetch_existing');
@@ -84,7 +83,6 @@ describe('tasksRepo transport/database-connection invariants', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'k',
-      remotePath: '/backups',
     });
 
     expect(() =>
@@ -149,7 +147,6 @@ describe('tasksRepo transport/database-connection invariants', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'k',
-      remotePath: '/backups',
     });
 
     const task = ctx.tasksRepo.createFetchExisting({
@@ -157,6 +154,7 @@ describe('tasksRepo transport/database-connection invariants', () => {
       transportId: transport.id,
       name: 'task',
       dbEngine: 'unknown',
+      remotePath: '/backups',
       retentionCount: 5,
     });
 
@@ -174,13 +172,13 @@ describe('tasksRepo update/deactivate/reactivate', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'k',
-      remotePath: '/backups',
     });
     const task = ctx.tasksRepo.createFetchExisting({
       clientId: client.id,
       transportId: transport.id,
       name: 'task',
       dbEngine: 'unknown',
+      remotePath: '/backups',
       retentionCount: 10,
     });
     return { client, transport, task };
@@ -238,13 +236,13 @@ describe('tasksRepo.setSchedule frequency', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'k',
-      remotePath: '/backups',
     });
     return ctx.tasksRepo.createFetchExisting({
       clientId: client.id,
       transportId: transport.id,
       name: 'task',
       dbEngine: 'unknown',
+      remotePath: '/backups',
     });
   }
 

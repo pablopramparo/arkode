@@ -47,11 +47,6 @@ export interface Transport {
   passphraseSecretRef: string | null;
   /** ftp only. */
   passwordSecretRef: string | null;
-  remotePath: string | null;
-  remoteFilePattern: string | null;
-  remoteCommand: string | null;
-  remoteOutputPathTemplate: string | null;
-  remoteCleanup: boolean;
   knownHostFingerprint: string | null;
   isActive: boolean;
   createdAt: string;
@@ -82,6 +77,13 @@ export interface BackupTask {
   databaseConnectionId: string | null;
   name: string;
   dbEngine: DbEngine;
+  /** fetch_existing only. */
+  remotePath: string | null;
+  remoteFilePattern: string | null;
+  /** remote_dump only. */
+  remoteCommand: string | null;
+  remoteOutputPathTemplate: string | null;
+  remoteCleanup: boolean;
   scheduleTime: string | null;
   scheduleEnabled: boolean;
   scheduleFrequency: ScheduleFrequency;

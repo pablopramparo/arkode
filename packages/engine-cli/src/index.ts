@@ -164,8 +164,6 @@ program
   .option('--port <port>', 'default 22', '22')
   .requiredOption('--username <username>')
   .requiredOption('--private-key-path <path>')
-  .requiredOption('--remote-path <remotePath>')
-  .option('--remote-file-pattern <regex>')
   .option('--passphrase <passphrase>', 'SSH key passphrase — stored via Windows Credential Manager, never in SQLite')
   .action((opts) => {
     const ctx = buildContext();
@@ -177,8 +175,6 @@ program
       username: opts.username,
       privateKeyPath: copyPrivateKeyIntoAppStorage(opts.privateKeyPath),
       passphraseSecretRef: resolvePassphraseSecretRef(ctx, opts.passphrase),
-      remotePath: opts.remotePath,
-      remoteFilePattern: opts.remoteFilePattern ?? null,
     });
     console.log(JSON.stringify(transport, null, 2));
   });
@@ -192,12 +188,6 @@ program
   .option('--port <port>', 'default 22', '22')
   .requiredOption('--username <username>')
   .requiredOption('--private-key-path <path>')
-  .requiredOption('--remote-command <command>', 'command that produces the dump on the remote host')
-  .requiredOption(
-    '--remote-output-path-template <template>',
-    'expected produced-file path, e.g. /tmp/backups/winners_{date:YYYYMMDD_HHmm}.dump'
-  )
-  .option('--remote-cleanup', 'delete the remote file after a successful download', false)
   .option('--passphrase <passphrase>', 'SSH key passphrase — stored via Windows Credential Manager, never in SQLite')
   .action((opts) => {
     const ctx = buildContext();
@@ -209,9 +199,6 @@ program
       username: opts.username,
       privateKeyPath: copyPrivateKeyIntoAppStorage(opts.privateKeyPath),
       passphraseSecretRef: resolvePassphraseSecretRef(ctx, opts.passphrase),
-      remoteCommand: opts.remoteCommand,
-      remoteOutputPathTemplate: opts.remoteOutputPathTemplate,
-      remoteCleanup: Boolean(opts.remoteCleanup),
     });
     console.log(JSON.stringify(transport, null, 2));
   });
@@ -224,8 +211,6 @@ program
   .requiredOption('--host <host>')
   .option('--port <port>', 'default 21', '21')
   .requiredOption('--username <username>')
-  .requiredOption('--remote-path <remotePath>')
-  .option('--remote-file-pattern <regex>')
   .option('--password <password>', 'FTP password — stored via Windows Credential Manager, never in SQLite; omit for anonymous FTP')
   .action((opts) => {
     const ctx = buildContext();
@@ -236,8 +221,6 @@ program
       port: Number(opts.port),
       username: opts.username,
       passwordSecretRef: resolveFtpPasswordSecretRef(ctx, opts.password),
-      remotePath: opts.remotePath,
-      remoteFilePattern: opts.remoteFilePattern ?? null,
     });
     console.log(JSON.stringify(transport, null, 2));
   });
@@ -281,11 +264,6 @@ program
   .option('--private-key-path <path>')
   .option('--passphrase <passphrase>', 'set a new SSH key passphrase — omit to leave the existing one untouched')
   .option('--password <password>', 'set a new FTP password — omit to leave the existing one untouched')
-  .option('--remote-path <remotePath>', 'sftp/ftp only')
-  .option('--remote-file-pattern <regex>', 'sftp/ftp only')
-  .option('--remote-command <command>', 'ssh only')
-  .option('--remote-output-path-template <template>', 'ssh only')
-  .option('--remote-cleanup <bool>', 'ssh only: true|false')
   .action((transportId: string, opts) => {
     const ctx = buildContext();
     const transport = ctx.transportsRepo.update(transportId, {
@@ -296,11 +274,6 @@ program
       privateKeyPath: opts.privateKeyPath ? copyPrivateKeyIntoAppStorage(opts.privateKeyPath) : undefined,
       passphraseSecretRef: opts.passphrase ? resolvePassphraseSecretRef(ctx, opts.passphrase) : undefined,
       passwordSecretRef: opts.password ? resolveFtpPasswordSecretRef(ctx, opts.password) : undefined,
-      remotePath: opts.remotePath,
-      remoteFilePattern: opts.remoteFilePattern,
-      remoteCommand: opts.remoteCommand,
-      remoteOutputPathTemplate: opts.remoteOutputPathTemplate,
-      remoteCleanup: opts.remoteCleanup != null ? opts.remoteCleanup === 'true' : undefined,
     });
     console.log(JSON.stringify(transport, null, 2));
   });
@@ -379,6 +352,14 @@ program
   .option('--transport <transportId>', 'required for fetch_existing/remote_dump')
   .option('--database-connection <databaseConnectionId>', 'required for direct_dump')
   .option('--db-engine <engine>', 'postgres | mysql | unknown', 'unknown')
+  .option('--remote-path <path>', 'required for fetch_existing — the remote directory to look for a dump in')
+  .option('--remote-file-pattern <regex>', 'fetch_existing only')
+  .option('--remote-command <command>', 'required for remote_dump — command that produces the dump on the remote host')
+  .option(
+    '--remote-output-path-template <template>',
+    'required for remote_dump — expected produced-file path, e.g. /tmp/backups/winners_{date:YYYYMMDD_HHmm}.dump'
+  )
+  .option('--remote-cleanup', 'remote_dump only: delete the remote file after a successful download', false)
   .option('--retention-count <n>', 'override the client default: keep the last N Success backups for this task')
   .option('--retention-days <n>', 'override the client default: keep backups from the last N days for this task')
   .action((opts) => {
@@ -410,9 +391,28 @@ program
       process.exitCode = 1;
       return;
     }
-    const input = { clientId: opts.client, transportId: opts.transport, name: opts.name, dbEngine, retentionCount, retentionDays };
-    const task =
-      opts.strategy === 'remote_dump' ? ctx.tasksRepo.createRemoteDump(input) : ctx.tasksRepo.createFetchExisting(input);
+    const base = { clientId: opts.client, transportId: opts.transport, name: opts.name, dbEngine, retentionCount, retentionDays };
+    let task;
+    if (opts.strategy === 'remote_dump') {
+      if (!opts.remoteCommand || !opts.remoteOutputPathTemplate) {
+        console.error('remote_dump tasks require --remote-command <command> and --remote-output-path-template <template>.');
+        process.exitCode = 1;
+        return;
+      }
+      task = ctx.tasksRepo.createRemoteDump({
+        ...base,
+        remoteCommand: opts.remoteCommand,
+        remoteOutputPathTemplate: opts.remoteOutputPathTemplate,
+        remoteCleanup: Boolean(opts.remoteCleanup),
+      });
+    } else {
+      if (!opts.remotePath) {
+        console.error('fetch_existing tasks require --remote-path <path>.');
+        process.exitCode = 1;
+        return;
+      }
+      task = ctx.tasksRepo.createFetchExisting({ ...base, remotePath: opts.remotePath, remoteFilePattern: opts.remoteFilePattern ?? null });
+    }
     console.log(JSON.stringify(task, null, 2));
   });
 
@@ -1772,10 +1772,6 @@ program
           }
           let transport;
           if (body.type === 'ftp') {
-            if (!body.remotePath) {
-              sendJson(res, 400, { error: 'remotePath is required for an ftp transport.' });
-              return;
-            }
             transport = ctx.transportsRepo.createFtp({
               clientId: body.clientId,
               name: body.name,
@@ -1783,8 +1779,6 @@ program
               port: body.port,
               username: body.username,
               passwordSecretRef: resolveFtpPasswordSecretRef(ctx, body.password),
-              remotePath: body.remotePath,
-              remoteFilePattern: body.remoteFilePattern ?? null,
             });
           } else {
             if (!body.privateKeyPath) {
@@ -1794,10 +1788,6 @@ program
             const passphraseSecretRef = resolvePassphraseSecretRef(ctx, body.passphrase);
             const privateKeyPath = copyPrivateKeyIntoAppStorage(body.privateKeyPath);
             if (body.type === 'ssh') {
-              if (!body.remoteCommand || !body.remoteOutputPathTemplate) {
-                sendJson(res, 400, { error: 'remoteCommand and remoteOutputPathTemplate are required for an ssh transport.' });
-                return;
-              }
               transport = ctx.transportsRepo.createSsh({
                 clientId: body.clientId,
                 name: body.name,
@@ -1806,15 +1796,8 @@ program
                 username: body.username,
                 privateKeyPath,
                 passphraseSecretRef,
-                remoteCommand: body.remoteCommand,
-                remoteOutputPathTemplate: body.remoteOutputPathTemplate,
-                remoteCleanup: Boolean(body.remoteCleanup),
               });
             } else {
-              if (!body.remotePath) {
-                sendJson(res, 400, { error: 'remotePath is required for an sftp transport.' });
-                return;
-              }
               transport = ctx.transportsRepo.createSftp({
                 clientId: body.clientId,
                 name: body.name,
@@ -1823,8 +1806,6 @@ program
                 username: body.username,
                 privateKeyPath,
                 passphraseSecretRef,
-                remotePath: body.remotePath,
-                remoteFilePattern: body.remoteFilePattern ?? null,
               });
             }
           }
@@ -2276,8 +2257,25 @@ program
               sendJson(res, 400, { error: `${body.strategy} tasks require transportId.` });
               return;
             }
-            const input = { clientId: body.clientId, transportId: body.transportId, name: body.name, dbEngine, retentionCount, retentionDays };
-            task = body.strategy === 'remote_dump' ? ctx.tasksRepo.createRemoteDump(input) : ctx.tasksRepo.createFetchExisting(input);
+            const base = { clientId: body.clientId, transportId: body.transportId, name: body.name, dbEngine, retentionCount, retentionDays };
+            if (body.strategy === 'remote_dump') {
+              if (!body.remoteCommand || !body.remoteOutputPathTemplate) {
+                sendJson(res, 400, { error: 'remoteCommand and remoteOutputPathTemplate are required for remote_dump.' });
+                return;
+              }
+              task = ctx.tasksRepo.createRemoteDump({
+                ...base,
+                remoteCommand: body.remoteCommand,
+                remoteOutputPathTemplate: body.remoteOutputPathTemplate,
+                remoteCleanup: Boolean(body.remoteCleanup),
+              });
+            } else {
+              if (!body.remotePath) {
+                sendJson(res, 400, { error: 'remotePath is required for fetch_existing.' });
+                return;
+              }
+              task = ctx.tasksRepo.createFetchExisting({ ...base, remotePath: body.remotePath, remoteFilePattern: body.remoteFilePattern ?? null });
+            }
           }
 
           let scheduleBlocked: DirectDumpCompatibilityResult | null = null;

@@ -19,10 +19,10 @@ export function createFetchExistingExecutor(
     kind: 'fetch_existing',
 
     async produce(ctx: BackupStrategyContext): Promise<ProducedDump> {
-      if (!transport.remotePath) {
-        throw new Error(`${transport.type} transport is missing remotePath.`);
+      if (!ctx.task.remotePath) {
+        throw new Error(`${transport.type} task is missing remotePath.`);
       }
-      const filePattern = transport.remoteFilePattern ? new RegExp(transport.remoteFilePattern) : undefined;
+      const filePattern = ctx.task.remoteFilePattern ? new RegExp(ctx.task.remoteFilePattern) : undefined;
       // fetch_existing supports either an sftp or an ftp transport -- both
       // are "connect, list, download the newest match" protocols; remote_dump
       // (ssh exec + download in one connection) has no FTP equivalent, since
@@ -34,9 +34,9 @@ export function createFetchExistingExecutor(
 
       await adapter.connect();
       try {
-        const remoteFiles = await adapter.listRemoteFiles(transport.remotePath, filePattern);
+        const remoteFiles = await adapter.listRemoteFiles(ctx.task.remotePath, filePattern);
         if (remoteFiles.length === 0) {
-          throw new Error(`No remote files found under ${transport.remotePath}.`);
+          throw new Error(`No remote files found under ${ctx.task.remotePath}.`);
         }
 
         // Never redundantly re-download an existing, validated backup.

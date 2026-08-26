@@ -44,8 +44,8 @@ export function createRemoteDumpExecutor(
     kind: 'remote_dump',
 
     async produce(ctx: BackupStrategyContext): Promise<ProducedDump> {
-      if (!transport.remoteCommand || !transport.remoteOutputPathTemplate) {
-        throw new Error('SSH transport is missing remoteCommand or remoteOutputPathTemplate.');
+      if (!ctx.task.remoteCommand || !ctx.task.remoteOutputPathTemplate) {
+        throw new Error('remote_dump task is missing remoteCommand or remoteOutputPathTemplate.');
       }
 
       const adapter = createSshAdapterFromTransport(transport, secretStore, knownHosts, onUnknownHost);
@@ -56,14 +56,14 @@ export function createRemoteDumpExecutor(
         // the remote clock at essentially the same moment remoteCommand's
         // own $(date ...) will evaluate — see queryRemoteNow's doc comment.
         const remoteNow = await queryRemoteNow(adapter);
-        const { exitCode, stdout, stderr } = await adapter.runCommand(transport.remoteCommand);
+        const { exitCode, stdout, stderr } = await adapter.runCommand(ctx.task.remoteCommand);
         if (exitCode !== 0) {
           throw new Error(
             `Remote backup command exited with code ${exitCode}.${stderr ? ` stderr: ${stderr}` : ''}${stdout ? ` stdout: ${stdout}` : ''}`
           );
         }
 
-        const expectedRemotePath = resolveOutputPathTemplate(transport.remoteOutputPathTemplate, remoteNow);
+        const expectedRemotePath = resolveOutputPathTemplate(ctx.task.remoteOutputPathTemplate, remoteNow);
         const remoteFile = await adapter.locateProducedFile(expectedRemotePath);
 
         const localTempPath = join(ctx.targetDir, `${remoteFile.fileName}.part`);
@@ -76,7 +76,7 @@ export function createRemoteDumpExecutor(
         // Per the spec's own ordering (verify the transfer, *then* optionally
         // clean up), cleanup happens only after a successful, non-empty
         // download — never before the local copy is confirmed present.
-        if (transport.remoteCleanup) {
+        if (ctx.task.remoteCleanup) {
           await adapter.removeRemoteFile(expectedRemotePath);
         }
 

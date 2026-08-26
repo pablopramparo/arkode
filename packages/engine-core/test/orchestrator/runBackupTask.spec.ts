@@ -35,13 +35,13 @@ function seedClientAndTask(ctx: TestContext, localBasePath: string) {
     host: 'h',
     username: 'u',
     privateKeyPath: 'k',
-    remotePath: '/backups',
   });
   const task = ctx.tasksRepo.createFetchExisting({
     clientId: client.id,
     transportId: transport.id,
     name: 'task',
     dbEngine: 'unknown',
+    remotePath: '/backups',
   });
   return { client, task };
 }
@@ -187,13 +187,13 @@ describe('runBackupTask', () => {
         host: 'h',
         username: 'u',
         privateKeyPath: 'k',
-        remotePath: '/backups',
       });
       const task = ctx.tasksRepo.createFetchExisting({
         clientId: client.id,
         transportId: transport.id,
         name: 'task',
         dbEngine: 'postgres',
+        remotePath: '/backups',
       });
       const originalPgRestorePath = process.env.PG_RESTORE_PATH;
       delete process.env.PG_RESTORE_PATH;
@@ -297,13 +297,13 @@ describe('runBackupTask', () => {
         host: 'h',
         username: 'u',
         privateKeyPath: 'k',
-        remotePath: '/backups',
       });
       const task = ctx.tasksRepo.createFetchExisting({
         clientId: client.id,
         transportId: transport.id,
         name: 'task',
         dbEngine: 'unknown',
+        remotePath: '/backups',
       });
 
       // First backup.

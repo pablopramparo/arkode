@@ -28,11 +28,6 @@ export interface ExportedTransport {
   hasPassphrase: boolean;
   /** ftp only. */
   hasPassword: boolean;
-  remotePath: string | null;
-  remoteFilePattern: string | null;
-  remoteCommand: string | null;
-  remoteOutputPathTemplate: string | null;
-  remoteCleanup: boolean;
   knownHostFingerprint: string | null;
 }
 
@@ -54,6 +49,13 @@ export interface ExportedTask {
   transportName: string | null;
   databaseConnectionName: string | null;
   dbEngine: DbEngine;
+  /** fetch_existing only. */
+  remotePath: string | null;
+  remoteFilePattern: string | null;
+  /** remote_dump only. */
+  remoteCommand: string | null;
+  remoteOutputPathTemplate: string | null;
+  remoteCleanup: boolean;
   scheduleTime: string | null;
   scheduleEnabled: boolean;
   scheduleFrequency: ScheduleFrequency;

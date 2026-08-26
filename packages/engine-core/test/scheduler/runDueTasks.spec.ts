@@ -59,13 +59,13 @@ function seedTask(ctx: TestContext, localBasePath: string, scheduleTime: string 
     host: 'h',
     username: 'u',
     privateKeyPath: 'k',
-    remotePath: '/backups',
   });
   const task = ctx.tasksRepo.createFetchExisting({
     clientId: client.id,
     transportId: transport.id,
     name: 'task',
     dbEngine: 'unknown',
+    remotePath: '/backups',
   });
   return scheduleTime ? ctx.tasksRepo.setSchedule(task.id, { scheduleTime, scheduleEnabled: true }) : task;
 }

@@ -126,15 +126,11 @@ export interface BaseTransportConfig {
 }
 
 export interface SftpTransportConfig extends BaseTransportConfig {
-  remotePath: string;
-  remoteFilePattern?: RegExp;
+  /** Only used by testConnection()'s connectivity smoke-listing — the real remote directory to work with is task-level now (BackupTask.remotePath), not part of the transport connection. */
+  remotePath?: string;
 }
 
-export interface SshTransportConfig extends BaseTransportConfig {
-  remoteCommand: string;
-  remoteOutputPathTemplate: string;
-  remoteCleanup: boolean;
-}
+export interface SshTransportConfig extends BaseTransportConfig {}
 
 /**
  * Deliberately not a BaseTransportConfig variant — that base bundles
@@ -146,6 +142,6 @@ export interface FtpTransportConfig {
   username: string;
   /** Resolved from SecretStore by the caller — never read from disk here. Undefined means anonymous FTP. */
   password?: string;
-  remotePath: string;
-  remoteFilePattern?: RegExp;
+  /** Only used by testConnection()'s connectivity smoke-listing — see SftpTransportConfig's note. */
+  remotePath?: string;
 }

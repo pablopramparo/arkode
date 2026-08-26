@@ -42,11 +42,6 @@ export interface FormValues {
   username: string;
   privateKeyPath: string;
   passphrase: string;
-  remotePath: string;
-  remoteFilePattern: string;
-  remoteCommand: string;
-  remoteOutputPathTemplate: string;
-  remoteCleanup: boolean;
   databaseName: string;
   password: string;
   sslMode: string;
@@ -68,11 +63,6 @@ export const EMPTY_FORM: FormValues = {
   username: '',
   privateKeyPath: '',
   passphrase: '',
-  remotePath: '',
-  remoteFilePattern: '',
-  remoteCommand: '',
-  remoteOutputPathTemplate: '',
-  remoteCleanup: false,
   databaseName: '',
   password: '',
   sslMode: '',
@@ -89,11 +79,6 @@ export function transportToFormValues(t: TransportWithClientName): FormValues {
     port: String(t.port),
     username: t.username,
     privateKeyPath: t.privateKeyPath ?? '',
-    remotePath: t.remotePath ?? '',
-    remoteFilePattern: t.remoteFilePattern ?? '',
-    remoteCommand: t.remoteCommand ?? '',
-    remoteOutputPathTemplate: t.remoteOutputPathTemplate ?? '',
-    remoteCleanup: t.remoteCleanup,
   };
 }
 
@@ -113,7 +98,6 @@ export function databaseToFormValues(d: DatabaseConnectionWithClientName): FormV
 }
 
 export function toTransportInput(values: FormValues) {
-  const usesRemotePath = values.transportType === 'sftp' || values.transportType === 'ftp';
   return {
     type: values.transportType,
     clientId: values.clientId,
@@ -124,11 +108,6 @@ export function toTransportInput(values: FormValues) {
     privateKeyPath: values.transportType === 'ftp' ? undefined : values.privateKeyPath.trim(),
     passphrase: values.transportType === 'ftp' ? undefined : values.passphrase.trim() || undefined,
     password: values.transportType === 'ftp' ? values.password.trim() || undefined : undefined,
-    remotePath: usesRemotePath ? values.remotePath.trim() : undefined,
-    remoteFilePattern: usesRemotePath ? values.remoteFilePattern.trim() || null : undefined,
-    remoteCommand: values.transportType === 'ssh' ? values.remoteCommand.trim() : undefined,
-    remoteOutputPathTemplate: values.transportType === 'ssh' ? values.remoteOutputPathTemplate.trim() : undefined,
-    remoteCleanup: values.transportType === 'ssh' ? values.remoteCleanup : undefined,
   };
 }
 
@@ -149,10 +128,8 @@ export function toDatabaseInput(values: FormValues) {
 export function isFormValid(values: FormValues): boolean {
   if (!values.clientId || !values.name.trim() || !values.host.trim() || !values.username.trim()) return false;
   if (values.kind === 'transport') {
-    if (values.transportType === 'ftp') return Boolean(values.remotePath.trim());
-    if (!values.privateKeyPath.trim()) return false;
-    if (values.transportType === 'sftp') return Boolean(values.remotePath.trim());
-    return Boolean(values.remoteCommand.trim() && values.remoteOutputPathTemplate.trim());
+    if (values.transportType === 'ftp') return true;
+    return Boolean(values.privateKeyPath.trim());
   }
   return Boolean(values.databaseName.trim() && values.port.trim());
 }
@@ -320,61 +297,16 @@ export function ConnectionFields({
               </Field>
             </>
           )}
-          {values.transportType === 'sftp' || values.transportType === 'ftp' ? (
-            <>
-              <Field label="Ruta remota *">
-                <input
-                  style={inputStyle}
-                  placeholder="Ej: /backups"
-                  value={values.remotePath}
-                  onChange={(e) => onChange({ remotePath: e.target.value })}
-                />
-              </Field>
-              <Field label="Patrón de archivo remoto">
-                <input
-                  style={inputStyle}
-                  placeholder="Ej: .*\.dump"
-                  value={values.remoteFilePattern}
-                  onChange={(e) => onChange({ remoteFilePattern: e.target.value })}
-                />
-              </Field>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                className="flex items-center gap-1.5 self-start text-xs"
-                style={{ color: 'var(--accent)' }}
-                onClick={() => setShowSshGuide(true)}
-              >
-                <HelpCircleIcon className="h-3.5 w-3.5" />
-                ¿Cómo configuro esto? (crear usuario, clave y comando de dump)
-              </button>
-              <Field label="Comando remoto *">
-                <input
-                  style={inputStyle}
-                  placeholder="Comando que genera el dump en el host remoto"
-                  value={values.remoteCommand}
-                  onChange={(e) => onChange({ remoteCommand: e.target.value })}
-                />
-              </Field>
-              <Field label="Plantilla de ruta de salida *">
-                <input
-                  style={inputStyle}
-                  placeholder="Ej: /tmp/backups/db_{date:YYYYMMDD_HHmm}.dump"
-                  value={values.remoteOutputPathTemplate}
-                  onChange={(e) => onChange({ remoteOutputPathTemplate: e.target.value })}
-                />
-              </Field>
-              <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
-                <input
-                  type="checkbox"
-                  checked={values.remoteCleanup}
-                  onChange={(e) => onChange({ remoteCleanup: e.target.checked })}
-                />
-                Eliminar el archivo remoto tras una descarga exitosa
-              </label>
-            </>
+          {values.transportType === 'ssh' && (
+            <button
+              type="button"
+              className="flex items-center gap-1.5 self-start text-xs"
+              style={{ color: 'var(--accent)' }}
+              onClick={() => setShowSshGuide(true)}
+            >
+              <HelpCircleIcon className="h-3.5 w-3.5" />
+              ¿Cómo configuro esto? (crear usuario y clave para backups)
+            </button>
           )}
         </>
       ) : (

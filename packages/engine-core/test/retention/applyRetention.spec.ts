@@ -63,13 +63,13 @@ function seedClientAndTask(ctx: TestContext, policy: Partial<{ retentionCount: n
     host: 'h',
     username: 'u',
     privateKeyPath: 'k',
-    remotePath: '/backups',
   });
   const task = ctx.tasksRepo.createFetchExisting({
     clientId: client.id,
     transportId: transport.id,
     name: 'task',
     dbEngine: 'unknown',
+    remotePath: '/backups',
   });
   return { client, task };
 }

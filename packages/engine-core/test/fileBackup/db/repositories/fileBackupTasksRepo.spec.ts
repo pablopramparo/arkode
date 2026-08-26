@@ -38,7 +38,6 @@ describe('fileBackupTasksRepo', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'k',
-      remotePath: '/backups',
     }).id;
     sshTransportId = transportsRepo.createSsh({
       clientId,
@@ -46,8 +45,6 @@ describe('fileBackupTasksRepo', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'k',
-      remoteCommand: 'echo hi',
-      remoteOutputPathTemplate: '/tmp/x',
     }).id;
   });
 
@@ -98,7 +95,6 @@ describe('fileBackupTasksRepo', () => {
       host: 'h',
       username: 'u',
       passwordSecretRef: 'pw-ref',
-      remotePath: '/backups',
     }).id;
     const task = tasksRepo.createRemoteFolder({ clientId, repositoryId, name: 'Remote', transportId: ftpTransportId, remoteSourcePath: '/uploads' });
     expect(task.transportId).toBe(ftpTransportId);

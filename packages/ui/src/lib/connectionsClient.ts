@@ -27,11 +27,6 @@ export interface TransportInput {
   passphrase?: string;
   /** ftp only. */
   password?: string;
-  remotePath?: string;
-  remoteFilePattern?: string | null;
-  remoteCommand?: string;
-  remoteOutputPathTemplate?: string;
-  remoteCleanup?: boolean;
 }
 
 export interface DatabaseConnectionInput {

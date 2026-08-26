@@ -11,13 +11,13 @@ function seedTask(ctx: TestContext) {
     host: 'h',
     username: 'u',
     privateKeyPath: 'k',
-    remotePath: '/backups',
   });
   const task = ctx.tasksRepo.createFetchExisting({
     clientId: client.id,
     transportId: transport.id,
     name: 'task',
     dbEngine: 'unknown',
+    remotePath: '/backups',
   });
   return { client, task };
 }

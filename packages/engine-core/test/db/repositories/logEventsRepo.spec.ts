@@ -10,13 +10,13 @@ function seedRunId(ctx: TestContext): string {
     host: 'h',
     username: 'u',
     privateKeyPath: 'k',
-    remotePath: '/backups',
   });
   const task = ctx.tasksRepo.createFetchExisting({
     clientId: client.id,
     transportId: transport.id,
     name: 'task',
     dbEngine: 'unknown',
+    remotePath: '/backups',
   });
   const run = ctx.runsRepo.create({ taskId: task.id, clientId: client.id, strategy: 'fetch_existing', transportId: transport.id, databaseConnectionId: null, pid: 1 });
   return run.id;

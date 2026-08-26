@@ -15,7 +15,6 @@ function seedFullClient(ctx: TestContext, name = 'Winners') {
     host: 'h1',
     username: 'u1',
     privateKeyPath: 'k1',
-    remotePath: '/backups',
     passphraseSecretRef: 'transport:passphrase:secret-ref-1',
   });
   const ssh = ctx.transportsRepo.createSsh({
@@ -24,8 +23,6 @@ function seedFullClient(ctx: TestContext, name = 'Winners') {
     host: 'h2',
     username: 'u2',
     privateKeyPath: 'k2',
-    remoteCommand: 'pg_dump ...',
-    remoteOutputPathTemplate: '/tmp/{date:YYYYMMDD}.dump',
   });
   const pgConn = ctx.databaseConnectionsRepo.create({
     clientId: client.id,
@@ -43,6 +40,7 @@ function seedFullClient(ctx: TestContext, name = 'Winners') {
     transportId: sftp.id,
     name: 'Fetch task',
     dbEngine: 'unknown',
+    remotePath: '/backups',
     retentionCount: 5,
   });
   const fetchTask = ctx.tasksRepo.setSchedule(fetchTaskUnscheduled.id, {
@@ -56,6 +54,8 @@ function seedFullClient(ctx: TestContext, name = 'Winners') {
     transportId: ssh.id,
     name: 'Remote dump task',
     dbEngine: 'postgres',
+    remoteCommand: 'pg_dump ...',
+    remoteOutputPathTemplate: '/tmp/{date:YYYYMMDD}.dump',
   });
   const directTask = ctx.tasksRepo.createDirectDump({
     clientId: client.id,
@@ -206,6 +206,11 @@ describe('importConfig', () => {
           transportName: 'does-not-exist',
           databaseConnectionName: null,
           dbEngine: 'unknown',
+          remotePath: '/backups',
+          remoteFilePattern: null,
+          remoteCommand: null,
+          remoteOutputPathTemplate: null,
+          remoteCleanup: false,
           scheduleTime: null,
           scheduleEnabled: true,
           scheduleFrequency: 'daily',
@@ -239,7 +244,6 @@ describe('exportConfig private key content', () => {
         host: 'h',
         username: 'u',
         privateKeyPath: keyPath,
-        remotePath: '/backups',
       });
 
       const exported = exportConfig('all', ctx);
@@ -258,7 +262,6 @@ describe('exportConfig private key content', () => {
       host: 'h',
       username: 'u',
       privateKeyPath: 'this/path/does/not/exist',
-      remotePath: '/backups',
     });
 
     const exported = exportConfig('all', ctx);
@@ -281,7 +284,6 @@ describe('importConfig private key restoration', () => {
           host: 'h',
           username: 'u',
           privateKeyPath: keyPath,
-          remotePath: '/backups',
         });
         const exported = exportConfig('all', sourceCtx);
 
@@ -321,11 +323,6 @@ describe('importConfig private key restoration', () => {
           privateKeyContentBase64: null,
           hasPassphrase: false,
           hasPassword: false,
-          remotePath: '/backups',
-          remoteFilePattern: null,
-          remoteCommand: null,
-          remoteOutputPathTemplate: null,
-          remoteCleanup: false,
           knownHostFingerprint: null,
         },
       ],
@@ -450,7 +447,6 @@ describe('exportTask / importTaskBundle', () => {
       name: 'FTP main',
       host: 'h',
       username: 'u',
-      remotePath: '/backups',
       passwordSecretRef: 'transport:password:secret-ref-9',
     });
     const task = sourceCtx.tasksRepo.createFetchExisting({
@@ -458,6 +454,7 @@ describe('exportTask / importTaskBundle', () => {
       transportId: ftp.id,
       name: 'FTP fetch task',
       dbEngine: 'unknown',
+      remotePath: '/backups',
     });
 
     const bundle = exportTask(task.id, sourceCtx);

@@ -19,6 +19,13 @@ export interface TaskInput {
   transportId?: string;
   databaseConnectionId?: string;
   dbEngine?: DbEngine;
+  /** fetch_existing only. */
+  remotePath?: string;
+  remoteFilePattern?: string | null;
+  /** remote_dump only. */
+  remoteCommand?: string;
+  remoteOutputPathTemplate?: string;
+  remoteCleanup?: boolean;
   retentionCount?: number | null;
   retentionDays?: number | null;
   scheduleTime?: string | null;

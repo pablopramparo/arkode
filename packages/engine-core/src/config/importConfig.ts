@@ -61,8 +61,6 @@ function importTransport(t: ExportedTransport, clientId: string, deps: ImportCon
       host: t.host,
       port: t.port,
       username: t.username,
-      remotePath: t.remotePath ?? '',
-      remoteFilePattern: t.remoteFilePattern,
     });
     const secretNotes = t.hasPassword ? [`transport "${t.name}" needs its FTP password re-entered`] : [];
     return { id: created.id, secretNotes };
@@ -78,8 +76,6 @@ function importTransport(t: ExportedTransport, clientId: string, deps: ImportCon
           port: t.port,
           username: t.username,
           privateKeyPath,
-          remotePath: t.remotePath ?? '',
-          remoteFilePattern: t.remoteFilePattern,
           knownHostFingerprint: t.knownHostFingerprint,
         })
       : deps.transportsRepo.createSsh({
@@ -89,9 +85,6 @@ function importTransport(t: ExportedTransport, clientId: string, deps: ImportCon
           port: t.port,
           username: t.username,
           privateKeyPath,
-          remoteCommand: t.remoteCommand ?? '',
-          remoteOutputPathTemplate: t.remoteOutputPathTemplate ?? '',
-          remoteCleanup: t.remoteCleanup,
           knownHostFingerprint: t.knownHostFingerprint,
         });
 
@@ -225,8 +218,19 @@ function importOneClient(exported: ExportedClient, deps: ImportConfigDeps): Impo
         }
         created =
           task.strategy === 'remote_dump'
-            ? deps.tasksRepo.createRemoteDump({ ...base, transportId })
-            : deps.tasksRepo.createFetchExisting({ ...base, transportId });
+            ? deps.tasksRepo.createRemoteDump({
+                ...base,
+                transportId,
+                remoteCommand: task.remoteCommand ?? '',
+                remoteOutputPathTemplate: task.remoteOutputPathTemplate ?? '',
+                remoteCleanup: task.remoteCleanup,
+              })
+            : deps.tasksRepo.createFetchExisting({
+                ...base,
+                transportId,
+                remotePath: task.remotePath ?? '',
+                remoteFilePattern: task.remoteFilePattern,
+              });
       }
 
       if (task.scheduleTime) {
@@ -325,8 +329,19 @@ export function importTaskBundle(bundle: ExportedTaskBundle, clientId: string, d
       if (!transportId) throw new Error('is missing its transport');
       created =
         task.strategy === 'remote_dump'
-          ? deps.tasksRepo.createRemoteDump({ ...base, transportId })
-          : deps.tasksRepo.createFetchExisting({ ...base, transportId });
+          ? deps.tasksRepo.createRemoteDump({
+              ...base,
+              transportId,
+              remoteCommand: task.remoteCommand ?? '',
+              remoteOutputPathTemplate: task.remoteOutputPathTemplate ?? '',
+              remoteCleanup: task.remoteCleanup,
+            })
+          : deps.tasksRepo.createFetchExisting({
+              ...base,
+              transportId,
+              remotePath: task.remotePath ?? '',
+              remoteFilePattern: task.remoteFilePattern,
+            });
     }
 
     if (task.scheduleTime) {

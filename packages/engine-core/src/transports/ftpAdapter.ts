@@ -70,7 +70,15 @@ export function createFtpAdapter(config: FtpTransportConfig): FtpAdapter {
       const startedAt = Date.now();
       try {
         await this.connect();
-        await client.list(config.remotePath);
+        // Not a real task's configured directory (that's task-level now, see
+        // FtpTransportConfig's note) -- basic-ftp's list() defaults to the
+        // current directory when given no path, which is enough to prove
+        // connectivity+auth for a caller with no specific path to check.
+        if (config.remotePath) {
+          await client.list(config.remotePath);
+        } else {
+          await client.list();
+        }
         await this.disconnect();
         return { ok: true, message: 'Connection succeeded.', latencyMs: Date.now() - startedAt };
       } catch (err) {
@@ -127,9 +135,6 @@ export function createFtpAdapterFromTransport(transport: Transport, secretStore:
   if (transport.type !== 'ftp') {
     throw new Error(`Expected an ftp transport, got "${transport.type}".`);
   }
-  if (!transport.remotePath) {
-    throw new Error('FTP transport is missing remotePath.');
-  }
 
   const password = transport.passwordSecretRef ? (secretStore.get(transport.passwordSecretRef) ?? undefined) : undefined;
 
@@ -138,7 +143,5 @@ export function createFtpAdapterFromTransport(transport: Transport, secretStore:
     port: transport.port,
     username: transport.username,
     password,
-    remotePath: transport.remotePath,
-    remoteFilePattern: transport.remoteFilePattern ? new RegExp(transport.remoteFilePattern) : undefined,
   });
 }

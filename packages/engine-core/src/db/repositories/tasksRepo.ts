@@ -12,6 +12,11 @@ interface BackupTaskRow {
   database_connection_id: string | null;
   name: string;
   db_engine: string;
+  remote_path: string | null;
+  remote_file_pattern: string | null;
+  remote_command: string | null;
+  remote_output_path_template: string | null;
+  remote_cleanup: number;
   schedule_time: string | null;
   schedule_enabled: number;
   schedule_frequency: string;
@@ -38,6 +43,11 @@ function toDomain(row: BackupTaskRow): BackupTask {
     databaseConnectionId: row.database_connection_id,
     name: row.name,
     dbEngine: row.db_engine as DbEngine,
+    remotePath: row.remote_path,
+    remoteFilePattern: row.remote_file_pattern,
+    remoteCommand: row.remote_command,
+    remoteOutputPathTemplate: row.remote_output_path_template,
+    remoteCleanup: row.remote_cleanup === 1,
     scheduleTime: row.schedule_time,
     scheduleEnabled: row.schedule_enabled === 1,
     scheduleFrequency: row.schedule_frequency as ScheduleFrequency,
@@ -56,6 +66,8 @@ export interface CreateFetchExistingTaskInput {
   transportId: string;
   name: string;
   dbEngine: DbEngine;
+  remotePath: string;
+  remoteFilePattern?: string | null;
   scheduleTime?: string | null;
   retentionCount?: number | null;
   retentionDays?: number | null;
@@ -66,6 +78,9 @@ export interface CreateRemoteDumpTaskInput {
   transportId: string;
   name: string;
   dbEngine: DbEngine;
+  remoteCommand: string;
+  remoteOutputPathTemplate: string;
+  remoteCleanup?: boolean;
   scheduleTime?: string | null;
   retentionCount?: number | null;
   retentionDays?: number | null;
@@ -122,9 +137,13 @@ export function createTasksRepo(
 ): TasksRepo {
   const insertStmt = db.prepare(
     `INSERT INTO backup_tasks
-       (id, client_id, strategy, transport_id, database_connection_id, name, db_engine, retention_count, retention_days)
+       (id, client_id, strategy, transport_id, database_connection_id, name, db_engine,
+        remote_path, remote_file_pattern, remote_command, remote_output_path_template, remote_cleanup,
+        retention_count, retention_days)
      VALUES
-       (@id, @clientId, @strategy, @transportId, @databaseConnectionId, @name, @dbEngine, @retentionCount, @retentionDays)`
+       (@id, @clientId, @strategy, @transportId, @databaseConnectionId, @name, @dbEngine,
+        @remotePath, @remoteFilePattern, @remoteCommand, @remoteOutputPathTemplate, @remoteCleanup,
+        @retentionCount, @retentionDays)`
   );
   const getByIdStmt = db.prepare<[string], BackupTaskRow>('SELECT * FROM backup_tasks WHERE id = ?');
   const listByClientStmt = db.prepare<[string], BackupTaskRow>(
@@ -159,6 +178,11 @@ export function createTasksRepo(
       clientId: string;
       name: string;
       dbEngine: DbEngine;
+      remotePath?: string | null;
+      remoteFilePattern?: string | null;
+      remoteCommand?: string | null;
+      remoteOutputPathTemplate?: string | null;
+      remoteCleanup?: boolean;
       retentionCount?: number | null;
       retentionDays?: number | null;
     },
@@ -174,6 +198,11 @@ export function createTasksRepo(
       databaseConnectionId,
       name: input.name,
       dbEngine: input.dbEngine,
+      remotePath: input.remotePath ?? null,
+      remoteFilePattern: input.remoteFilePattern ?? null,
+      remoteCommand: input.remoteCommand ?? null,
+      remoteOutputPathTemplate: input.remoteOutputPathTemplate ?? null,
+      remoteCleanup: input.remoteCleanup ? 1 : 0,
       retentionCount: input.retentionCount ?? null,
       retentionDays: input.retentionDays ?? null,
     });

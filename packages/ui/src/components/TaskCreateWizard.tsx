@@ -107,7 +107,10 @@ function isCreateValid(values: FormValues): boolean {
   if (!isScheduleValid(values)) return false;
 
   if (values.connectionMode === 'existing') {
-    return values.strategy === 'direct_dump' ? Boolean(values.databaseConnectionId) : Boolean(values.transportId);
+    if (values.strategy === 'direct_dump') return Boolean(values.databaseConnectionId);
+    if (!values.transportId) return false;
+    if (values.strategy === 'fetch_existing') return Boolean(values.remotePath.trim());
+    return Boolean(values.remoteCommand.trim() && values.remoteOutputPathTemplate.trim());
   }
 
   // "new" connection mode
@@ -487,7 +490,22 @@ function CreateFields({
       )}
 
       <Field label="Nombre de la tarea *">
-        <input style={inputStyle} value={values.name} onChange={(e) => onChange({ name: e.target.value })} />
+        <input
+          style={inputStyle}
+          value={values.name}
+          onChange={(e) => {
+            const name = e.target.value;
+            // Keeps the new connection's name in sync with the task's name
+            // until the user diverges it on purpose — avoids asking for the
+            // same name twice for the common case (a connection created
+            // just for this one task).
+            const patch: Partial<FormValues> = { name };
+            if (values.connectionMode === 'new' && values.connectionName === values.name) {
+              patch.connectionName = name;
+            }
+            onChange(patch);
+          }}
+        />
       </Field>
 
       <Field label="Estrategia *">
@@ -520,33 +538,73 @@ function CreateFields({
       {values.connectionMode === 'new' ? (
         <NewConnectionFields values={values} onChange={onChange} />
       ) : (
-        <Field label={values.strategy === 'direct_dump' ? 'Conexión de base de datos *' : 'Transporte *'}>
-          <select
-            style={inputStyle}
-            value={values.strategy === 'direct_dump' ? values.databaseConnectionId : values.transportId}
-            onChange={(e) =>
-              values.strategy === 'direct_dump'
-                ? onChange({
-                    databaseConnectionId: e.target.value,
-                    dbEngine: clientDbConnections.find((d) => d.id === e.target.value)?.engine ?? values.dbEngine,
-                  })
-                : onChange({ transportId: e.target.value })
-            }
-          >
-            <option value="">Seleccionar…</option>
-            {existingOptions.map((opt) => (
-              <option key={opt.id} value={opt.id}>
-                {opt.name}
-              </option>
-            ))}
-          </select>
-          {values.clientId && existingOptions.length === 0 && (
-            <p className="text-xs" style={{ color: 'var(--danger)' }}>
-              Este cliente no tiene {values.strategy === 'direct_dump' ? 'conexiones de base de datos' : 'transportes de este tipo'}{' '}
-              activas — probá "Crear conexión nueva".
-            </p>
+        <>
+          <Field label={values.strategy === 'direct_dump' ? 'Conexión de base de datos *' : 'Transporte *'}>
+            <select
+              style={inputStyle}
+              value={values.strategy === 'direct_dump' ? values.databaseConnectionId : values.transportId}
+              onChange={(e) =>
+                values.strategy === 'direct_dump'
+                  ? onChange({
+                      databaseConnectionId: e.target.value,
+                      dbEngine: clientDbConnections.find((d) => d.id === e.target.value)?.engine ?? values.dbEngine,
+                    })
+                  : onChange({ transportId: e.target.value })
+              }
+            >
+              <option value="">Seleccionar…</option>
+              {existingOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.name}
+                </option>
+              ))}
+            </select>
+            {values.clientId && existingOptions.length === 0 && (
+              <p className="text-xs" style={{ color: 'var(--danger)' }}>
+                Este cliente no tiene {values.strategy === 'direct_dump' ? 'conexiones de base de datos' : 'transportes de este tipo'}{' '}
+                activas — probá "Crear conexión nueva".
+              </p>
+            )}
+          </Field>
+          {values.strategy === 'fetch_existing' && (
+            <Field label="Ruta remota *">
+              <input
+                style={inputStyle}
+                placeholder="Ej: /backups"
+                value={values.remotePath}
+                onChange={(e) => onChange({ remotePath: e.target.value })}
+              />
+            </Field>
           )}
-        </Field>
+          {values.strategy === 'remote_dump' && (
+            <>
+              <Field label="Comando remoto *">
+                <input
+                  style={inputStyle}
+                  placeholder="Comando que genera el dump en el host remoto"
+                  value={values.remoteCommand}
+                  onChange={(e) => onChange({ remoteCommand: e.target.value })}
+                />
+              </Field>
+              <Field label="Plantilla de ruta de salida *">
+                <input
+                  style={inputStyle}
+                  placeholder="Ej: /tmp/backups/db_{date:YYYYMMDD_HHmm}.dump"
+                  value={values.remoteOutputPathTemplate}
+                  onChange={(e) => onChange({ remoteOutputPathTemplate: e.target.value })}
+                />
+              </Field>
+              <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
+                <input
+                  type="checkbox"
+                  checked={values.remoteCleanup}
+                  onChange={(e) => onChange({ remoteCleanup: e.target.checked })}
+                />
+                Eliminar el archivo remoto tras una descarga exitosa
+              </label>
+            </>
+          )}
+        </>
       )}
 
       {values.strategy !== 'direct_dump' && (
@@ -639,10 +697,6 @@ export function TaskCreateWizard({
             privateKeyPath: transportType === 'ftp' ? undefined : form.privateKeyPath.trim(),
             passphrase: transportType === 'ftp' ? undefined : form.passphrase.trim() || undefined,
             password: transportType === 'ftp' ? form.password.trim() || undefined : undefined,
-            remotePath: form.strategy === 'fetch_existing' ? form.remotePath.trim() : undefined,
-            remoteCommand: form.strategy === 'remote_dump' ? form.remoteCommand.trim() : undefined,
-            remoteOutputPathTemplate: form.strategy === 'remote_dump' ? form.remoteOutputPathTemplate.trim() : undefined,
-            remoteCleanup: form.strategy === 'remote_dump' ? form.remoteCleanup : undefined,
           });
           transportId = conn.id;
         }
@@ -655,6 +709,11 @@ export function TaskCreateWizard({
         transportId,
         databaseConnectionId,
         dbEngine: form.dbEngine,
+        remotePath: form.strategy === 'fetch_existing' ? form.remotePath.trim() : undefined,
+        remoteFilePattern: form.strategy === 'fetch_existing' ? form.remoteFilePattern.trim() || null : undefined,
+        remoteCommand: form.strategy === 'remote_dump' ? form.remoteCommand.trim() : undefined,
+        remoteOutputPathTemplate: form.strategy === 'remote_dump' ? form.remoteOutputPathTemplate.trim() : undefined,
+        remoteCleanup: form.strategy === 'remote_dump' ? form.remoteCleanup : undefined,
         retentionCount: form.retentionCount.trim() ? Number(form.retentionCount) : null,
         retentionDays: form.retentionDays.trim() ? Number(form.retentionDays) : null,
         scheduleTime: form.scheduleTime.trim() || undefined,

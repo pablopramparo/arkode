@@ -32,11 +32,6 @@ function toExportedTransport(t: Transport): ExportedTransport {
     privateKeyContentBase64: t.privateKeyPath ? readPrivateKeyBase64(t.privateKeyPath) : null,
     hasPassphrase: t.passphraseSecretRef != null,
     hasPassword: t.passwordSecretRef != null,
-    remotePath: t.remotePath,
-    remoteFilePattern: t.remoteFilePattern,
-    remoteCommand: t.remoteCommand,
-    remoteOutputPathTemplate: t.remoteOutputPathTemplate,
-    remoteCleanup: t.remoteCleanup,
     knownHostFingerprint: t.knownHostFingerprint,
   };
 }
@@ -61,6 +56,11 @@ function toExportedTask(task: BackupTask, transportName: string | null, database
     transportName,
     databaseConnectionName,
     dbEngine: task.dbEngine,
+    remotePath: task.remotePath,
+    remoteFilePattern: task.remoteFilePattern,
+    remoteCommand: task.remoteCommand,
+    remoteOutputPathTemplate: task.remoteOutputPathTemplate,
+    remoteCleanup: task.remoteCleanup,
     scheduleTime: task.scheduleTime,
     scheduleEnabled: task.scheduleEnabled,
     scheduleFrequency: task.scheduleFrequency,

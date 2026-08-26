@@ -96,7 +96,11 @@ export function createSftpAdapter(config: SftpTransportConfig, knownHosts: Known
       const startedAt = Date.now();
       try {
         await this.connect();
-        await client.list(config.remotePath);
+        // Not a real task's configured directory (that's task-level now, see
+        // SftpTransportConfig's note) -- '.' just proves connectivity+auth,
+        // same as this method has always done for a caller with no specific
+        // path to check (e.g. Conexiones' plain "Probar conexión").
+        await client.list(config.remotePath ?? '.');
         await this.disconnect();
         return { ok: true, message: 'Connection succeeded.', latencyMs: Date.now() - startedAt };
       } catch (err) {
@@ -152,9 +156,6 @@ export function createSftpAdapterFromTransport(
   if (transport.type !== 'sftp') {
     throw new Error(`Expected an sftp transport, got "${transport.type}".`);
   }
-  if (!transport.remotePath) {
-    throw new Error('SFTP transport is missing remotePath.');
-  }
   if (!transport.privateKeyPath) {
     throw new Error('SFTP transport is missing privateKeyPath.');
   }
@@ -170,8 +171,6 @@ export function createSftpAdapterFromTransport(
       username: transport.username,
       privateKeyPath: transport.privateKeyPath,
       passphrase,
-      remotePath: transport.remotePath,
-      remoteFilePattern: transport.remoteFilePattern ? new RegExp(transport.remoteFilePattern) : undefined,
       knownHostFingerprint: transport.knownHostFingerprint ?? undefined,
       onUnknownHost,
     },
