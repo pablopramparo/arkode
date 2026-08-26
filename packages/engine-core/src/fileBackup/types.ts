@@ -43,6 +43,8 @@ export interface FileBackupTask {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Pure visual/reporting label — see BackupSet's own doc comment in the DB-backup domain's types.ts. Never affects scheduling/execution. */
+  backupSetId: string | null;
 }
 
 export interface FileBackupRun {

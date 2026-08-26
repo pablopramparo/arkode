@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { runMigrations } from '../../src/db/migrate.js';
 import { migrationsSourceDir } from '../../src/paths.js';
 import { createClientsRepo } from '../../src/db/repositories/clientsRepo.js';
+import { createBackupSetsRepo } from '../../src/db/repositories/backupSetsRepo.js';
 import { createTransportsRepo } from '../../src/db/repositories/transportsRepo.js';
 import { createDatabaseConnectionsRepo } from '../../src/db/repositories/databaseConnectionsRepo.js';
 import { createTasksRepo } from '../../src/db/repositories/tasksRepo.js';
@@ -33,6 +34,7 @@ export function createTestContext() {
   runMigrations(db, migrationsSourceDir());
 
   const clientsRepo = createClientsRepo(db);
+  const backupSetsRepo = createBackupSetsRepo(db);
   const transportsRepo = createTransportsRepo(db);
   const databaseConnectionsRepo = createDatabaseConnectionsRepo(db);
   const tasksRepo = createTasksRepo(db, transportsRepo, databaseConnectionsRepo);
@@ -46,6 +48,7 @@ export function createTestContext() {
   return {
     db,
     clientsRepo,
+    backupSetsRepo,
     transportsRepo,
     databaseConnectionsRepo,
     tasksRepo,

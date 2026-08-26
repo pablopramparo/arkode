@@ -23,6 +23,7 @@ interface FileBackupTaskRow {
   is_active: number;
   created_at: string;
   updated_at: string;
+  backup_set_id: string | null;
 }
 
 function parseDaysOfWeek(csv: string | null): number[] | null {
@@ -50,6 +51,7 @@ function toDomain(row: FileBackupTaskRow): FileBackupTask {
     isActive: row.is_active === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    backupSetId: row.backup_set_id,
   };
 }
 
@@ -61,6 +63,7 @@ export interface CreateLocalFolderTaskInput {
   sourcePath: string;
   retentionCount?: number | null;
   retentionDays?: number | null;
+  backupSetId?: string | null;
 }
 
 export interface CreateRemoteFolderTaskInput {
@@ -73,6 +76,7 @@ export interface CreateRemoteFolderTaskInput {
   remoteSourcePath: string;
   retentionCount?: number | null;
   retentionDays?: number | null;
+  backupSetId?: string | null;
 }
 
 export interface SetFileBackupScheduleInput {
@@ -83,11 +87,17 @@ export interface SetFileBackupScheduleInput {
   scheduleDayOfMonth?: number | null;
 }
 
-/** `sourceKind`/`sourcePath`/`transportId`/`remoteSourcePath`/`repositoryId` are deliberately not editable — create a new task to point at a different folder. */
+/**
+ * `sourceKind`/`sourcePath`/`transportId`/`remoteSourcePath`/`repositoryId`
+ * are deliberately not editable — create a new task to point at a different
+ * folder. `backupSetId` is editable — see tasksRepo.ts's UpdateTaskInput for
+ * the identical reasoning.
+ */
 export interface UpdateFileBackupTaskInput {
   name?: string;
   retentionCount?: number | null;
   retentionDays?: number | null;
+  backupSetId?: string | null;
 }
 
 const SCHEDULE_TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -110,15 +120,15 @@ export interface FileBackupTasksRepo {
 export function createFileBackupTasksRepo(db: Database, transportsRepo: TransportsRepo): FileBackupTasksRepo {
   const insertLocalStmt = db.prepare(
     `INSERT INTO file_backup_tasks
-       (id, client_id, repository_id, name, source_kind, source_path, retention_count, retention_days)
+       (id, client_id, repository_id, name, source_kind, source_path, retention_count, retention_days, backup_set_id)
      VALUES
-       (@id, @clientId, @repositoryId, @name, 'local_folder', @sourcePath, @retentionCount, @retentionDays)`
+       (@id, @clientId, @repositoryId, @name, 'local_folder', @sourcePath, @retentionCount, @retentionDays, @backupSetId)`
   );
   const insertRemoteStmt = db.prepare(
     `INSERT INTO file_backup_tasks
-       (id, client_id, repository_id, name, source_kind, transport_id, remote_source_path, retention_count, retention_days)
+       (id, client_id, repository_id, name, source_kind, transport_id, remote_source_path, retention_count, retention_days, backup_set_id)
      VALUES
-       (@id, @clientId, @repositoryId, @name, 'remote_folder', @transportId, @remoteSourcePath, @retentionCount, @retentionDays)`
+       (@id, @clientId, @repositoryId, @name, 'remote_folder', @transportId, @remoteSourcePath, @retentionCount, @retentionDays, @backupSetId)`
   );
   const getByIdStmt = db.prepare<[string], FileBackupTaskRow>('SELECT * FROM file_backup_tasks WHERE id = ?');
   const listByClientStmt = db.prepare<[string], FileBackupTaskRow>(
@@ -139,7 +149,7 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
   );
   const updateStmt = db.prepare(
     `UPDATE file_backup_tasks
-     SET name = @name, retention_count = @retentionCount, retention_days = @retentionDays,
+     SET name = @name, retention_count = @retentionCount, retention_days = @retentionDays, backup_set_id = @backupSetId,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = @id`
   );
@@ -164,6 +174,7 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
         sourcePath: input.sourcePath,
         retentionCount: input.retentionCount ?? null,
         retentionDays: input.retentionDays ?? null,
+        backupSetId: input.backupSetId ?? null,
       });
       const row = getByIdStmt.get(id);
       if (!row) throw new Error(`Failed to read back created file_backup_task ${id}`);
@@ -191,6 +202,7 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
         remoteSourcePath: input.remoteSourcePath,
         retentionCount: input.retentionCount ?? null,
         retentionDays: input.retentionDays ?? null,
+        backupSetId: input.backupSetId ?? null,
       });
       const row = getByIdStmt.get(id);
       if (!row) throw new Error(`Failed to read back created file_backup_task ${id}`);
@@ -205,6 +217,7 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
         name: patch.name ?? current.name,
         retentionCount: patch.retentionCount !== undefined ? patch.retentionCount : current.retention_count,
         retentionDays: patch.retentionDays !== undefined ? patch.retentionDays : current.retention_days,
+        backupSetId: patch.backupSetId !== undefined ? patch.backupSetId : current.backup_set_id,
       });
       const row = getByIdStmt.get(id);
       if (!row) throw new Error(`Failed to read back updated file_backup_task ${id}`);

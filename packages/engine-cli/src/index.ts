@@ -37,6 +37,8 @@ import {
   runFileBackupMaintenance,
   restoreFileBackupRun,
   restoreFileBackupFile,
+  deleteBackupRun,
+  deleteFileBackupRun,
   scheduledTaskNameForBackupTask as scheduledTaskNameForId,
   type DbEngine,
   type Transport,
@@ -138,6 +140,57 @@ program
     const ctx = buildContext();
     ctx.clientsRepo.reactivate(clientId);
     console.log(`Reactivated client ${clientId}.`);
+  });
+
+program
+  .command('backup-set:create')
+  .description('Create a backup set — a pure visual/reporting label grouping several tasks under one name for a client. No shared schedule, no aggregate run.')
+  .requiredOption('--client <clientId>')
+  .requiredOption('--name <name>')
+  .action((opts) => {
+    const ctx = buildContext();
+    const set = ctx.backupSetsRepo.create({ clientId: opts.client, name: opts.name });
+    console.log(JSON.stringify(set, null, 2));
+  });
+
+program
+  .command('backup-set:list')
+  .description('List a client\'s backup sets (active only by default).')
+  .requiredOption('--client <clientId>')
+  .option('--include-inactive', 'include deactivated sets too', false)
+  .action((opts) => {
+    const ctx = buildContext();
+    console.log(JSON.stringify(ctx.backupSetsRepo.listByClient(opts.client, { includeInactive: opts.includeInactive }), null, 2));
+  });
+
+program
+  .command('backup-set:update')
+  .description('Rename a backup set.')
+  .argument('<backupSetId>')
+  .requiredOption('--name <name>')
+  .action((backupSetId: string, opts) => {
+    const ctx = buildContext();
+    console.log(JSON.stringify(ctx.backupSetsRepo.update(backupSetId, { name: opts.name }), null, 2));
+  });
+
+program
+  .command('backup-set:deactivate')
+  .description('Deactivate a backup set. Tasks assigned to it keep their assignment but the set stops appearing in "active sets" lists.')
+  .argument('<backupSetId>')
+  .action((backupSetId: string) => {
+    const ctx = buildContext();
+    ctx.backupSetsRepo.deactivate(backupSetId);
+    console.log(`Deactivated backup set ${backupSetId}.`);
+  });
+
+program
+  .command('backup-set:reactivate')
+  .description('Reactivate a previously deactivated backup set.')
+  .argument('<backupSetId>')
+  .action((backupSetId: string) => {
+    const ctx = buildContext();
+    ctx.backupSetsRepo.reactivate(backupSetId);
+    console.log(`Reactivated backup set ${backupSetId}.`);
   });
 
 function resolveSecretRef(ctx: ReturnType<typeof buildContext>, value: string | undefined, refPrefix: string): string | null {
@@ -362,11 +415,13 @@ program
   .option('--remote-cleanup', 'remote_dump only: delete the remote file after a successful download', false)
   .option('--retention-count <n>', 'override the client default: keep the last N Success backups for this task')
   .option('--retention-days <n>', 'override the client default: keep backups from the last N days for this task')
+  .option('--backup-set <backupSetId>', 'optional — a pure visual/reporting label grouping this task with others')
   .action((opts) => {
     const ctx = buildContext();
     const dbEngine = opts.dbEngine as DbEngine;
     const retentionCount = opts.retentionCount != null ? Number(opts.retentionCount) : null;
     const retentionDays = opts.retentionDays != null ? Number(opts.retentionDays) : null;
+    const backupSetId = opts.backupSet ?? null;
 
     if (opts.strategy === 'direct_dump') {
       if (!opts.databaseConnection) {
@@ -381,6 +436,7 @@ program
         dbEngine,
         retentionCount,
         retentionDays,
+        backupSetId,
       });
       console.log(JSON.stringify(task, null, 2));
       return;
@@ -391,7 +447,7 @@ program
       process.exitCode = 1;
       return;
     }
-    const base = { clientId: opts.client, transportId: opts.transport, name: opts.name, dbEngine, retentionCount, retentionDays };
+    const base = { clientId: opts.client, transportId: opts.transport, name: opts.name, dbEngine, retentionCount, retentionDays, backupSetId };
     let task;
     if (opts.strategy === 'remote_dump') {
       if (!opts.remoteCommand || !opts.remoteOutputPathTemplate) {
@@ -468,12 +524,15 @@ program
   .option('--name <name>')
   .option('--retention-count <n>')
   .option('--retention-days <n>')
+  .option('--backup-set <backupSetId>', 'assign/reassign this task to a backup set')
+  .option('--clear-backup-set', 'unassign this task from its backup set', false)
   .action((taskId: string, opts) => {
     const ctx = buildContext();
     const task = ctx.tasksRepo.update(taskId, {
       name: opts.name,
       retentionCount: opts.retentionCount != null ? Number(opts.retentionCount) : undefined,
       retentionDays: opts.retentionDays != null ? Number(opts.retentionDays) : undefined,
+      backupSetId: opts.clearBackupSet ? null : opts.backupSet,
     });
     console.log(JSON.stringify(task, null, 2));
   });
@@ -859,6 +918,21 @@ program
       offset: Number(opts.offset),
     });
     console.log(JSON.stringify(result, null, 2));
+  });
+
+program
+  .command('run:delete')
+  .description("Permanently delete one backup's file on disk (manual, not automated retention) — the run row/history stays for audit.")
+  .argument('<runId>')
+  .action(async (runId: string) => {
+    const ctx = buildContext();
+    try {
+      const result = await deleteBackupRun(runId, { runsRepo: ctx.runsRepo, retentionDeletionsRepo: ctx.retentionDeletionsRepo });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
   });
 
 program
@@ -1274,6 +1348,7 @@ program
   .option('--remote-source-path <path>', 'required for remote_folder — the folder\'s path on the remote host')
   .option('--retention-count <n>')
   .option('--retention-days <n>')
+  .option('--backup-set <backupSetId>', 'optional — a pure visual/reporting label grouping this task with others')
   .action((opts) => {
     const ctx = buildContext();
     const repository = ctx.fileBackupRepositoriesRepo.getByClientId(opts.client);
@@ -1285,6 +1360,7 @@ program
     try {
       const retentionCount = opts.retentionCount != null ? Number(opts.retentionCount) : null;
       const retentionDays = opts.retentionDays != null ? Number(opts.retentionDays) : null;
+      const backupSetId = opts.backupSet ?? null;
       let task;
       if (opts.sourceKind === 'remote_folder') {
         if (!opts.transport || !opts.remoteSourcePath) {
@@ -1300,6 +1376,7 @@ program
           remoteSourcePath: opts.remoteSourcePath,
           retentionCount,
           retentionDays,
+          backupSetId,
         });
       } else {
         if (!opts.sourcePath) {
@@ -1314,6 +1391,7 @@ program
           sourcePath: resolvePath(opts.sourcePath),
           retentionCount,
           retentionDays,
+          backupSetId,
         });
       }
       console.log(JSON.stringify(task, null, 2));
@@ -1330,12 +1408,15 @@ program
   .option('--name <name>')
   .option('--retention-count <n>')
   .option('--retention-days <n>')
+  .option('--backup-set <backupSetId>', 'assign/reassign this task to a backup set')
+  .option('--clear-backup-set', 'unassign this task from its backup set', false)
   .action((taskId: string, opts) => {
     const ctx = buildContext();
     const task = ctx.fileBackupTasksRepo.update(taskId, {
       name: opts.name,
       retentionCount: opts.retentionCount != null ? Number(opts.retentionCount) : undefined,
       retentionDays: opts.retentionDays != null ? Number(opts.retentionDays) : undefined,
+      backupSetId: opts.clearBackupSet ? null : opts.backupSet,
     });
     console.log(JSON.stringify(task, null, 2));
   });
@@ -1579,6 +1660,27 @@ program
   });
 
 program
+  .command('file-run:delete')
+  .description("Forget one specific snapshot (manual, not automated retention) — cheap and immediate, but doesn't reclaim disk space until the next prune.")
+  .argument('<runId>')
+  .action(async (runId: string) => {
+    const ctx = buildContext();
+    try {
+      const result = await deleteFileBackupRun(runId, {
+        fileBackupRunsRepo: ctx.fileBackupRunsRepo,
+        fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+        fileBackupRetentionDeletionsRepo: ctx.fileBackupRetentionDeletionsRepo,
+        fileBackupMaintenanceRunsRepo: ctx.fileBackupMaintenanceRunsRepo,
+        secretStore: ctx.secretStore,
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command('file-run:restore-file')
   .description('Restore a single file from a file-backup run\'s snapshot.')
   .requiredOption('--run <runId>')
@@ -1734,6 +1836,57 @@ program
           const body = await readJsonBody(req);
           const client = ctx.clientsRepo.update(clientIdMatch[1], body);
           sendJson(res, 200, client);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/backup-sets') {
+        const clientId = url.searchParams.get('client');
+        if (!clientId) {
+          sendJson(res, 400, { error: 'client is required.' });
+          return;
+        }
+        const includeInactive = url.searchParams.get('includeInactive') === 'true';
+        sendJson(res, 200, ctx.backupSetsRepo.listByClient(clientId, { includeInactive }));
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/backup-sets') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.clientId || !body.name) {
+            sendJson(res, 400, { error: 'clientId and name are required.' });
+            return;
+          }
+          const set = ctx.backupSetsRepo.create({ clientId: body.clientId, name: body.name });
+          sendJson(res, 201, set);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const backupSetActiveMatch = req.method === 'POST' && pathname.match(/^\/backup-sets\/([^/]+)\/(deactivate|reactivate)$/);
+      if (backupSetActiveMatch) {
+        try {
+          const [, backupSetId, action] = backupSetActiveMatch;
+          if (action === 'deactivate') ctx.backupSetsRepo.deactivate(backupSetId);
+          else ctx.backupSetsRepo.reactivate(backupSetId);
+          sendJson(res, 200, { ok: true });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const backupSetIdMatch = req.method === 'PATCH' && pathname.match(/^\/backup-sets\/([^/]+)$/);
+      if (backupSetIdMatch) {
+        try {
+          const body = await readJsonBody(req);
+          const set = ctx.backupSetsRepo.update(backupSetIdMatch[1], { name: body.name });
+          sendJson(res, 200, set);
         } catch (err) {
           sendRepoError(res, err);
         }
@@ -1946,12 +2099,14 @@ program
               // still what actually prevents a double-run; this is purely a
               // UX nicety on top of that already-safe guarantee.
               const latestRun = ctx.runsRepo.getLatestByTask(t.id);
+              const backupSet = t.backupSetId ? ctx.backupSetsRepo.getById(t.backupSetId) : null;
               return {
                 ...t,
                 clientName: client.name,
                 transportName: transport?.name ?? null,
                 databaseConnectionName: databaseConnection?.name ?? null,
                 latestRunStatus: latestRun?.status ?? null,
+                backupSetName: backupSet?.name ?? null,
               };
             })
         );
@@ -1966,7 +2121,8 @@ program
         const runs = ctx.runsRepo.listRecent({ taskId, clientId, limit: limitParam ? Number(limitParam) : undefined }).map((run) => {
           const client = ctx.clientsRepo.getById(run.clientId);
           const task = ctx.tasksRepo.getById(run.taskId);
-          return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null };
+          const backupSet = task?.backupSetId ? ctx.backupSetsRepo.getById(task.backupSetId) : null;
+          return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null, backupSetName: backupSet?.name ?? null };
         });
         sendJson(res, 200, runs);
         return;
@@ -1986,7 +2142,8 @@ program
         const enriched = runs.map((run) => {
           const client = ctx.clientsRepo.getById(run.clientId);
           const task = ctx.tasksRepo.getById(run.taskId);
-          return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null };
+          const backupSet = task?.backupSetId ? ctx.backupSetsRepo.getById(task.backupSetId) : null;
+          return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null, backupSetName: backupSet?.name ?? null };
         });
         sendJson(res, 200, { runs: enriched, total });
         return;
@@ -2006,6 +2163,17 @@ program
           'Content-Disposition': `attachment; filename="${basename(run.localPath)}"`,
         });
         createReadStream(run.localPath).pipe(res);
+        return;
+      }
+
+      const runDeleteMatch = req.method === 'POST' && pathname.match(/^\/runs\/([^/]+)\/delete$/);
+      if (runDeleteMatch) {
+        try {
+          const result = await deleteBackupRun(runDeleteMatch[1], { runsRepo: ctx.runsRepo, retentionDeletionsRepo: ctx.retentionDeletionsRepo });
+          sendJson(res, 200, result);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
         return;
       }
 
@@ -2237,6 +2405,7 @@ program
           const dbEngine = body.dbEngine ?? 'unknown';
           const retentionCount = body.retentionCount ?? null;
           const retentionDays = body.retentionDays ?? null;
+          const backupSetId = body.backupSetId ?? null;
 
           let task;
           if (body.strategy === 'direct_dump') {
@@ -2251,13 +2420,14 @@ program
               dbEngine,
               retentionCount,
               retentionDays,
+              backupSetId,
             });
           } else {
             if (!body.transportId) {
               sendJson(res, 400, { error: `${body.strategy} tasks require transportId.` });
               return;
             }
-            const base = { clientId: body.clientId, transportId: body.transportId, name: body.name, dbEngine, retentionCount, retentionDays };
+            const base = { clientId: body.clientId, transportId: body.transportId, name: body.name, dbEngine, retentionCount, retentionDays, backupSetId };
             if (body.strategy === 'remote_dump') {
               if (!body.remoteCommand || !body.remoteOutputPathTemplate) {
                 sendJson(res, 400, { error: 'remoteCommand and remoteOutputPathTemplate are required for remote_dump.' });
@@ -2420,7 +2590,11 @@ program
         const includeInactive = url.searchParams.get('includeInactive') === 'true';
         let tasks = clientId ? ctx.fileBackupTasksRepo.listByClient(clientId) : [];
         if (!includeInactive) tasks = tasks.filter((t) => t.isActive);
-        sendJson(res, 200, tasks);
+        const enriched = tasks.map((t) => ({
+          ...t,
+          backupSetName: t.backupSetId ? (ctx.backupSetsRepo.getById(t.backupSetId)?.name ?? null) : null,
+        }));
+        sendJson(res, 200, enriched);
         return;
       }
 
@@ -2450,6 +2624,7 @@ program
               remoteSourcePath: body.remoteSourcePath,
               retentionCount: body.retentionCount ?? null,
               retentionDays: body.retentionDays ?? null,
+              backupSetId: body.backupSetId ?? null,
             });
           } else {
             if (!body.sourcePath) {
@@ -2463,6 +2638,7 @@ program
               sourcePath: resolvePath(body.sourcePath),
               retentionCount: body.retentionCount ?? null,
               retentionDays: body.retentionDays ?? null,
+              backupSetId: body.backupSetId ?? null,
             });
           }
           if (body.scheduleTime) {
@@ -2582,6 +2758,23 @@ program
             secretStore: ctx.secretStore,
           });
           sendJson(res, 200, { ...result, targetDir: target });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const fileRunDeleteMatch = req.method === 'POST' && pathname.match(/^\/file-runs\/([^/]+)\/delete$/);
+      if (fileRunDeleteMatch) {
+        try {
+          const result = await deleteFileBackupRun(fileRunDeleteMatch[1], {
+            fileBackupRunsRepo: ctx.fileBackupRunsRepo,
+            fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+            fileBackupRetentionDeletionsRepo: ctx.fileBackupRetentionDeletionsRepo,
+            fileBackupMaintenanceRunsRepo: ctx.fileBackupMaintenanceRunsRepo,
+            secretStore: ctx.secretStore,
+          });
+          sendJson(res, 200, result);
         } catch (err) {
           sendRepoError(res, err);
         }

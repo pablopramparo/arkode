@@ -253,6 +253,25 @@ export async function forget(
   return { removedSnapshotIds };
 }
 
+/**
+ * Forgets exactly one snapshot by id — restic's positional-argument form,
+ * distinct from forget()'s policy-based `--path/--keep-*` form above (which
+ * always evaluates every snapshot under a path against keep-rules and
+ * unions in a `--keep-last 1` survivor floor). Used for an explicit manual
+ * "delete this one backup" action, which is deliberately allowed to remove
+ * the only remaining snapshot if that's what was asked for — the survivor
+ * floor is a retention-policy safeguard, not a restriction on a human's own
+ * deliberate choice. Metadata-only and immediate, like forget() itself;
+ * doesn't reclaim disk space — that's prune()'s separate job.
+ */
+export async function forgetSnapshot(repoPath: string, password: string, snapshotId: string): Promise<void> {
+  try {
+    await execRestic(['-r', repoPath, 'forget', snapshotId], password);
+  } catch (err) {
+    throw new Error(resticErrorMessage(err, 'forget'));
+  }
+}
+
 async function directorySizeBytes(dir: string): Promise<number> {
   let total = 0;
   let entries;

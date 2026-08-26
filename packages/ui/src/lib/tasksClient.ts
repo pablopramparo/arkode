@@ -10,6 +10,8 @@ export interface TaskRow extends BackupTask {
   databaseConnectionName: string | null;
   /** The task's latest attempt, whatever it is — null if it's never run. Lets the UI disable/relabel "Ejecutar ahora" while a run is genuinely in progress, without its own polling. */
   latestRunStatus: BackupRunStatus | null;
+  /** Pure visual/reporting label, or null if unassigned — see engine-core's BackupSet doc comment. */
+  backupSetName: string | null;
 }
 
 export interface TaskInput {
@@ -35,6 +37,8 @@ export interface TaskInput {
   scheduleDayOfMonth?: number | null;
   /** Skip the direct_dump compatibility gate and apply the schedule anyway — see ScheduleCompatibilityError. */
   force?: boolean;
+  /** Optional — a pure visual/reporting label grouping this task with others. */
+  backupSetId?: string | null;
 }
 
 /** A BackupTask as returned right after creation — `scheduleBlocked` is set only when a requested schedule couldn't be applied because the direct_dump compatibility gate failed (the task itself was still created). */
@@ -59,6 +63,8 @@ export interface TaskUpdateInput {
   name?: string;
   retentionCount?: number | null;
   retentionDays?: number | null;
+  /** Assign/reassign/unassign (pass null) — unlike strategy/transport/etc., this is editable after creation. */
+  backupSetId?: string | null;
 }
 
 async function handleJson<T>(res: Response): Promise<T> {

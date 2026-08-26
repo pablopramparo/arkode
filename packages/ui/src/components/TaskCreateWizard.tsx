@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
-import type { BackupStrategyKind, DbEngine, ScheduleFrequency, DirectDumpCompatibilityResult } from 'engine-core';
+import type { BackupStrategyKind, BackupSet, DbEngine, ScheduleFrequency, DirectDumpCompatibilityResult } from 'engine-core';
 import { createTask, setTaskSchedule } from '../lib/tasksClient';
 import { createDatabaseConnection, createTransport, type ConnectionsData } from '../lib/connectionsClient';
+import { fetchBackupSets } from '../lib/backupSetsClient';
 import { Modal } from './Modal';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { HelpCircleIcon } from './icons';
@@ -54,6 +55,8 @@ export interface FormValues {
   scheduleDaysOfWeek: number[];
   /** 1-31, as a string for the number input; '' means unset. */
   scheduleDayOfMonth: string;
+  /** Optional — a pure visual/reporting label grouping this task with others. '' means unassigned. */
+  backupSetId: string;
 }
 
 export const EMPTY_FORM: FormValues = {
@@ -86,6 +89,7 @@ export const EMPTY_FORM: FormValues = {
   scheduleFrequency: 'daily',
   scheduleDaysOfWeek: [],
   scheduleDayOfMonth: '',
+  backupSetId: '',
 };
 
 export function defaultPortFor(strategy: BackupStrategyKind, dbEngine: DbEngine): string {
@@ -459,6 +463,17 @@ function CreateFields({
   const existingOptions = values.strategy === 'direct_dump' ? clientDbConnections : values.strategy === 'fetch_existing' ? fetchExistingTransports : sshTransports;
   const fixedClientName = fixedClientId ? connections.clients.find((c) => c.id === fixedClientId)?.name : undefined;
 
+  const [backupSets, setBackupSets] = useState<BackupSet[]>([]);
+  useEffect(() => {
+    if (!values.clientId) {
+      setBackupSets([]);
+      return;
+    }
+    fetchBackupSets(values.clientId)
+      .then(setBackupSets)
+      .catch(() => setBackupSets([]));
+  }, [values.clientId]);
+
   return (
     <div className="flex flex-col gap-3">
       {fixedClientId ? (
@@ -640,6 +655,19 @@ function CreateFields({
         </Field>
       </div>
 
+      {backupSets.length > 0 && (
+        <Field label="Set de backup">
+          <select style={inputStyle} value={values.backupSetId} onChange={(e) => onChange({ backupSetId: e.target.value })}>
+            <option value="">Sin asignar</option>
+            {backupSets.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
       <ScheduleFields values={values} onChange={onChange} />
     </div>
   );
@@ -716,6 +744,7 @@ export function TaskCreateWizard({
         remoteCleanup: form.strategy === 'remote_dump' ? form.remoteCleanup : undefined,
         retentionCount: form.retentionCount.trim() ? Number(form.retentionCount) : null,
         retentionDays: form.retentionDays.trim() ? Number(form.retentionDays) : null,
+        backupSetId: form.backupSetId || null,
         scheduleTime: form.scheduleTime.trim() || undefined,
         scheduleEnabled: form.scheduleEnabled,
         scheduleFrequency: form.scheduleFrequency,

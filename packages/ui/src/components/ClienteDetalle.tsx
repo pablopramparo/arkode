@@ -14,13 +14,13 @@ import {
   reactivateDatabaseConnection,
   type ConnectionsData,
 } from '../lib/connectionsClient';
-import { downloadRunUrl, fetchBackups, fetchRuns, type RunRow } from '../lib/runsClient';
+import { deleteBackupRun, downloadRunUrl, fetchBackups, fetchRuns, type RunRow } from '../lib/runsClient';
 import { runTaskNow, testTaskConnection, testTaskCompatibility } from '../lib/statusClient';
 import type { ConnectionTestResult, DirectDumpCompatibilityResult } from 'engine-core';
 import { StatusChip } from './StatusChip';
 import { Switch } from './Switch';
 import { IconButton, IconLinkButton } from './IconButton';
-import { DownloadIcon, EditIcon, EyeIcon, FolderIcon, PlayIcon, PulseIcon, CheckCircleIcon } from './icons';
+import { DownloadIcon, EditIcon, EyeIcon, FolderIcon, PlayIcon, PulseIcon, CheckCircleIcon, TrashIcon } from './icons';
 import { Spinner } from './Spinner';
 import { formatRetention, formatDateTime, formatDuration, formatSize, formatSchedule } from '../lib/format';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
@@ -30,6 +30,8 @@ import { isTaskInProgress } from './Tareas';
 import { ConnectionEditModal } from './ConnectionEditModal';
 import { ConnectionCreateModal } from './ConnectionCreateModal';
 import { FileBackupsPanel } from './FileBackupsPanel';
+import { BackupSetsSection } from './BackupSetsSection';
+import { BackupSetBadge } from './BackupSetBadge';
 import type { ConnectionRow } from './Conexiones';
 
 const STRATEGY_LABEL: Record<string, string> = {
@@ -150,6 +152,21 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   useEffect(() => {
     loadBackups(0);
   }, [loadBackups]);
+
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+
+  async function handleDeleteBackup(runId: string, afterDelete: () => Promise<void>) {
+    if (!window.confirm('¿Eliminar este backup? Esta acción no se puede deshacer.')) return;
+    setDeletingRunId(runId);
+    try {
+      await deleteBackupRun(runId);
+      await afterDelete();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingRunId(null);
+    }
+  }
 
   function patchAction(id: string, patch: RowActionState) {
     setActionState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
@@ -307,6 +324,8 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             )}
           </header>
 
+          <BackupSetsSection clientId={clientId} />
+
           <div className="mb-4 flex items-center justify-between border-b" style={{ borderColor: 'var(--border)' }}>
             <TabBar
               active={activeTab}
@@ -389,7 +408,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                       const state = actionState[task.id];
                       return (
                         <tr key={task.id} style={{ borderTop: '1px solid var(--separator)', opacity: task.isActive ? 1 : 0.55 }}>
-                          <td className="px-4 py-2.5 font-medium">{task.name}</td>
+                          <td className="px-4 py-2.5 font-medium">
+                            {task.name}
+                            <BackupSetBadge name={task.backupSetName} />
+                          </td>
                           <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                             {STRATEGY_LABEL[task.strategy] ?? task.strategy}
                           </td>
@@ -634,6 +656,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                         <tr key={run.id} style={{ borderTop: '1px solid var(--separator)' }}>
                           <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                             {run.taskName ?? '—'}
+                            <BackupSetBadge name={run.backupSetName} />
                           </td>
                           <td className="px-4 py-2.5">{formatDateTime(run.startedAt)}</td>
                           <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
@@ -643,7 +666,16 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                             <StatusChip status={run.status} />
                           </td>
                           <td className="px-4 py-2.5">
-                            <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                            <div className="flex items-center gap-1">
+                              <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                              <IconButton
+                                icon={<TrashIcon />}
+                                label="Eliminar backup"
+                                tone="danger"
+                                disabled={deletingRunId === run.id}
+                                onPress={() => handleDeleteBackup(run.id, () => loadBackups(backupsPage))}
+                              />
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -704,6 +736,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                           <tr style={{ borderTop: '1px solid var(--separator)' }}>
                             <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                               {run.taskName ?? '—'}
+                              <BackupSetBadge name={run.backupSetName} />
                             </td>
                             <td className="px-4 py-2.5">
                               <StatusChip status={run.status} />
@@ -718,7 +751,16 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                             <td className="px-4 py-2.5">
                               <div className="flex items-center gap-1">
                                 {run.localPath && (
-                                  <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                                  <>
+                                    <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                                    <IconButton
+                                      icon={<TrashIcon />}
+                                      label="Eliminar backup"
+                                      tone="danger"
+                                      disabled={deletingRunId === run.id}
+                                      onPress={() => handleDeleteBackup(run.id, refresh)}
+                                    />
+                                  </>
                                 )}
                                 {run.errorMessage && (
                                   <IconButton

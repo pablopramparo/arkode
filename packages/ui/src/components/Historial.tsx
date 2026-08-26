@@ -1,11 +1,12 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { downloadRunUrl, fetchRuns, type RunRow } from '../lib/runsClient';
+import { deleteBackupRun, downloadRunUrl, fetchRuns, type RunRow } from '../lib/runsClient';
 import { fetchTasks, type TaskRow } from '../lib/tasksClient';
 import { formatDateTime, formatDuration, formatSize } from '../lib/format';
 import { StatusChip } from './StatusChip';
 import { IconButton, IconLinkButton } from './IconButton';
-import { DownloadIcon, EyeIcon } from './icons';
+import { DownloadIcon, EyeIcon, TrashIcon } from './icons';
 import { ClientLink } from './ClientLink';
+import { BackupSetBadge } from './BackupSetBadge';
 
 const RUN_LIMIT = 200;
 
@@ -16,6 +17,7 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
   const [selectedClientId, setSelectedClientId] = useState('');
   const [selectedTaskId, setSelectedTaskId] = useState('');
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchTasks({ includeInactive: true })
@@ -40,6 +42,19 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
   useEffect(() => {
     refresh(selectedClientId, selectedTaskId);
   }, [refresh, selectedClientId, selectedTaskId]);
+
+  async function handleDelete(runId: string) {
+    if (!window.confirm('¿Eliminar este backup? Esta acción no se puede deshacer.')) return;
+    setDeletingRunId(runId);
+    try {
+      await deleteBackupRun(runId);
+      await refresh(selectedClientId, selectedTaskId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingRunId(null);
+    }
+  }
 
   const clients = tasks
     ? Array.from(new Map(tasks.map((t) => [t.clientId, t.clientName])).entries()).sort((a, b) => a[1].localeCompare(b[1]))
@@ -130,6 +145,7 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
                       </td>
                       <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                         {run.taskName ?? '—'}
+                        <BackupSetBadge name={run.backupSetName} />
                       </td>
                       <td className="px-4 py-2.5">
                         <StatusChip status={run.status} />
@@ -144,7 +160,16 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-1">
                           {run.localPath && (
-                            <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                            <>
+                              <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                              <IconButton
+                                icon={<TrashIcon />}
+                                label="Eliminar backup"
+                                tone="danger"
+                                disabled={deletingRunId === run.id}
+                                onPress={() => handleDelete(run.id)}
+                              />
+                            </>
                           )}
                           {run.errorMessage && (
                             <IconButton

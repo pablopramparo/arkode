@@ -13,6 +13,7 @@ import { formatSchedule, formatConnectionTestVersions } from '../lib/format';
 import { TaskCreateWizard } from './TaskCreateWizard';
 import { TaskEditModal } from './TaskEditModal';
 import { ClientLink } from './ClientLink';
+import { BackupSetBadge } from './BackupSetBadge';
 import { Spinner } from './Spinner';
 
 const STRATEGY_LABEL: Record<BackupStrategyKind, string> = {
@@ -187,6 +188,7 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
                             (inactiva)
                           </span>
                         )}
+                        <BackupSetBadge name={task.backupSetName} />
                       </td>
                       <td className="px-4 py-2.5">
                         <StrategyBadge strategy={task.strategy} />

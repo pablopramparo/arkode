@@ -27,6 +27,7 @@ interface BackupTaskRow {
   is_active: number;
   created_at: string;
   updated_at: string;
+  backup_set_id: string | null;
 }
 
 function parseDaysOfWeek(csv: string | null): number[] | null {
@@ -58,6 +59,7 @@ function toDomain(row: BackupTaskRow): BackupTask {
     isActive: row.is_active === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    backupSetId: row.backup_set_id,
   };
 }
 
@@ -71,6 +73,7 @@ export interface CreateFetchExistingTaskInput {
   scheduleTime?: string | null;
   retentionCount?: number | null;
   retentionDays?: number | null;
+  backupSetId?: string | null;
 }
 
 export interface CreateRemoteDumpTaskInput {
@@ -84,6 +87,7 @@ export interface CreateRemoteDumpTaskInput {
   scheduleTime?: string | null;
   retentionCount?: number | null;
   retentionDays?: number | null;
+  backupSetId?: string | null;
 }
 
 export interface CreateDirectDumpTaskInput {
@@ -94,6 +98,7 @@ export interface CreateDirectDumpTaskInput {
   scheduleTime?: string | null;
   retentionCount?: number | null;
   retentionDays?: number | null;
+  backupSetId?: string | null;
 }
 
 export interface SetScheduleInput {
@@ -107,11 +112,18 @@ export interface SetScheduleInput {
   scheduleDayOfMonth?: number | null;
 }
 
-/** `strategy`/`transportId`/`databaseConnectionId`/`dbEngine` are deliberately not editable — they determine which downstream pipeline runs; create a new task to change any of them. */
+/**
+ * `strategy`/`transportId`/`databaseConnectionId`/`dbEngine` are deliberately
+ * not editable — they determine which downstream pipeline runs; create a
+ * new task to change any of them. `backupSetId` is the one exception to
+ * that immutability rule: unlike those, which task belongs to isn't a
+ * pipeline-determining decision — pass `null` to explicitly un-assign.
+ */
 export interface UpdateTaskInput {
   name?: string;
   retentionCount?: number | null;
   retentionDays?: number | null;
+  backupSetId?: string | null;
 }
 
 const SCHEDULE_TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -139,11 +151,11 @@ export function createTasksRepo(
     `INSERT INTO backup_tasks
        (id, client_id, strategy, transport_id, database_connection_id, name, db_engine,
         remote_path, remote_file_pattern, remote_command, remote_output_path_template, remote_cleanup,
-        retention_count, retention_days)
+        retention_count, retention_days, backup_set_id)
      VALUES
        (@id, @clientId, @strategy, @transportId, @databaseConnectionId, @name, @dbEngine,
         @remotePath, @remoteFilePattern, @remoteCommand, @remoteOutputPathTemplate, @remoteCleanup,
-        @retentionCount, @retentionDays)`
+        @retentionCount, @retentionDays, @backupSetId)`
   );
   const getByIdStmt = db.prepare<[string], BackupTaskRow>('SELECT * FROM backup_tasks WHERE id = ?');
   const listByClientStmt = db.prepare<[string], BackupTaskRow>(
@@ -161,7 +173,7 @@ export function createTasksRepo(
   );
   const updateStmt = db.prepare(
     `UPDATE backup_tasks
-     SET name = @name, retention_count = @retentionCount, retention_days = @retentionDays,
+     SET name = @name, retention_count = @retentionCount, retention_days = @retentionDays, backup_set_id = @backupSetId,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = @id`
   );
@@ -185,6 +197,7 @@ export function createTasksRepo(
       remoteCleanup?: boolean;
       retentionCount?: number | null;
       retentionDays?: number | null;
+      backupSetId?: string | null;
     },
     transportId: string | null,
     databaseConnectionId: string | null
@@ -205,6 +218,7 @@ export function createTasksRepo(
       remoteCleanup: input.remoteCleanup ? 1 : 0,
       retentionCount: input.retentionCount ?? null,
       retentionDays: input.retentionDays ?? null,
+      backupSetId: input.backupSetId ?? null,
     });
     const row = getByIdStmt.get(id);
     if (!row) throw new Error(`Failed to read back created backup task ${id}`);
@@ -260,6 +274,7 @@ export function createTasksRepo(
         name: patch.name ?? current.name,
         retentionCount: patch.retentionCount !== undefined ? patch.retentionCount : current.retention_count,
         retentionDays: patch.retentionDays !== undefined ? patch.retentionDays : current.retention_days,
+        backupSetId: patch.backupSetId !== undefined ? patch.backupSetId : current.backup_set_id,
       });
       const row = getByIdStmt.get(id);
       if (!row) throw new Error(`Failed to read back updated task ${id}`);

@@ -1,6 +1,7 @@
 import type { ClientsRepo } from '../db/repositories/clientsRepo.js';
 import type { TasksRepo } from '../db/repositories/tasksRepo.js';
 import type { RunsRepo } from '../db/repositories/runsRepo.js';
+import type { BackupSetsRepo } from '../db/repositories/backupSetsRepo.js';
 import type { BackupRunStatus, BackupStrategyKind } from '../types.js';
 
 export interface DashboardRow {
@@ -25,12 +26,15 @@ export interface DashboardRow {
   latestAttemptAt: string | null;
   /** The latest attempt's error message, if it failed — null otherwise (including for a never-run task). */
   latestErrorMessage: string | null;
+  /** Pure visual/reporting label, or null if unassigned — see BackupSet's own doc comment. */
+  backupSetName: string | null;
 }
 
 export interface GetDashboardStatusDeps {
   clientsRepo: ClientsRepo;
   tasksRepo: TasksRepo;
   runsRepo: RunsRepo;
+  backupSetsRepo: BackupSetsRepo;
 }
 
 export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[] {
@@ -41,6 +45,7 @@ export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[]
       .map((task): DashboardRow => {
         const latestRun = deps.runsRepo.getLatestByTask(task.id);
         const latestGoodRun = deps.runsRepo.getLatestWithFileByTask(task.id);
+        const backupSet = task.backupSetId ? deps.backupSetsRepo.getById(task.backupSetId) : null;
         return {
           clientId: client.id,
           client: client.name,
@@ -53,6 +58,7 @@ export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[]
           lastGoodBackupAt: latestGoodRun?.downloadedAt ?? null,
           latestAttemptAt: latestRun?.finishedAt ?? null,
           latestErrorMessage: latestRun?.errorMessage ?? null,
+          backupSetName: backupSet?.name ?? null,
         };
       })
   );

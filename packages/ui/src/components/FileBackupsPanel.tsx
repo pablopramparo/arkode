@@ -3,7 +3,8 @@ import { Button } from '@heroui/react';
 import { isTauri } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { openPath } from '@tauri-apps/plugin-opener';
-import type { ConnectionTestResult } from 'engine-core';
+import type { BackupSet, ConnectionTestResult } from 'engine-core';
+import { fetchBackupSets } from '../lib/backupSetsClient';
 import {
   fetchFileBackupRepository,
   createFileBackupRepository,
@@ -18,6 +19,7 @@ import {
   setFileBackupTaskSchedule,
   fetchFileBackupRuns,
   restoreFileBackupRun,
+  deleteFileBackupRun,
   fileBackupDownloadFileUrl,
   type FileBackupRepository,
   type FileBackupTask,
@@ -28,10 +30,11 @@ import { StatusChip } from './StatusChip';
 import { IconButton, IconLinkButton } from './IconButton';
 import { Modal } from './Modal';
 import { Field, inputStyle } from './TaskCreateWizard';
-import { PlayIcon, EditIcon, KeyIcon, UndoIcon, DownloadIcon, FolderIcon, PulseIcon } from './icons';
+import { PlayIcon, EditIcon, KeyIcon, UndoIcon, DownloadIcon, FolderIcon, PulseIcon, TrashIcon } from './icons';
 import { formatDateTime, formatSize, formatSchedule, formatConnectionTestVersions } from '../lib/format';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { Spinner } from './Spinner';
+import { BackupSetBadge } from './BackupSetBadge';
 
 /** Files/dirs metrics can be lower precision than backupsClient's byte formatter needs — reused as-is for dataAddedPacked, the real "physical disk cost" number. */
 function RunMetrics({ run }: { run: FileBackupRun }) {
@@ -63,8 +66,16 @@ function CreateTaskModal({
   const [remoteSourcePath, setRemoteSourcePath] = useState('');
   const [retentionCount, setRetentionCount] = useState('');
   const [retentionDays, setRetentionDays] = useState('');
+  const [backupSetId, setBackupSetId] = useState('');
+  const [backupSets, setBackupSets] = useState<BackupSet[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchBackupSets(clientId)
+      .then(setBackupSets)
+      .catch(() => setBackupSets([]));
+  }, [clientId]);
 
   const remoteTransports = transports.filter((t) => t.clientId === clientId && (t.type === 'sftp' || t.type === 'ftp'));
 
@@ -87,6 +98,7 @@ function CreateTaskModal({
           : { transportId, remoteSourcePath: remoteSourcePath.trim() }),
         retentionCount: retentionCount ? Number(retentionCount) : null,
         retentionDays: retentionDays ? Number(retentionDays) : null,
+        backupSetId: backupSetId || null,
       });
       onCreated();
       onClose();
@@ -186,6 +198,18 @@ function CreateTaskModal({
             <input style={inputStyle} type="number" min={0} value={retentionDays} onChange={(e) => setRetentionDays(e.target.value)} />
           </Field>
         </div>
+        {backupSets.length > 0 && (
+          <Field label="Set de backup">
+            <select style={inputStyle} value={backupSetId} onChange={(e) => setBackupSetId(e.target.value)}>
+              <option value="">Sin asignar</option>
+              {backupSets.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         {error && (
           <p className="text-xs" style={{ color: 'var(--danger)' }}>
             {error}
@@ -402,6 +426,7 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
   const [restoredPath, setRestoredPath] = useState<string | null>(null);
   const [downloadRunId, setDownloadRunId] = useState<string | null>(null);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [downloadPath, setDownloadPath] = useState('');
 
   const refresh = useCallback(async () => {
@@ -518,6 +543,20 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
     }
   }
 
+  async function handleDeleteRun(run: FileBackupRun) {
+    if (!window.confirm('¿Eliminar este snapshot? El espacio en disco recién se libera en el próximo prune.')) return;
+    setDeletingRunId(run.id);
+    setRestoreMessage(null);
+    try {
+      await deleteFileBackupRun(run.id);
+      await refresh();
+    } catch (err) {
+      setRestoreMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingRunId(null);
+    }
+  }
+
   if (repository === undefined) {
     return <Spinner />;
   }
@@ -587,7 +626,10 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
                 return (
                   <Fragment key={task.id}>
                     <tr style={{ borderTop: '1px solid var(--separator)', opacity: task.isActive ? 1 : 0.55 }}>
-                      <td className="px-4 py-2.5 font-medium">{task.name}</td>
+                      <td className="px-4 py-2.5 font-medium">
+                        {task.name}
+                        <BackupSetBadge name={task.backupSetName} />
+                      </td>
                       <td className="px-4 py-2.5 text-xs" style={{ color: 'var(--muted)' }}>
                         {task.sourceKind === 'local_folder'
                           ? task.sourcePath
@@ -756,6 +798,13 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
                               icon={<DownloadIcon />}
                               label="Restaurar un archivo puntual de este snapshot"
                               onPress={() => setDownloadRunId(downloadRunId === run.id ? null : run.id)}
+                            />
+                            <IconButton
+                              icon={<TrashIcon />}
+                              label="Eliminar snapshot"
+                              tone="danger"
+                              disabled={deletingRunId === run.id}
+                              onPress={() => handleDeleteRun(run)}
                             />
                           </>
                         )}

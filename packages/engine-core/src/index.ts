@@ -7,6 +7,9 @@ export { runMigrations } from './db/migrate.js';
 export { createClientsRepo } from './db/repositories/clientsRepo.js';
 export type { ClientsRepo, CreateClientInput, UpdateClientInput } from './db/repositories/clientsRepo.js';
 
+export { createBackupSetsRepo } from './db/repositories/backupSetsRepo.js';
+export type { BackupSetsRepo, CreateBackupSetInput, UpdateBackupSetInput } from './db/repositories/backupSetsRepo.js';
+
 export { createTransportsRepo } from './db/repositories/transportsRepo.js';
 export type {
   TransportsRepo,
@@ -91,6 +94,9 @@ export type { RunLogger } from './logging/logger.js';
 
 export { applyRetention, resolveRetentionPolicy } from './retention/applyRetention.js';
 export type { RetentionPolicy, ApplyRetentionDeps } from './retention/applyRetention.js';
+
+export { deleteBackupRun } from './retention/deleteBackupRun.js';
+export type { DeleteBackupRunDeps } from './retention/deleteBackupRun.js';
 
 export { isTaskDue } from './scheduler/isTaskDue.js';
 export { runDueTasks } from './scheduler/runDueTasks.js';
@@ -184,6 +190,9 @@ export type { RunFileBackupTaskDeps, RunFileBackupTaskResult } from './fileBacku
 
 export { applyFileBackupRetention, resolveFileBackupRetentionPolicy } from './fileBackup/retention/applyFileBackupRetention.js';
 export type { FileBackupRetentionPolicy, ApplyFileBackupRetentionDeps } from './fileBackup/retention/applyFileBackupRetention.js';
+
+export { deleteFileBackupRun } from './fileBackup/retention/deleteFileBackupRun.js';
+export type { DeleteFileBackupRunDeps } from './fileBackup/retention/deleteFileBackupRun.js';
 
 export { syncRemoteFolder } from './fileBackup/remoteSync/syncRemoteFolder.js';
 export type { SyncRemoteFolderAdapter, SyncRemoteFolderResult } from './fileBackup/remoteSync/syncRemoteFolder.js';

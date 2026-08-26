@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
+import type { BackupSet } from 'engine-core';
 import { setTaskSchedule, updateTask, ScheduleCompatibilityError, type TaskRow } from '../lib/tasksClient';
+import { fetchBackupSets } from '../lib/backupSetsClient';
 import { Modal } from './Modal';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { EMPTY_FORM, Field, ScheduleFields, inputStyle, isScheduleValid, type FormValues } from './TaskCreateWizard';
@@ -21,10 +23,20 @@ function taskToFormValues(task: TaskRow): FormValues {
     scheduleFrequency: task.scheduleFrequency,
     scheduleDaysOfWeek: task.scheduleDaysOfWeek ?? [],
     scheduleDayOfMonth: task.scheduleDayOfMonth != null ? String(task.scheduleDayOfMonth) : '',
+    backupSetId: task.backupSetId ?? '',
   };
 }
 
 function EditFields({ values, onChange }: { values: FormValues; onChange: (patch: Partial<FormValues>) => void }) {
+  const [backupSets, setBackupSets] = useState<BackupSet[]>([]);
+  useEffect(() => {
+    // includeInactive so the currently-assigned set still shows up in the
+    // dropdown even if it was deactivated after this task was assigned to it.
+    fetchBackupSets(values.clientId, { includeInactive: true })
+      .then(setBackupSets)
+      .catch(() => setBackupSets([]));
+  }, [values.clientId]);
+
   return (
     <div className="flex flex-col gap-3">
       <Field label="Nombre *">
@@ -50,6 +62,19 @@ function EditFields({ values, onChange }: { values: FormValues; onChange: (patch
           />
         </Field>
       </div>
+      {(backupSets.length > 0 || values.backupSetId) && (
+        <Field label="Set de backup">
+          <select style={inputStyle} value={values.backupSetId} onChange={(e) => onChange({ backupSetId: e.target.value })}>
+            <option value="">Sin asignar</option>
+            {backupSets.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+                {!s.isActive ? ' (inactivo)' : ''}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
       <ScheduleFields values={values} onChange={onChange} />
     </div>
   );
@@ -70,6 +95,7 @@ export function TaskEditModal({ task, onClose, onSaved }: { task: TaskRow; onClo
         name: form.name.trim(),
         retentionCount: form.retentionCount.trim() ? Number(form.retentionCount) : null,
         retentionDays: form.retentionDays.trim() ? Number(form.retentionDays) : null,
+        backupSetId: form.backupSetId || null,
       });
       await setTaskSchedule(task.id, {
         scheduleTime: form.scheduleTime.trim() || null,

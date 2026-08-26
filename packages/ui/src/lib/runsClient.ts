@@ -4,6 +4,7 @@ import { getApiBase } from './apiBase';
 export interface RunRow extends BackupRun {
   clientName: string | null;
   taskName: string | null;
+  backupSetName: string | null;
 }
 
 export async function fetchRuns(opts: { taskId?: string; clientId?: string; limit?: number } = {}): Promise<RunRow[]> {
@@ -23,6 +24,15 @@ export async function fetchRuns(opts: { taskId?: string; clientId?: string; limi
 /** A direct download link — the file streams from the server, so this is used as a plain <a href>, never fetched via JS (a multi-GB dump has no business going through a JS Blob). */
 export function downloadRunUrl(runId: string): string {
   return `${getApiBase()}/runs/${runId}/download`;
+}
+
+/** Permanently deletes the backup's file on disk (manual, not automated retention) — the run row/history is untouched. Always confirm with the user first; this can't be undone. */
+export async function deleteBackupRun(runId: string): Promise<void> {
+  const res = await fetch(`${getApiBase()}/runs/${runId}/delete`, { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Request failed: ${res.status}`);
+  }
 }
 
 export interface BackupsPage {

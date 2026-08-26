@@ -10,6 +10,7 @@ import { primaryPillStyle } from '../lib/pillStyles';
 import { IconButton } from './IconButton';
 import { ClientLink } from './ClientLink';
 import { Spinner } from './Spinner';
+import { BackupSetBadge } from './BackupSetBadge';
 
 const POLL_INTERVAL_MS = 20_000;
 /** A daily backup task without a fresh file past this age is worth flagging, even if the last *attempt* technically succeeded a while ago. */
@@ -196,6 +197,7 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                         </td>
                         <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                           {row.task}
+                          <BackupSetBadge name={row.backupSetName} />
                         </td>
                         <td className="px-4 py-2.5">
                           {row.lastGoodBackupAt

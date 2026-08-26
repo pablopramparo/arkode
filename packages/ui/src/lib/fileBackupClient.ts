@@ -44,6 +44,9 @@ export interface FileBackupTask {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Pure visual/reporting label, or null if unassigned — see engine-core's BackupSet doc comment. */
+  backupSetId: string | null;
+  backupSetName: string | null;
 }
 
 export interface FileBackupRun {
@@ -124,6 +127,8 @@ export interface CreateFileBackupTaskInput {
   remoteSourcePath?: string;
   retentionCount?: number | null;
   retentionDays?: number | null;
+  /** Optional — a pure visual/reporting label grouping this task with others. */
+  backupSetId?: string | null;
 }
 
 export async function createFileBackupTask(input: CreateFileBackupTaskInput): Promise<FileBackupTask> {
@@ -195,6 +200,11 @@ export async function restoreFileBackupRun(runId: string, targetDir: string): Pr
       body: JSON.stringify({ targetDir }),
     })
   );
+}
+
+/** Forgets the snapshot (manual, not automated retention) — cheap and immediate, but doesn't reclaim disk space until the next prune. Always confirm with the user first; this can't be undone. */
+export async function deleteFileBackupRun(runId: string): Promise<void> {
+  await handleJson(await fetch(`${getApiBase()}/file-runs/${runId}/delete`, { method: 'POST' }));
 }
 
 /** A function, not a precomputed constant — see apiBase.ts's own note on why. */

@@ -22,6 +22,22 @@ export type BackupRunStatus =
   | 'Warning'
   | 'Failed';
 
+/**
+ * A pure visual/reporting label grouping several existing tasks (DB-backup
+ * and/or file-backup) under one name per client, e.g. "Sitio X" = its
+ * database task + its uploads-folder task. Deliberately not a scheduling or
+ * execution concept — see backup_sets' migration comment for the full
+ * scope boundary.
+ */
+export interface BackupSet {
+  id: string;
+  clientId: string;
+  name: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Client {
   id: string;
   name: string;
@@ -96,6 +112,8 @@ export interface BackupTask {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Pure visual/reporting label — see BackupSet's own doc comment. Never affects scheduling/execution. */
+  backupSetId: string | null;
 }
 
 export interface BackupRun {

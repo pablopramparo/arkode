@@ -220,3 +220,14 @@ export function UndoIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function TrashIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <path d="M4.5 7h15" />
+      <path d="M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2" />
+      <path d="M6.5 7v12a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5V7" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}

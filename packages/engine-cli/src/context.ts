@@ -2,6 +2,7 @@ import {
   getDb,
   runMigrations,
   createClientsRepo,
+  createBackupSetsRepo,
   createTransportsRepo,
   createDatabaseConnectionsRepo,
   createTasksRepo,
@@ -24,6 +25,7 @@ export function buildContext() {
   runMigrations(db);
 
   const clientsRepo = createClientsRepo(db);
+  const backupSetsRepo = createBackupSetsRepo(db);
   const transportsRepo = createTransportsRepo(db);
   const databaseConnectionsRepo = createDatabaseConnectionsRepo(db);
   const tasksRepo = createTasksRepo(db, transportsRepo, databaseConnectionsRepo);
@@ -46,6 +48,7 @@ export function buildContext() {
   return {
     db,
     clientsRepo,
+    backupSetsRepo,
     transportsRepo,
     databaseConnectionsRepo,
     tasksRepo,
