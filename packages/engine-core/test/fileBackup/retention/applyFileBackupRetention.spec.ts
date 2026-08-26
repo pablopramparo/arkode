@@ -40,6 +40,8 @@ function makeTask(overrides: Partial<FileBackupTask> = {}): FileBackupTask {
     name: 'Uploads',
     sourceKind: 'local_folder',
     sourcePath: 'D:\\Sites\\acme\\uploads',
+    transportId: null,
+    remoteSourcePath: null,
     retentionCount: null,
     retentionDays: null,
     scheduleTime: null,
@@ -72,7 +74,7 @@ describe('applyFileBackupRetention', () => {
       resticRepoId: null, lastPrunedAt: null, lastCheckedAt: null, initializedAt: null,
       createdAt: '', updatedAt: '',
     };
-    await applyFileBackupRetention(makeTask(), repository, { count: null, days: null }, {
+    await applyFileBackupRetention(makeTask(), repository, 'D:\\Sites\\acme\\uploads', { count: null, days: null }, {
       fileBackupRetentionDeletionsRepo: fakeDeletionsRepo,
       secretStore: createFakeSecretStore(),
       logger: fakeLogger(),
@@ -116,7 +118,7 @@ describe('applyFileBackupRetention', () => {
         createdAt: '', updatedAt: '',
       };
 
-      await applyFileBackupRetention(makeTask({ sourcePath }), repository, { count: 1, days: null }, {
+      await applyFileBackupRetention(makeTask({ sourcePath }), repository, sourcePath, { count: 1, days: null }, {
         fileBackupRetentionDeletionsRepo: fakeDeletionsRepo,
         secretStore,
         logger: fakeLogger(),

@@ -11,10 +11,40 @@ import type {
   SftpAdapter,
   SftpTransportConfig,
   RemoteFile,
+  RemoteTreeEntry,
   DownloadResult,
   DownloadOptions,
   ConnectionTestResult,
 } from './types.js';
+
+/**
+ * Manual recursion — ssh2-sftp-client has no built-in recursive walker.
+ * client.list() entries use `.type`: 'd' for directory, '-' for a regular
+ * file, 'l' for a symlink (skipped, not followed — a conservative default
+ * that avoids any cycle risk, not an oversight). relativePath is always
+ * POSIX-style (forward slashes), matching how SFTP paths work regardless of
+ * the remote host's own OS.
+ */
+async function listRemoteTreeRecursive(
+  client: SftpClient,
+  remoteRootDir: string,
+  currentDir: string,
+  relativePrefix: string
+): Promise<RemoteTreeEntry[]> {
+  const entries = await client.list(currentDir);
+  const results: RemoteTreeEntry[] = [];
+  for (const entry of entries) {
+    const relativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
+    if (entry.type === 'd') {
+      const subEntries = await listRemoteTreeRecursive(client, remoteRootDir, `${currentDir}/${entry.name}`, relativePath);
+      results.push(...subEntries);
+    } else if (entry.type === '-') {
+      results.push({ relativePath, size: entry.size, modifiedAt: new Date(entry.modifyTime) });
+    }
+    // 'l' (symlink) and anything else: skipped.
+  }
+  return results;
+}
 
 export function createSftpAdapter(config: SftpTransportConfig, knownHosts: KnownHostsRepo): SftpAdapter {
   // ssh2-sftp-client's default `error` callback logs low-level socket
@@ -86,6 +116,11 @@ export function createSftpAdapter(config: SftpTransportConfig, knownHosts: Known
           size: entry.size,
           modifiedAt: new Date(entry.modifyTime),
         }));
+    },
+
+    async listRemoteTree(remoteDir: string): Promise<RemoteTreeEntry[]> {
+      const baseDir = remoteDir.replace(/\/$/, '');
+      return listRemoteTreeRecursive(client, baseDir, baseDir, '');
     },
 
     async downloadFile(

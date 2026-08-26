@@ -2,8 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
 import type { LogEventLevel } from 'engine-core';
 import { fetchLogs, type LogEventRow } from '../lib/logsClient';
+import { fetchFileLogs } from '../lib/fileBackupClient';
 import { formatDateTime } from '../lib/format';
 import { ClientLink } from './ClientLink';
+import { primaryPillStyle } from '../lib/pillStyles';
+
+type Domain = 'database' | 'files';
 
 const PAGE_SIZE = 50;
 
@@ -35,6 +39,7 @@ const inputStyle: React.CSSProperties = {
 };
 
 export function Logs({ onSelectClient }: { onSelectClient: (clientId: string) => void }) {
+  const [domain, setDomain] = useState<Domain>('database');
   const [events, setEvents] = useState<LogEventRow[] | null>(null);
   const [total, setTotal] = useState(0);
   const [steps, setSteps] = useState<string[]>([]);
@@ -49,7 +54,8 @@ export function Logs({ onSelectClient }: { onSelectClient: (clientId: string) =>
 
   const refresh = useCallback(async () => {
     try {
-      const result = await fetchLogs({
+      const fetcher = domain === 'database' ? fetchLogs : fetchFileLogs;
+      const result = await fetcher({
         search: search.trim() || undefined,
         step: step || undefined,
         level: level || undefined,
@@ -65,15 +71,22 @@ export function Logs({ onSelectClient }: { onSelectClient: (clientId: string) =>
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo conectar con el motor de backups.');
     }
-  }, [search, step, level, from, to, page]);
+  }, [domain, search, step, level, from, to, page]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  // Any filter change should reset back to page 0 — otherwise a narrower filter can land on an empty page past the new total.
+  // Any filter (or domain) change should reset back to page 0 — otherwise a narrower filter can land on an empty page past the new total.
   function updateFilter(setter: () => void) {
     setter();
+    setPage(0);
+  }
+
+  function switchDomain(next: Domain) {
+    if (next === domain) return;
+    setDomain(next);
+    setStep(''); // steps are domain-specific (produce/validate/... differ from connect/download/...) — a stale filter from the other domain would just show zero results
     setPage(0);
   }
 
@@ -88,9 +101,29 @@ export function Logs({ onSelectClient }: { onSelectClient: (clientId: string) =>
             {events == null ? 'Cargando…' : `${total} evento${total === 1 ? '' : 's'}`}
           </p>
         </div>
-        <Button size="sm" variant="ghost" className="rounded-full px-4" onPress={refresh}>
-          Actualizar
-        </Button>
+        <div className="flex items-center gap-3">
+          <div className="flex gap-1 rounded-full border p-0.5" style={{ borderColor: 'var(--border)' }}>
+            <button
+              type="button"
+              className="rounded-full px-3 py-1 text-xs font-medium"
+              style={domain === 'database' ? primaryPillStyle : { color: 'var(--muted)' }}
+              onClick={() => switchDomain('database')}
+            >
+              Base de datos
+            </button>
+            <button
+              type="button"
+              className="rounded-full px-3 py-1 text-xs font-medium"
+              style={domain === 'files' ? primaryPillStyle : { color: 'var(--muted)' }}
+              onClick={() => switchDomain('files')}
+            >
+              Archivos
+            </button>
+          </div>
+          <Button size="sm" variant="ghost" className="rounded-full px-4" onPress={refresh}>
+            Actualizar
+          </Button>
+        </div>
       </header>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">

@@ -8,6 +8,19 @@ export interface RemoteFile {
   modifiedAt: Date;
 }
 
+/**
+ * One file discovered by a recursive `listRemoteTree` walk (remote_folder
+ * file-backup sync — see fileBackup/remoteSync/syncRemoteFolder.ts).
+ * Directories are traversed internally but never appear in the result —
+ * the sync algorithm creates local parent directories on demand instead.
+ */
+export interface RemoteTreeEntry {
+  /** POSIX-style, relative to the listed root, e.g. "sub/dir/file.txt" — never an absolute remote path. */
+  relativePath: string;
+  size: number;
+  modifiedAt: Date;
+}
+
 export interface DownloadResult {
   bytesTransferred: number;
   /** Computed incrementally while streaming — never a second read pass. */
@@ -69,6 +82,8 @@ export interface TransportAdapter {
 export interface SftpAdapter extends TransportAdapter {
   kind: 'sftp';
   listRemoteFiles(remoteDir: string, pattern?: RegExp): Promise<RemoteFile[]>;
+  /** remote_folder file-backup sync only — recursively lists every file under remoteDir. Symlinks are skipped, not followed. */
+  listRemoteTree(remoteDir: string): Promise<RemoteTreeEntry[]>;
 }
 
 /** remote_dump strategy (not implemented in this slice): we generate the backup on the remote host first. */
@@ -90,6 +105,8 @@ export interface SshAdapter extends TransportAdapter {
 export interface FtpAdapter extends TransportAdapter {
   kind: 'ftp';
   listRemoteFiles(remoteDir: string, pattern?: RegExp): Promise<RemoteFile[]>;
+  /** remote_folder file-backup sync only — recursively lists every file under remoteDir. Symlinks are skipped, not followed. */
+  listRemoteTree(remoteDir: string): Promise<RemoteTreeEntry[]>;
 }
 
 export interface BaseTransportConfig {

@@ -3,6 +3,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { runMigrations } from '../../../../src/db/migrate.js';
 import { migrationsSourceDir } from '../../../../src/paths.js';
 import { createClientsRepo, type ClientsRepo } from '../../../../src/db/repositories/clientsRepo.js';
+import { createTransportsRepo } from '../../../../src/db/repositories/transportsRepo.js';
 import { createFileBackupRepositoriesRepo, type FileBackupRepositoriesRepo } from '../../../../src/fileBackup/db/repositories/fileBackupRepositoriesRepo.js';
 import { createFileBackupTasksRepo, type FileBackupTasksRepo } from '../../../../src/fileBackup/db/repositories/fileBackupTasksRepo.js';
 import { createFileBackupRunsRepo, type FileBackupRunsRepo } from '../../../../src/fileBackup/db/repositories/fileBackupRunsRepo.js';
@@ -27,7 +28,7 @@ describe('fileBackupRunsRepo', () => {
     const db = freshDb();
     clientsRepo = createClientsRepo(db);
     reposRepo = createFileBackupRepositoriesRepo(db);
-    tasksRepo = createFileBackupTasksRepo(db);
+    tasksRepo = createFileBackupTasksRepo(db, createTransportsRepo(db));
     runsRepo = createFileBackupRunsRepo(db);
     clientId = clientsRepo.create({ name: 'Acme', localBasePath: 'D:\\Backups\\Acme' }).id;
     repositoryId = reposRepo.create({ clientId, repoPath: 'D:\\Backups\\Acme\\_restic-repo', passwordSecretRef: 'ref-1' }).id;

@@ -136,6 +136,7 @@ export { createFileBackupTasksRepo } from './fileBackup/db/repositories/fileBack
 export type {
   FileBackupTasksRepo,
   CreateLocalFolderTaskInput,
+  CreateRemoteFolderTaskInput,
   SetFileBackupScheduleInput,
   UpdateFileBackupTaskInput,
 } from './fileBackup/db/repositories/fileBackupTasksRepo.js';
@@ -159,6 +160,9 @@ export type {
   CreateFileBackupMaintenanceRunInput,
 } from './fileBackup/db/repositories/fileBackupMaintenanceRunsRepo.js';
 
+export { createFileBackupLogEventsRepo } from './fileBackup/db/repositories/fileBackupLogEventsRepo.js';
+export type { FileBackupLogEventsRepo } from './fileBackup/db/repositories/fileBackupLogEventsRepo.js';
+
 export { toResticPath, fromResticPath } from './fileBackup/restic/paths.js';
 export * as resticClient from './fileBackup/restic/resticClient.js';
 export { RESTIC_HOST, buildForgetArgs } from './fileBackup/restic/resticClient.js';
@@ -180,6 +184,9 @@ export type { RunFileBackupTaskDeps, RunFileBackupTaskResult } from './fileBacku
 
 export { applyFileBackupRetention, resolveFileBackupRetentionPolicy } from './fileBackup/retention/applyFileBackupRetention.js';
 export type { FileBackupRetentionPolicy, ApplyFileBackupRetentionDeps } from './fileBackup/retention/applyFileBackupRetention.js';
+
+export { syncRemoteFolder } from './fileBackup/remoteSync/syncRemoteFolder.js';
+export type { SyncRemoteFolderAdapter, SyncRemoteFolderResult } from './fileBackup/remoteSync/syncRemoteFolder.js';
 
 export { runFileBackupMaintenance } from './fileBackup/maintenance/runFileBackupMaintenance.js';
 export type {

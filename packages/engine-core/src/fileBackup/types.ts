@@ -1,7 +1,6 @@
 import type { ScheduleFrequency } from '../types.js';
 
-/** Only 'local_folder' exists today — 'remote_folder' is a future, separate increment. */
-export type FileBackupSourceKind = 'local_folder';
+export type FileBackupSourceKind = 'local_folder' | 'remote_folder';
 
 export type FileBackupRunStatus = 'Pending' | 'Running' | 'Producing' | 'Validating' | 'Success' | 'Warning' | 'Failed';
 
@@ -28,8 +27,12 @@ export interface FileBackupTask {
   repositoryId: string;
   name: string;
   sourceKind: FileBackupSourceKind;
-  /** Always an absolute Windows path — resolved in Node before ever reaching restic. */
-  sourcePath: string;
+  /** local_folder only — always an absolute Windows path, resolved in Node before ever reaching restic. NULL for remote_folder, whose local staging mirror is computed at run time instead (see runFileBackupTask.ts's resolveSourcePath). */
+  sourcePath: string | null;
+  /** remote_folder only — the sftp/ftp transport used to pull from remoteSourcePath. NULL for local_folder. */
+  transportId: string | null;
+  /** remote_folder only — the folder's path on the remote host. NULL for local_folder. */
+  remoteSourcePath: string | null;
   retentionCount: number | null;
   retentionDays: number | null;
   scheduleTime: string | null;

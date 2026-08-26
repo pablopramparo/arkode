@@ -1,4 +1,6 @@
+import type { ConnectionTestResult } from 'engine-core';
 import { getApiBase } from './apiBase';
+import type { FetchLogsOptions, LogsResult } from './logsClient';
 
 // Mirrors engine-core's fileBackup/types.ts shapes (camelCase JSON over the
 // wire) — no import from 'engine-core' here since the file-backup domain
@@ -25,8 +27,13 @@ export interface FileBackupTask {
   clientId: string;
   repositoryId: string;
   name: string;
-  sourceKind: 'local_folder';
-  sourcePath: string;
+  sourceKind: 'local_folder' | 'remote_folder';
+  /** local_folder only. */
+  sourcePath: string | null;
+  /** remote_folder only. */
+  transportId: string | null;
+  /** remote_folder only. */
+  remoteSourcePath: string | null;
   retentionCount: number | null;
   retentionDays: number | null;
   scheduleTime: string | null;
@@ -108,7 +115,13 @@ export async function fetchFileBackupTasks(clientId: string, opts: { includeInac
 export interface CreateFileBackupTaskInput {
   clientId: string;
   name: string;
-  sourcePath: string;
+  sourceKind?: 'local_folder' | 'remote_folder';
+  /** Required for local_folder. */
+  sourcePath?: string;
+  /** Required for remote_folder. */
+  transportId?: string;
+  /** Required for remote_folder. */
+  remoteSourcePath?: string;
   retentionCount?: number | null;
   retentionDays?: number | null;
 }
@@ -135,9 +148,24 @@ export async function runFileBackupTaskNow(id: string): Promise<FileBackupRun> {
   return handleJson(await fetch(`${getApiBase()}/file-tasks/${id}/run`, { method: 'POST' }));
 }
 
+/** remote_folder only. trustHost: true retries an unknown-host rejection as an explicit "yes, trust this host" — only ever call it after the person has seen the presented fingerprint and confirmed it. */
+export async function testFileBackupTaskConnection(id: string, trustHost?: boolean): Promise<ConnectionTestResult> {
+  const res = await fetch(`${getApiBase()}/file-tasks/${id}/test-connection`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trustHost: Boolean(trustHost) }),
+  });
+  const body = await res.json();
+  if (res.status === 404 || res.status === 500) throw new Error(body.error ?? `Request failed: ${res.status}`);
+  return body;
+}
+
 export interface SetFileBackupScheduleInput {
   scheduleTime: string | null;
   scheduleEnabled: boolean;
+  scheduleFrequency?: 'daily' | 'weekly' | 'monthly';
+  scheduleDaysOfWeek?: number[] | null;
+  scheduleDayOfMonth?: number | null;
   disable?: boolean;
 }
 
@@ -172,4 +200,23 @@ export async function restoreFileBackupRun(runId: string, targetDir: string): Pr
 /** A function, not a precomputed constant — see apiBase.ts's own note on why. */
 export function fileBackupDownloadFileUrl(runId: string, absoluteSourcePath: string): string {
   return `${getApiBase()}/file-runs/${runId}/download-file?path=${encodeURIComponent(absoluteSourcePath)}`;
+}
+
+/** Same response shape as logsClient.ts's fetchLogs (see /file-logs, which mirrors /logs exactly) — reuses its types rather than duplicating them. */
+export async function fetchFileLogs(opts: FetchLogsOptions = {}): Promise<LogsResult> {
+  const params = new URLSearchParams();
+  if (opts.search) params.set('search', opts.search);
+  if (opts.step) params.set('step', opts.step);
+  if (opts.level) params.set('level', opts.level);
+  if (opts.from) params.set('from', opts.from);
+  if (opts.to) params.set('to', opts.to);
+  if (opts.limit) params.set('limit', String(opts.limit));
+  if (opts.offset) params.set('offset', String(opts.offset));
+  const query = params.toString();
+  const res = await fetch(`${getApiBase()}/file-logs${query ? `?${query}` : ''}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Request failed: ${res.status}`);
+  }
+  return res.json();
 }

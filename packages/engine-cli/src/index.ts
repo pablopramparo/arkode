@@ -1144,11 +1144,19 @@ program
 function buildFileBackupTaskDeps(ctx: ReturnType<typeof buildContext>): RunFileBackupTaskDeps {
   return {
     clientsRepo: ctx.clientsRepo,
+    transportsRepo: ctx.transportsRepo,
+    knownHostsRepo: ctx.knownHostsRepo,
     fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
     fileBackupRunsRepo: ctx.fileBackupRunsRepo,
     fileBackupMaintenanceRunsRepo: ctx.fileBackupMaintenanceRunsRepo,
     fileBackupRetentionDeletionsRepo: ctx.fileBackupRetentionDeletionsRepo,
+    fileBackupLogEventsRepo: ctx.fileBackupLogEventsRepo,
     secretStore: ctx.secretStore,
+    // Mirrors runTaskNow's exact DB-domain pattern — confirmHostInteractively
+    // itself is what correctly (and intentionally) rejects an unknown host
+    // when there's no real interactive terminal to confirm in (run-due,
+    // serve), not a caller-specific branch here.
+    onUnknownHost: confirmHostInteractively,
   };
 }
 
@@ -1255,10 +1263,15 @@ program
 
 program
   .command('file-task:create')
-  .description('Create a local_folder file-backup task. The client must already have a file-backup repository (file-repo:create).')
+  .description(
+    'Create a file-backup task (local_folder by default, or --source-kind remote_folder). The client must already have a file-backup repository (file-repo:create).'
+  )
   .requiredOption('--client <clientId>')
   .requiredOption('--name <name>')
-  .requiredOption('--source-path <path>', 'the folder to back up — resolved to an absolute path before use')
+  .option('--source-kind <local_folder|remote_folder>', 'defaults to local_folder', 'local_folder')
+  .option('--source-path <path>', 'required for local_folder — the folder to back up, resolved to an absolute path before use')
+  .option('--transport <transportId>', 'required for remote_folder — must be an sftp or ftp transport')
+  .option('--remote-source-path <path>', 'required for remote_folder — the folder\'s path on the remote host')
   .option('--retention-count <n>')
   .option('--retention-days <n>')
   .action((opts) => {
@@ -1270,14 +1283,39 @@ program
       return;
     }
     try {
-      const task = ctx.fileBackupTasksRepo.createLocalFolder({
-        clientId: opts.client,
-        repositoryId: repository.id,
-        name: opts.name,
-        sourcePath: resolvePath(opts.sourcePath),
-        retentionCount: opts.retentionCount != null ? Number(opts.retentionCount) : null,
-        retentionDays: opts.retentionDays != null ? Number(opts.retentionDays) : null,
-      });
+      const retentionCount = opts.retentionCount != null ? Number(opts.retentionCount) : null;
+      const retentionDays = opts.retentionDays != null ? Number(opts.retentionDays) : null;
+      let task;
+      if (opts.sourceKind === 'remote_folder') {
+        if (!opts.transport || !opts.remoteSourcePath) {
+          console.error('remote_folder tasks require --transport <id> and --remote-source-path <path>.');
+          process.exitCode = 1;
+          return;
+        }
+        task = ctx.fileBackupTasksRepo.createRemoteFolder({
+          clientId: opts.client,
+          repositoryId: repository.id,
+          name: opts.name,
+          transportId: opts.transport,
+          remoteSourcePath: opts.remoteSourcePath,
+          retentionCount,
+          retentionDays,
+        });
+      } else {
+        if (!opts.sourcePath) {
+          console.error('local_folder tasks require --source-path <path>.');
+          process.exitCode = 1;
+          return;
+        }
+        task = ctx.fileBackupTasksRepo.createLocalFolder({
+          clientId: opts.client,
+          repositoryId: repository.id,
+          name: opts.name,
+          sourcePath: resolvePath(opts.sourcePath),
+          retentionCount,
+          retentionDays,
+        });
+      }
       console.log(JSON.stringify(task, null, 2));
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
@@ -1329,8 +1367,36 @@ program
   });
 
 program
+  .command('file-task:test-connection')
+  .description("Test a remote_folder file-backup task's transport, without running a sync/backup.")
+  .argument('<taskId>')
+  .action(async (taskId: string) => {
+    const ctx = buildContext();
+    const task = ctx.fileBackupTasksRepo.getById(taskId);
+    if (!task) {
+      console.error(`File-backup task ${taskId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (task.sourceKind !== 'remote_folder' || !task.transportId) {
+      console.error(`Task ${taskId} is a ${task.sourceKind} task — test-connection only applies to remote_folder.`);
+      process.exitCode = 1;
+      return;
+    }
+    const transport = ctx.transportsRepo.getById(task.transportId);
+    if (!transport) {
+      console.error(`Transport ${task.transportId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    const result = await testTransportConnection(ctx, transport);
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
+  });
+
+program
   .command('file-task:run')
-  .description('Run a local_folder file-backup task now.')
+  .description('Run a file-backup task now (local_folder or remote_folder).')
   .argument('<taskId>')
   .action(async (taskId: string) => {
     const ctx = buildContext();
@@ -1464,6 +1530,30 @@ program
   .action((opts) => {
     const ctx = buildContext();
     console.log(JSON.stringify(ctx.fileBackupRunsRepo.listRecent({ taskId: opts.task, clientId: opts.client }), null, 2));
+  });
+
+program
+  .command('file-log:list')
+  .description('List file-backup log_events (mirrors log:list for the DB-backup domain, backed by its own file_backup_log_events table).')
+  .option('--search <term>')
+  .option('--step <step>')
+  .option('--level <debug|info|warn|error>')
+  .option('--from <isoDate>')
+  .option('--to <isoDate>')
+  .option('--limit <n>')
+  .option('--offset <n>')
+  .action((opts) => {
+    const ctx = buildContext();
+    const result = ctx.fileBackupLogEventsRepo.listRecent({
+      search: opts.search,
+      step: opts.step,
+      level: opts.level,
+      from: opts.from,
+      to: opts.to,
+      limit: opts.limit != null ? Number(opts.limit) : undefined,
+      offset: opts.offset != null ? Number(opts.offset) : undefined,
+    });
+    console.log(JSON.stringify(result, null, 2));
   });
 
 program
@@ -1968,6 +2058,39 @@ program
         return;
       }
 
+      // Mirrors /logs exactly (same response shape: { events, total, steps })
+      // but backed by file_backup_log_events / file_backup_runs / file_backup_tasks
+      // -- its own domain, see fileBackupLogEventsRepo.ts for why this isn't
+      // just /logs with a filter.
+      if (req.method === 'GET' && pathname === '/file-logs') {
+        const limitParam = url.searchParams.get('limit');
+        const offsetParam = url.searchParams.get('offset');
+        const { events, total } = ctx.fileBackupLogEventsRepo.listRecent({
+          search: url.searchParams.get('search') ?? undefined,
+          step: url.searchParams.get('step') ?? undefined,
+          level: (url.searchParams.get('level') as any) ?? undefined,
+          from: url.searchParams.get('from') ?? undefined,
+          to: url.searchParams.get('to') ?? undefined,
+          limit: limitParam ? Number(limitParam) : undefined,
+          offset: offsetParam ? Number(offsetParam) : undefined,
+        });
+        const fileRunNameCache = new Map<string, { clientId: string | null; clientName: string | null; taskName: string | null }>();
+        function resolveFileRunNames(runId: string | null) {
+          if (!runId) return { clientId: null, clientName: null, taskName: null };
+          const cached = fileRunNameCache.get(runId);
+          if (cached) return cached;
+          const run = ctx.fileBackupRunsRepo.getById(runId);
+          const client = run ? ctx.clientsRepo.getById(run.clientId) : null;
+          const task = run ? ctx.fileBackupTasksRepo.getById(run.taskId) : null;
+          const names = { clientId: client?.id ?? null, clientName: client?.name ?? null, taskName: task?.name ?? null };
+          fileRunNameCache.set(runId, names);
+          return names;
+        }
+        const enrichedFileEvents = events.map((event) => ({ ...event, ...resolveFileRunNames(event.runId) }));
+        sendJson(res, 200, { events: enrichedFileEvents, total, steps: ctx.fileBackupLogEventsRepo.listDistinctSteps() });
+        return;
+      }
+
       if (req.method === 'GET' && pathname === '/system') {
         sendJson(res, 200, getSystemInfo());
         return;
@@ -2306,8 +2429,8 @@ program
       if (req.method === 'POST' && pathname === '/file-tasks') {
         try {
           const body = await readJsonBody(req);
-          if (!body.clientId || !body.name || !body.sourcePath) {
-            sendJson(res, 400, { error: 'clientId, name, and sourcePath are required.' });
+          if (!body.clientId || !body.name) {
+            sendJson(res, 400, { error: 'clientId and name are required.' });
             return;
           }
           const repository = ctx.fileBackupRepositoriesRepo.getByClientId(body.clientId);
@@ -2315,14 +2438,35 @@ program
             sendJson(res, 400, { error: 'This client has no file-backup repository yet — create one first (POST /file-repos).' });
             return;
           }
-          const task = ctx.fileBackupTasksRepo.createLocalFolder({
-            clientId: body.clientId,
-            repositoryId: repository.id,
-            name: body.name,
-            sourcePath: resolvePath(body.sourcePath),
-            retentionCount: body.retentionCount ?? null,
-            retentionDays: body.retentionDays ?? null,
-          });
+          let task;
+          if (body.sourceKind === 'remote_folder') {
+            if (!body.transportId || !body.remoteSourcePath) {
+              sendJson(res, 400, { error: 'remote_folder tasks require transportId and remoteSourcePath.' });
+              return;
+            }
+            task = ctx.fileBackupTasksRepo.createRemoteFolder({
+              clientId: body.clientId,
+              repositoryId: repository.id,
+              name: body.name,
+              transportId: body.transportId,
+              remoteSourcePath: body.remoteSourcePath,
+              retentionCount: body.retentionCount ?? null,
+              retentionDays: body.retentionDays ?? null,
+            });
+          } else {
+            if (!body.sourcePath) {
+              sendJson(res, 400, { error: 'local_folder tasks require sourcePath.' });
+              return;
+            }
+            task = ctx.fileBackupTasksRepo.createLocalFolder({
+              clientId: body.clientId,
+              repositoryId: repository.id,
+              name: body.name,
+              sourcePath: resolvePath(body.sourcePath),
+              retentionCount: body.retentionCount ?? null,
+              retentionDays: body.retentionDays ?? null,
+            });
+          }
           if (body.scheduleTime) {
             ctx.fileBackupTasksRepo.setSchedule(task.id, {
               scheduleTime: body.scheduleTime,
@@ -2352,7 +2496,7 @@ program
         return;
       }
 
-      const fileTaskActionMatch = req.method === 'POST' && pathname.match(/^\/file-tasks\/([^/]+)\/(deactivate|reactivate|run)$/);
+      const fileTaskActionMatch = req.method === 'POST' && pathname.match(/^\/file-tasks\/([^/]+)\/(deactivate|reactivate|run|test-connection)$/);
       if (fileTaskActionMatch) {
         const [, taskId, action] = fileTaskActionMatch;
         try {
@@ -2362,6 +2506,24 @@ program
           } else if (action === 'reactivate') {
             ctx.fileBackupTasksRepo.reactivate(taskId);
             sendJson(res, 200, { ok: true });
+          } else if (action === 'test-connection') {
+            const task = ctx.fileBackupTasksRepo.getById(taskId);
+            if (!task) {
+              sendJson(res, 404, { error: `File-backup task ${taskId} not found.` });
+              return;
+            }
+            if (task.sourceKind !== 'remote_folder' || !task.transportId) {
+              sendJson(res, 400, { error: `Task ${taskId} is a ${task.sourceKind} task — test-connection only applies to remote_folder.` });
+              return;
+            }
+            const transport = ctx.transportsRepo.getById(task.transportId);
+            if (!transport) {
+              sendJson(res, 404, { error: `Transport ${task.transportId} not found.` });
+              return;
+            }
+            const body = await readJsonBody(req);
+            const result = await testTransportConnection(ctx, transport, body.trustHost === true);
+            sendJson(res, result.ok ? 200 : 502, result);
           } else {
             const task = ctx.fileBackupTasksRepo.getById(taskId);
             if (!task) {

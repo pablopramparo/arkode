@@ -45,6 +45,8 @@ export interface ApplyFileBackupRetentionDeps {
 export async function applyFileBackupRetention(
   task: FileBackupTask,
   repository: FileBackupRepository,
+  /** The path actually passed to `restic backup` for this task — `task.sourcePath` for local_folder, the computed staging dir for remote_folder (see runFileBackupTask.ts's resolveSourcePath). Never read from `task` directly, since it's null for remote_folder. */
+  resolvedSourcePath: string,
   policy: FileBackupRetentionPolicy,
   deps: ApplyFileBackupRetentionDeps
 ): Promise<void> {
@@ -57,7 +59,7 @@ export async function applyFileBackupRetention(
   }
 
   const { removedSnapshotIds } = await resticClient.forget(repository.repoPath, password, {
-    path: task.sourcePath,
+    path: resolvedSourcePath,
     keepLast: policy.count ?? undefined,
     keepWithinDays: policy.days ?? undefined,
   });

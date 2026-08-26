@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
 import { isTauri } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { openPath } from '@tauri-apps/plugin-opener';
+import type { ConnectionTestResult } from 'engine-core';
 import {
   fetchFileBackupRepository,
   createFileBackupRepository,
@@ -13,6 +14,7 @@ import {
   deactivateFileBackupTask,
   reactivateFileBackupTask,
   runFileBackupTaskNow,
+  testFileBackupTaskConnection,
   setFileBackupTaskSchedule,
   fetchFileBackupRuns,
   restoreFileBackupRun,
@@ -21,12 +23,13 @@ import {
   type FileBackupTask,
   type FileBackupRun,
 } from '../lib/fileBackupClient';
+import { fetchConnections, type TransportWithClientName } from '../lib/connectionsClient';
 import { StatusChip } from './StatusChip';
 import { IconButton, IconLinkButton } from './IconButton';
 import { Modal } from './Modal';
 import { Field, inputStyle } from './TaskCreateWizard';
-import { PlayIcon, EditIcon, KeyIcon, UndoIcon, DownloadIcon, FolderIcon } from './icons';
-import { formatDateTime, formatSize } from '../lib/format';
+import { PlayIcon, EditIcon, KeyIcon, UndoIcon, DownloadIcon, FolderIcon, PulseIcon } from './icons';
+import { formatDateTime, formatSize, formatSchedule, formatConnectionTestVersions } from '../lib/format';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { Spinner } from './Spinner';
 
@@ -40,23 +43,36 @@ function RunMetrics({ run }: { run: FileBackupRun }) {
   );
 }
 
+type SourceKind = 'local_folder' | 'remote_folder';
+
 function CreateTaskModal({
   clientId,
+  transports,
   onClose,
   onCreated,
 }: {
   clientId: string;
+  transports: TransportWithClientName[];
   onClose: () => void;
   onCreated: () => void;
 }) {
   const [name, setName] = useState('');
+  const [sourceKind, setSourceKind] = useState<SourceKind>('local_folder');
   const [sourcePath, setSourcePath] = useState('');
+  const [transportId, setTransportId] = useState('');
+  const [remoteSourcePath, setRemoteSourcePath] = useState('');
   const [retentionCount, setRetentionCount] = useState('');
   const [retentionDays, setRetentionDays] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const valid = name.trim().length > 0 && sourcePath.trim().length > 0;
+  const remoteTransports = transports.filter((t) => t.clientId === clientId && (t.type === 'sftp' || t.type === 'ftp'));
+
+  const valid =
+    name.trim().length > 0 &&
+    (sourceKind === 'local_folder'
+      ? sourcePath.trim().length > 0
+      : transportId.length > 0 && remoteSourcePath.trim().length > 0);
 
   async function handleCreate() {
     setBusy(true);
@@ -65,7 +81,10 @@ function CreateTaskModal({
       await createFileBackupTask({
         clientId,
         name: name.trim(),
-        sourcePath: sourcePath.trim(),
+        sourceKind,
+        ...(sourceKind === 'local_folder'
+          ? { sourcePath: sourcePath.trim() }
+          : { transportId, remoteSourcePath: remoteSourcePath.trim() }),
         retentionCount: retentionCount ? Number(retentionCount) : null,
         retentionDays: retentionDays ? Number(retentionDays) : null,
       });
@@ -84,29 +103,81 @@ function CreateTaskModal({
         <Field label="Nombre *">
           <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej: Uploads" />
         </Field>
-        <Field label="Carpeta de origen *">
-          <div className="flex gap-2">
-            <input
-              style={{ ...inputStyle, flex: 1 }}
-              placeholder="Ej: D:\Sitios\cliente\uploads"
-              value={sourcePath}
-              onChange={(e) => setSourcePath(e.target.value)}
-            />
-            {isTauri() && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="shrink-0 rounded-full px-3"
-                onPress={async () => {
-                  const selected = await openDialog({ directory: true, multiple: false });
-                  if (typeof selected === 'string') setSourcePath(selected);
-                }}
-              >
-                Elegir…
-              </Button>
-            )}
+
+        <Field label="Origen">
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={() => setSourceKind('local_folder')}
+              className="rounded-full px-3 py-1 text-xs font-medium"
+              style={sourceKind === 'local_folder' ? primaryPillStyle : { color: 'var(--muted)', backgroundColor: 'var(--surface-secondary)' }}
+            >
+              Carpeta local
+            </button>
+            <button
+              type="button"
+              onClick={() => setSourceKind('remote_folder')}
+              className="rounded-full px-3 py-1 text-xs font-medium"
+              style={sourceKind === 'remote_folder' ? primaryPillStyle : { color: 'var(--muted)', backgroundColor: 'var(--surface-secondary)' }}
+            >
+              Carpeta remota
+            </button>
           </div>
         </Field>
+
+        {sourceKind === 'local_folder' ? (
+          <Field label="Carpeta de origen *">
+            <div className="flex gap-2">
+              <input
+                style={{ ...inputStyle, flex: 1 }}
+                placeholder="Ej: D:\Sitios\cliente\uploads"
+                value={sourcePath}
+                onChange={(e) => setSourcePath(e.target.value)}
+              />
+              {isTauri() && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0 rounded-full px-3"
+                  onPress={async () => {
+                    const selected = await openDialog({ directory: true, multiple: false });
+                    if (typeof selected === 'string') setSourcePath(selected);
+                  }}
+                >
+                  Elegir…
+                </Button>
+              )}
+            </div>
+          </Field>
+        ) : (
+          <>
+            <Field label="Conexión (SFTP/FTP) *">
+              {remoteTransports.length > 0 ? (
+                <select style={inputStyle} value={transportId} onChange={(e) => setTransportId(e.target.value)}>
+                  <option value="">Elegir…</option>
+                  {remoteTransports.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} ({t.type.toUpperCase()} — {t.host})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="text-xs" style={{ color: 'var(--warning)' }}>
+                  Este cliente no tiene conexiones SFTP/FTP todavía — creá una en Conexiones primero.
+                </p>
+              )}
+            </Field>
+            <Field label="Carpeta remota de origen *">
+              <input
+                style={inputStyle}
+                placeholder="Ej: /home/cliente/uploads"
+                value={remoteSourcePath}
+                onChange={(e) => setRemoteSourcePath(e.target.value)}
+              />
+            </Field>
+          </>
+        )}
+
         <div className="grid grid-cols-2 gap-3">
           <Field label="Retención (N snapshots)">
             <input style={inputStyle} type="number" min={0} value={retentionCount} onChange={(e) => setRetentionCount(e.target.value)} />
@@ -168,17 +239,46 @@ function RecoveryKeyModal({ recoveryKey, onClose }: { recoveryKey: string; onClo
   );
 }
 
+type ScheduleFrequency = 'daily' | 'weekly' | 'monthly';
+
+const FREQUENCY_LABEL: Record<ScheduleFrequency, string> = { daily: 'Diario', weekly: 'Semanal', monthly: 'Mensual' };
+const WEEKDAY_LABEL: { value: number; label: string }[] = [
+  { value: 1, label: 'Lun' },
+  { value: 2, label: 'Mar' },
+  { value: 3, label: 'Mié' },
+  { value: 4, label: 'Jue' },
+  { value: 5, label: 'Vie' },
+  { value: 6, label: 'Sáb' },
+  { value: 0, label: 'Dom' },
+];
+
+function toggleDay(days: number[], day: number): number[] {
+  return days.includes(day) ? days.filter((d) => d !== day) : [...days, day].sort();
+}
+
 function ScheduleModal({ task, onClose, onSaved }: { task: FileBackupTask; onClose: () => void; onSaved: () => void }) {
   const [time, setTime] = useState(task.scheduleTime ?? '03:00');
   const [enabled, setEnabled] = useState(task.scheduleEnabled);
+  const [frequency, setFrequency] = useState<ScheduleFrequency>(task.scheduleFrequency);
+  const [daysOfWeek, setDaysOfWeek] = useState<number[]>(task.scheduleDaysOfWeek ?? []);
+  const [dayOfMonth, setDayOfMonth] = useState(task.scheduleDayOfMonth != null ? String(task.scheduleDayOfMonth) : '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const valid = frequency !== 'weekly' || daysOfWeek.length > 0;
 
   async function handleSave(disable: boolean) {
     setBusy(true);
     setError(null);
     try {
-      await setFileBackupTaskSchedule(task.id, { scheduleTime: disable ? task.scheduleTime : time, scheduleEnabled: !disable, disable });
+      await setFileBackupTaskSchedule(task.id, {
+        scheduleTime: disable ? task.scheduleTime : time,
+        scheduleEnabled: !disable,
+        scheduleFrequency: frequency,
+        scheduleDaysOfWeek: frequency === 'weekly' ? daysOfWeek : undefined,
+        scheduleDayOfMonth: frequency === 'monthly' ? Number(dayOfMonth) : undefined,
+        disable,
+      });
       onSaved();
       onClose();
     } catch (err) {
@@ -191,16 +291,75 @@ function ScheduleModal({ task, onClose, onSaved }: { task: FileBackupTask; onClo
   return (
     <Modal title={`Horario — ${task.name}`} onClose={onClose}>
       <div className="flex flex-col gap-3">
-        <p className="text-xs" style={{ color: 'var(--muted)' }}>
-          Horario diario simple. Frecuencia semanal/mensual todavía se configura solo por CLI (<code>file-task:set-schedule</code>).
-        </p>
-        <Field label="Hora">
-          <input style={inputStyle} type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Hora">
+            <input style={inputStyle} type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          </Field>
+          <label className="flex items-end gap-2 pb-2 text-sm" style={{ color: 'var(--muted)' }}>
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            Habilitado
+          </label>
+        </div>
+
+        <Field label="Frecuencia">
+          <div className="flex gap-1">
+            {(Object.keys(FREQUENCY_LABEL) as ScheduleFrequency[]).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFrequency(f)}
+                className="rounded-full px-3 py-1 text-xs font-medium"
+                style={frequency === f ? primaryPillStyle : { color: 'var(--muted)', backgroundColor: 'var(--surface-secondary)' }}
+              >
+                {FREQUENCY_LABEL[f]}
+              </button>
+            ))}
+          </div>
         </Field>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Habilitado
-        </label>
+
+        {frequency === 'weekly' && (
+          <Field label="Días de la semana *">
+            <div className="flex gap-1">
+              {WEEKDAY_LABEL.map((day) => (
+                <button
+                  key={day.value}
+                  type="button"
+                  onClick={() => setDaysOfWeek((prev) => toggleDay(prev, day.value))}
+                  className="rounded-full px-2.5 py-1 text-xs font-medium"
+                  style={{
+                    backgroundColor: daysOfWeek.includes(day.value) ? 'var(--accent)' : 'var(--surface-secondary)',
+                    color: daysOfWeek.includes(day.value) ? 'white' : 'var(--muted)',
+                  }}
+                >
+                  {day.label}
+                </button>
+              ))}
+            </div>
+            {daysOfWeek.length === 0 && (
+              <p className="text-xs" style={{ color: 'var(--danger)' }}>
+                Elegí al menos un día.
+              </p>
+            )}
+          </Field>
+        )}
+
+        {frequency === 'monthly' && (
+          <Field label="Día del mes *">
+            <input
+              style={inputStyle}
+              type="number"
+              min={1}
+              max={31}
+              placeholder="Ej: 15"
+              value={dayOfMonth}
+              onChange={(e) => setDayOfMonth(e.target.value)}
+            />
+            <p className="text-xs" style={{ color: 'var(--muted)' }}>
+              Si el mes tiene menos días, se ejecuta el último día del mes.
+            </p>
+          </Field>
+        )}
+
         {error && (
           <p className="text-xs" style={{ color: 'var(--danger)' }}>
             {error}
@@ -213,7 +372,7 @@ function ScheduleModal({ task, onClose, onSaved }: { task: FileBackupTask; onClo
           <Button size="sm" className="rounded-full px-4" style={dangerPillStyle} isDisabled={busy} onPress={() => handleSave(true)}>
             Deshabilitar
           </Button>
-          <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} isDisabled={busy || !enabled} onPress={() => handleSave(false)}>
+          <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} isDisabled={busy || !enabled || !valid} onPress={() => handleSave(false)}>
             {busy ? 'Guardando…' : 'Guardar'}
           </Button>
         </div>
@@ -222,16 +381,24 @@ function ScheduleModal({ task, onClose, onSaved }: { task: FileBackupTask; onClo
   );
 }
 
+interface TestConnState {
+  busy?: boolean;
+  result?: ConnectionTestResult;
+  error?: string;
+}
+
 export function FileBackupsPanel({ clientId }: { clientId: string }) {
   const [repository, setRepository] = useState<FileBackupRepository | null | undefined>(undefined);
   const [tasks, setTasks] = useState<FileBackupTask[]>([]);
   const [runs, setRuns] = useState<FileBackupRun[]>([]);
+  const [transports, setTransports] = useState<TransportWithClientName[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [creatingRepo, setCreatingRepo] = useState(false);
   const [showRecoveryKey, setShowRecoveryKey] = useState<string | null>(null);
   const [showCreateTask, setShowCreateTask] = useState(false);
   const [schedulingTask, setSchedulingTask] = useState<FileBackupTask | null>(null);
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
+  const [testState, setTestState] = useState<Record<string, TestConnState>>({});
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
   const [restoredPath, setRestoredPath] = useState<string | null>(null);
   const [downloadRunId, setDownloadRunId] = useState<string | null>(null);
@@ -242,12 +409,14 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
       const repo = await fetchFileBackupRepository(clientId);
       setRepository(repo);
       if (repo) {
-        const [taskList, runList] = await Promise.all([
+        const [taskList, runList, connections] = await Promise.all([
           fetchFileBackupTasks(clientId, { includeInactive: true }),
           fetchFileBackupRuns({ clientId, limit: 20 }),
+          fetchConnections(),
         ]);
         setTasks(taskList);
         setRuns(runList);
+        setTransports(connections.transports);
       }
       setError(null);
     } catch (err) {
@@ -293,6 +462,16 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusyTaskId(null);
+    }
+  }
+
+  async function handleTestConnection(taskId: string, trustHost?: boolean) {
+    setTestState((prev) => ({ ...prev, [taskId]: { busy: true } }));
+    try {
+      const result = await testFileBackupTaskConnection(taskId, trustHost);
+      setTestState((prev) => ({ ...prev, [taskId]: { result } }));
+    } catch (err) {
+      setTestState((prev) => ({ ...prev, [taskId]: { error: err instanceof Error ? err.message : String(err) } }));
     }
   }
 
@@ -401,67 +580,129 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
               </tr>
             </thead>
             <tbody>
-              {tasks.map((task) => (
-                <tr key={task.id} style={{ borderTop: '1px solid var(--separator)', opacity: task.isActive ? 1 : 0.55 }}>
-                  <td className="px-4 py-2.5 font-medium">{task.name}</td>
-                  <td className="px-4 py-2.5 text-xs" style={{ color: 'var(--muted)' }}>
-                    {task.sourcePath}
-                  </td>
-                  <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                    {task.scheduleTime ? `${task.scheduleTime}${task.scheduleEnabled ? '' : ' (deshabilitado)'}` : 'Sin programar'}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    {task.isActive ? (
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          className="rounded-full px-3"
-                          style={primaryPillStyle}
-                          isDisabled={busyTaskId === task.id}
-                          onPress={() => handleRunTask(task.id)}
-                        >
-                          {busyTaskId === task.id ? (
-                            <span className="flex items-center gap-1.5">
-                              <Spinner />
-                              Ejecutando…
+              {tasks.map((task) => {
+                const test = testState[task.id];
+                const hasDetail = task.sourceKind === 'remote_folder' && Boolean(test?.result || test?.error);
+                const transportName = task.transportId ? transports.find((t) => t.id === task.transportId)?.name : null;
+                return (
+                  <Fragment key={task.id}>
+                    <tr style={{ borderTop: '1px solid var(--separator)', opacity: task.isActive ? 1 : 0.55 }}>
+                      <td className="px-4 py-2.5 font-medium">{task.name}</td>
+                      <td className="px-4 py-2.5 text-xs" style={{ color: 'var(--muted)' }}>
+                        {task.sourceKind === 'local_folder'
+                          ? task.sourcePath
+                          : `${transportName ?? '?'} — ${task.remoteSourcePath}`}
+                      </td>
+                      <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                        {formatSchedule(task)}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {task.isActive ? (
+                          <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              className="rounded-full px-3"
+                              style={primaryPillStyle}
+                              isDisabled={busyTaskId === task.id}
+                              onPress={() => handleRunTask(task.id)}
+                            >
+                              {busyTaskId === task.id ? (
+                                <span className="flex items-center gap-1.5">
+                                  <Spinner />
+                                  Ejecutando…
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-1.5">
+                                  <PlayIcon className="h-3.5 w-3.5" />
+                                  Ejecutar ahora
+                                </span>
+                              )}
+                            </Button>
+                            {task.sourceKind === 'remote_folder' && (
+                              <IconButton
+                                icon={<PulseIcon />}
+                                label={test?.busy ? 'Probando conexión…' : 'Probar conexión'}
+                                disabled={Boolean(test?.busy)}
+                                onPress={() => handleTestConnection(task.id)}
+                              />
+                            )}
+                            <IconButton icon={<EditIcon />} label="Editar horario" onPress={() => setSchedulingTask(task)} />
+                            <Button
+                              size="sm"
+                              className="rounded-full px-3"
+                              style={dangerPillStyle}
+                              isDisabled={busyTaskId === task.id}
+                              onPress={() => handleToggleTask(task)}
+                            >
+                              Desactivar
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                              (inactiva)
                             </span>
-                          ) : (
-                            <span className="flex items-center gap-1.5">
-                              <PlayIcon className="h-3.5 w-3.5" />
-                              Ejecutar ahora
+                            <Button
+                              size="sm"
+                              className="rounded-full px-3"
+                              style={primaryPillStyle}
+                              isDisabled={busyTaskId === task.id}
+                              onPress={() => handleToggleTask(task)}
+                            >
+                              Reactivar
+                            </Button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                    {hasDetail && (
+                      <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
+                        <td colSpan={4} className="px-4 py-2 text-xs">
+                          {test?.error && <span style={{ color: 'var(--danger)' }}>Error: {test.error}</span>}
+                          {test?.result && !test.result.unknownHost && (
+                            <span style={{ color: test.result.ok ? 'var(--success)' : 'var(--danger)' }}>
+                              {test.result.ok ? 'Conexión OK' : 'Conexión fallida'}
+                              {test.result.message ? ` — ${test.result.message}` : ''}
+                              {test.result.latencyMs != null ? ` (${test.result.latencyMs} ms)` : ''}
+                              {formatConnectionTestVersions(test.result)}
                             </span>
                           )}
-                        </Button>
-                        <IconButton icon={<EditIcon />} label="Editar horario" onPress={() => setSchedulingTask(task)} />
-                        <Button
-                          size="sm"
-                          className="rounded-full px-3"
-                          style={dangerPillStyle}
-                          isDisabled={busyTaskId === task.id}
-                          onPress={() => handleToggleTask(task)}
-                        >
-                          Desactivar
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                          (inactiva)
-                        </span>
-                        <Button
-                          size="sm"
-                          className="rounded-full px-3"
-                          style={primaryPillStyle}
-                          isDisabled={busyTaskId === task.id}
-                          onPress={() => handleToggleTask(task)}
-                        >
-                          Reactivar
-                        </Button>
-                      </div>
+                          {test?.result?.unknownHost && (
+                            <div
+                              className="flex flex-wrap items-center gap-2"
+                              style={{ color: test.result.unknownHost.previousFingerprintSha256 ? 'var(--danger)' : 'var(--warning)' }}
+                            >
+                              <span>
+                                {test.result.unknownHost.previousFingerprintSha256 ? (
+                                  <>
+                                    ⚠ La clave del host cambió — ahora {test.result.unknownHost.fingerprintSha256}, antes{' '}
+                                    {test.result.unknownHost.previousFingerprintSha256}. Confirmá con quien administra el
+                                    servidor antes de confiar.
+                                  </>
+                                ) : (
+                                  <>
+                                    Host desconocido — {test.result.unknownHost.keyType} {test.result.unknownHost.fingerprintSha256}.
+                                    ¿Confiás en este host?
+                                  </>
+                                )}
+                              </span>
+                              <Button
+                                size="sm"
+                                className="rounded-full px-3"
+                                style={primaryPillStyle}
+                                isDisabled={test.busy}
+                                onPress={() => handleTestConnection(task.id, true)}
+                              >
+                                Confiar y probar de nuevo
+                              </Button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
                     )}
-                  </td>
-                </tr>
-              ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -547,7 +788,7 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
       )}
 
       {showCreateTask && (
-        <CreateTaskModal clientId={clientId} onClose={() => setShowCreateTask(false)} onCreated={refresh} />
+        <CreateTaskModal clientId={clientId} transports={transports} onClose={() => setShowCreateTask(false)} onCreated={refresh} />
       )}
       {showRecoveryKey && <RecoveryKeyModal recoveryKey={showRecoveryKey} onClose={() => setShowRecoveryKey(null)} />}
       {schedulingTask && <ScheduleModal task={schedulingTask} onClose={() => setSchedulingTask(null)} onSaved={refresh} />}

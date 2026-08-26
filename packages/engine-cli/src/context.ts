@@ -16,6 +16,7 @@ import {
   createFileBackupRunsRepo,
   createFileBackupRetentionDeletionsRepo,
   createFileBackupMaintenanceRunsRepo,
+  createFileBackupLogEventsRepo,
 } from 'engine-core';
 
 export function buildContext() {
@@ -36,10 +37,11 @@ export function buildContext() {
   // File backups (restic-backed) -- a domain parallel to the DB-backup one
   // above, deliberately not sharing repos/tables with it.
   const fileBackupRepositoriesRepo = createFileBackupRepositoriesRepo(db);
-  const fileBackupTasksRepo = createFileBackupTasksRepo(db);
+  const fileBackupTasksRepo = createFileBackupTasksRepo(db, transportsRepo);
   const fileBackupRunsRepo = createFileBackupRunsRepo(db);
   const fileBackupRetentionDeletionsRepo = createFileBackupRetentionDeletionsRepo(db);
   const fileBackupMaintenanceRunsRepo = createFileBackupMaintenanceRunsRepo(db);
+  const fileBackupLogEventsRepo = createFileBackupLogEventsRepo(db);
 
   return {
     db,
@@ -58,6 +60,7 @@ export function buildContext() {
     fileBackupRunsRepo,
     fileBackupRetentionDeletionsRepo,
     fileBackupMaintenanceRunsRepo,
+    fileBackupLogEventsRepo,
   };
 }
 

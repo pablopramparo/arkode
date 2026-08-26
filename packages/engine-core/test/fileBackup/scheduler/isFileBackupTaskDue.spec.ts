@@ -10,6 +10,8 @@ function makeTask(overrides: Partial<FileBackupTask> = {}): FileBackupTask {
     name: 'task',
     sourceKind: 'local_folder',
     sourcePath: 'D:\\Sites\\acme\\uploads',
+    transportId: null,
+    remoteSourcePath: null,
     retentionCount: null,
     retentionDays: null,
     scheduleTime: '03:00',

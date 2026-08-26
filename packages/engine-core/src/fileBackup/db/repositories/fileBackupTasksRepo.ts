@@ -1,6 +1,7 @@
 import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { ScheduleFrequency } from '../../../types.js';
+import type { TransportsRepo } from '../../../db/repositories/transportsRepo.js';
 import type { FileBackupTask } from '../../types.js';
 
 interface FileBackupTaskRow {
@@ -9,7 +10,9 @@ interface FileBackupTaskRow {
   repository_id: string;
   name: string;
   source_kind: string;
-  source_path: string;
+  source_path: string | null;
+  transport_id: string | null;
+  remote_source_path: string | null;
   retention_count: number | null;
   retention_days: number | null;
   schedule_time: string | null;
@@ -35,6 +38,8 @@ function toDomain(row: FileBackupTaskRow): FileBackupTask {
     name: row.name,
     sourceKind: row.source_kind as FileBackupTask['sourceKind'],
     sourcePath: row.source_path,
+    transportId: row.transport_id,
+    remoteSourcePath: row.remote_source_path,
     retentionCount: row.retention_count,
     retentionDays: row.retention_days,
     scheduleTime: row.schedule_time,
@@ -58,6 +63,18 @@ export interface CreateLocalFolderTaskInput {
   retentionDays?: number | null;
 }
 
+export interface CreateRemoteFolderTaskInput {
+  clientId: string;
+  repositoryId: string;
+  name: string;
+  /** Must be an sftp or ftp transport — validated against transportsRepo, since the schema CHECK can't express "which transport type" across tables (same app-level invariant pattern as tasksRepo.ts's insertTransportBackedTask). */
+  transportId: string;
+  /** The folder's path on the remote host — POSIX-style, whatever the remote server expects (never validated as a Windows path). */
+  remoteSourcePath: string;
+  retentionCount?: number | null;
+  retentionDays?: number | null;
+}
+
 export interface SetFileBackupScheduleInput {
   scheduleTime: string | null;
   scheduleEnabled: boolean;
@@ -66,7 +83,7 @@ export interface SetFileBackupScheduleInput {
   scheduleDayOfMonth?: number | null;
 }
 
-/** `sourceKind`/`sourcePath`/`repositoryId` are deliberately not editable — create a new task to point at a different folder. */
+/** `sourceKind`/`sourcePath`/`transportId`/`remoteSourcePath`/`repositoryId` are deliberately not editable — create a new task to point at a different folder. */
 export interface UpdateFileBackupTaskInput {
   name?: string;
   retentionCount?: number | null;
@@ -78,6 +95,7 @@ const ABSOLUTE_WINDOWS_PATH = /^[A-Za-z]:\\/;
 
 export interface FileBackupTasksRepo {
   createLocalFolder(input: CreateLocalFolderTaskInput): FileBackupTask;
+  createRemoteFolder(input: CreateRemoteFolderTaskInput): FileBackupTask;
   update(id: string, patch: UpdateFileBackupTaskInput): FileBackupTask;
   deactivate(id: string): void;
   reactivate(id: string): void;
@@ -89,12 +107,18 @@ export interface FileBackupTasksRepo {
   setSchedule(taskId: string, input: SetFileBackupScheduleInput): FileBackupTask;
 }
 
-export function createFileBackupTasksRepo(db: Database): FileBackupTasksRepo {
-  const insertStmt = db.prepare(
+export function createFileBackupTasksRepo(db: Database, transportsRepo: TransportsRepo): FileBackupTasksRepo {
+  const insertLocalStmt = db.prepare(
     `INSERT INTO file_backup_tasks
        (id, client_id, repository_id, name, source_kind, source_path, retention_count, retention_days)
      VALUES
        (@id, @clientId, @repositoryId, @name, 'local_folder', @sourcePath, @retentionCount, @retentionDays)`
+  );
+  const insertRemoteStmt = db.prepare(
+    `INSERT INTO file_backup_tasks
+       (id, client_id, repository_id, name, source_kind, transport_id, remote_source_path, retention_count, retention_days)
+     VALUES
+       (@id, @clientId, @repositoryId, @name, 'remote_folder', @transportId, @remoteSourcePath, @retentionCount, @retentionDays)`
   );
   const getByIdStmt = db.prepare<[string], FileBackupTaskRow>('SELECT * FROM file_backup_tasks WHERE id = ?');
   const listByClientStmt = db.prepare<[string], FileBackupTaskRow>(
@@ -132,12 +156,39 @@ export function createFileBackupTasksRepo(db: Database): FileBackupTasksRepo {
         throw new Error(`sourcePath must be an absolute Windows path (e.g. "D:\\Uploads"); got "${input.sourcePath}".`);
       }
       const id = randomUUID();
-      insertStmt.run({
+      insertLocalStmt.run({
         id,
         clientId: input.clientId,
         repositoryId: input.repositoryId,
         name: input.name,
         sourcePath: input.sourcePath,
+        retentionCount: input.retentionCount ?? null,
+        retentionDays: input.retentionDays ?? null,
+      });
+      const row = getByIdStmt.get(id);
+      if (!row) throw new Error(`Failed to read back created file_backup_task ${id}`);
+      return toDomain(row);
+    },
+
+    createRemoteFolder(input) {
+      const transport = transportsRepo.getById(input.transportId);
+      if (!transport) {
+        throw new Error(`Transport ${input.transportId} not found.`);
+      }
+      if (transport.type !== 'sftp' && transport.type !== 'ftp') {
+        throw new Error(`remote_folder tasks require an sftp or ftp transport; transport ${input.transportId} is "${transport.type}".`);
+      }
+      if (!input.remoteSourcePath.trim()) {
+        throw new Error('remoteSourcePath is required for a remote_folder task.');
+      }
+      const id = randomUUID();
+      insertRemoteStmt.run({
+        id,
+        clientId: input.clientId,
+        repositoryId: input.repositoryId,
+        name: input.name,
+        transportId: input.transportId,
+        remoteSourcePath: input.remoteSourcePath,
         retentionCount: input.retentionCount ?? null,
         retentionDays: input.retentionDays ?? null,
       });

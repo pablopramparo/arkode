@@ -1,24 +1,36 @@
 import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Client } from '../../types.js';
 import type { ClientsRepo } from '../../db/repositories/clientsRepo.js';
+import type { TransportsRepo } from '../../db/repositories/transportsRepo.js';
+import type { KnownHostsRepo } from '../../db/repositories/knownHostsRepo.js';
 import type { SecretStore } from '../../secrets/types.js';
+import { createSftpAdapterFromTransport } from '../../transports/sftpAdapter.js';
+import { createFtpAdapterFromTransport } from '../../transports/ftpAdapter.js';
 import { createFileBackupRunLogger, type FileBackupRunLogger } from '../logging/createFileBackupRunLogger.js';
 import type { FileBackupRepository, FileBackupRun, FileBackupTask } from '../types.js';
 import type { FileBackupRepositoriesRepo } from '../db/repositories/fileBackupRepositoriesRepo.js';
 import type { FileBackupRunsRepo } from '../db/repositories/fileBackupRunsRepo.js';
 import type { FileBackupMaintenanceRunsRepo } from '../db/repositories/fileBackupMaintenanceRunsRepo.js';
 import type { FileBackupRetentionDeletionsRepo } from '../db/repositories/fileBackupRetentionDeletionsRepo.js';
+import type { FileBackupLogEventsRepo } from '../db/repositories/fileBackupLogEventsRepo.js';
 import { checkRepositoryLock, recoverStaleRepositoryRuns } from '../locking/repositoryLock.js';
+import { syncRemoteFolder } from '../remoteSync/syncRemoteFolder.js';
 import * as resticClient from '../restic/resticClient.js';
 import { applyFileBackupRetention, resolveFileBackupRetentionPolicy } from '../retention/applyFileBackupRetention.js';
 
 export interface RunFileBackupTaskDeps {
   clientsRepo: ClientsRepo;
+  transportsRepo: TransportsRepo;
+  knownHostsRepo: KnownHostsRepo;
   fileBackupRepositoriesRepo: FileBackupRepositoriesRepo;
   fileBackupRunsRepo: FileBackupRunsRepo;
   fileBackupMaintenanceRunsRepo: FileBackupMaintenanceRunsRepo;
   fileBackupRetentionDeletionsRepo: FileBackupRetentionDeletionsRepo;
+  fileBackupLogEventsRepo: FileBackupLogEventsRepo;
   secretStore: SecretStore;
+  /** An unattended run (run-due, serve) has no interactive terminal, so omitting this correctly (and intentionally) rejects any host that isn't already known — same principle as the DB-backup domain's run-due. */
+  onUnknownHost?: (presented: { keyType: string; fingerprintSha256: string }) => Promise<boolean>;
 }
 
 export interface RunFileBackupTaskResult {
@@ -35,17 +47,34 @@ async function pathExistsAsDirectory(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * `task.sourcePath` for local_folder. For remote_folder, the local staging
+ * mirror path is computed here, at run time, rather than stored — mirrors
+ * `resolveTargetDir()`'s "computed fresh each run" role in the DB-backup
+ * orchestrator (as opposed to `_restic-repo`'s "computed once, stored"
+ * pattern), which conveniently sidesteps a real chicken-and-egg problem: the
+ * path wants the task's own id, which doesn't exist yet at task-creation time.
+ */
+function resolveSourcePath(client: Client, task: FileBackupTask): string {
+  if (task.sourceKind === 'local_folder') {
+    if (!task.sourcePath) throw new Error(`local_folder task ${task.id} has no sourcePath — this should never happen.`);
+    return task.sourcePath;
+  }
+  return join(client.localBasePath, '_remote-staging', task.id);
+}
+
 async function applyRetentionSafely(
   task: FileBackupTask,
   client: Client,
   repository: FileBackupRepository,
+  resolvedSourcePath: string,
   deps: RunFileBackupTaskDeps,
   logger: FileBackupRunLogger,
   triggeredByRunId: string
 ): Promise<void> {
   try {
     const policy = resolveFileBackupRetentionPolicy(client, task);
-    await applyFileBackupRetention(task, repository, policy, {
+    await applyFileBackupRetention(task, repository, resolvedSourcePath, policy, {
       fileBackupRetentionDeletionsRepo: deps.fileBackupRetentionDeletionsRepo,
       secretStore: deps.secretStore,
       logger,
@@ -57,12 +86,58 @@ async function applyRetentionSafely(
 }
 
 /**
+ * For remote_folder tasks: recursively syncs the remote folder into the
+ * local staging mirror (see syncRemoteFolder.ts — the "Capa 1" this app has
+ * to build regardless of storage engine, since restic's own SFTP support is
+ * repository-storage-only, never source-side). Mirrors
+ * fetchExistingExecutor.ts's exact sftp-vs-ftp adapter dispatch.
+ */
+async function syncRemoteSourceIfNeeded(
+  task: FileBackupTask,
+  stagingDir: string,
+  deps: RunFileBackupTaskDeps,
+  logger: FileBackupRunLogger
+): Promise<void> {
+  if (task.sourceKind !== 'remote_folder') return;
+  if (!task.transportId || !task.remoteSourcePath) {
+    throw new Error(`remote_folder task ${task.id} is missing transportId/remoteSourcePath — this should never happen.`);
+  }
+
+  const transport = deps.transportsRepo.getById(task.transportId);
+  if (!transport) throw new Error(`Transport ${task.transportId} not found for file-backup task ${task.id}.`);
+
+  const adapter =
+    transport.type === 'ftp'
+      ? createFtpAdapterFromTransport(transport, deps.secretStore)
+      : createSftpAdapterFromTransport(transport, deps.secretStore, deps.knownHostsRepo, deps.onUnknownHost);
+
+  logger.log('info', 'connect', `Connecting to ${transport.host} to sync remote folder "${task.remoteSourcePath}".`);
+  await adapter.connect();
+  try {
+    const syncResult = await syncRemoteFolder(adapter, task.remoteSourcePath, stagingDir);
+    logger.log(
+      'info',
+      'connect',
+      `Synced remote folder: ${syncResult.filesAdded} new, ${syncResult.filesChanged} changed, ${syncResult.filesDeleted} deleted, ${syncResult.bytesTransferred} bytes transferred.`
+    );
+  } finally {
+    await adapter.disconnect();
+  }
+}
+
+/**
  * Same overall shape as orchestrator/runBackupTask.ts (status state machine,
  * stale-run recovery, a concurrency guard, retention invocation at the end)
  * but built independently — see this domain's module-level isolation note —
  * and with locking/retention scoped to the *repository* (shared by several
  * tasks) rather than the single task, since a restic repository, unlike a
  * single dump file, genuinely has shared state several tasks touch.
+ *
+ * remote_folder tasks get one extra pre-step (syncRemoteSourceIfNeeded)
+ * before the rest of this function proceeds completely unchanged from
+ * local_folder — resticClient.runBackup, the diff-based files_deleted
+ * computation, retention — none of it cares how the folder it's backing up
+ * came to be in its current state.
  */
 export async function runFileBackupTask(task: FileBackupTask, deps: RunFileBackupTaskDeps): Promise<RunFileBackupTaskResult> {
   const lockDeps = { fileBackupRunsRepo: deps.fileBackupRunsRepo, fileBackupMaintenanceRunsRepo: deps.fileBackupMaintenanceRunsRepo };
@@ -91,6 +166,8 @@ export async function runFileBackupTask(task: FileBackupTask, deps: RunFileBacku
     );
   }
 
+  const sourcePath = resolveSourcePath(client, task);
+
   const run = deps.fileBackupRunsRepo.create({
     taskId: task.id,
     clientId: task.clientId,
@@ -98,14 +175,16 @@ export async function runFileBackupTask(task: FileBackupTask, deps: RunFileBacku
     pid: process.pid,
   });
 
-  const logger = createFileBackupRunLogger(run.id);
-  logger.log('info', 'connect', `Starting local_folder file-backup run for task "${task.name}" (client "${client.name}").`);
+  const logger = createFileBackupRunLogger(run.id, deps.fileBackupLogEventsRepo);
+  logger.log('info', 'connect', `Starting ${task.sourceKind} file-backup run for task "${task.name}" (client "${client.name}").`);
 
   try {
     deps.fileBackupRunsRepo.markProducing(run.id);
 
-    if (!(await pathExistsAsDirectory(task.sourcePath))) {
-      throw new Error(`Source folder "${task.sourcePath}" does not exist or is not a directory.`);
+    if (task.sourceKind === 'remote_folder') {
+      await syncRemoteSourceIfNeeded(task, sourcePath, deps, logger);
+    } else if (!(await pathExistsAsDirectory(sourcePath))) {
+      throw new Error(`Source folder "${sourcePath}" does not exist or is not a directory.`);
     }
 
     const password = deps.secretStore.get(repository.passwordSecretRef);
@@ -113,8 +192,8 @@ export async function runFileBackupTask(task: FileBackupTask, deps: RunFileBacku
       throw new Error(`Could not resolve the password for file-backup repository ${repository.id}.`);
     }
 
-    logger.log('info', 'produce', `Running restic backup of "${task.sourcePath}".`);
-    const summary = await resticClient.runBackup(repository.repoPath, password, task.sourcePath, { tag: task.id });
+    logger.log('info', 'produce', `Running restic backup of "${sourcePath}".`);
+    const summary = await resticClient.runBackup(repository.repoPath, password, sourcePath, { tag: task.id });
     logger.log(
       'info',
       'produce',
@@ -162,7 +241,7 @@ export async function runFileBackupTask(task: FileBackupTask, deps: RunFileBacku
       logger.log('info', 'result', `File backup succeeded: snapshot ${summary.snapshotId}.`);
     }
 
-    await applyRetentionSafely(task, client, repository, deps, logger, run.id);
+    await applyRetentionSafely(task, client, repository, sourcePath, deps, logger, run.id);
     const finished = deps.fileBackupRunsRepo.getById(run.id);
     if (!finished) throw new Error(`File-backup run ${run.id} vanished after completion — this should never happen.`);
     return { run: finished, skipped: false };
@@ -172,7 +251,7 @@ export async function runFileBackupTask(task: FileBackupTask, deps: RunFileBacku
     deps.fileBackupRunsRepo.markFinished(run.id, 'Failed', { errorMessage: message, errorStack });
     logger.log('error', 'result', `File-backup run failed: ${message}`);
 
-    await applyRetentionSafely(task, client, repository, deps, logger, run.id);
+    await applyRetentionSafely(task, client, repository, sourcePath, deps, logger, run.id);
 
     const finished = deps.fileBackupRunsRepo.getById(run.id);
     if (!finished) throw err;

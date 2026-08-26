@@ -3,6 +3,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { runMigrations } from '../../../../src/db/migrate.js';
 import { migrationsSourceDir } from '../../../../src/paths.js';
 import { createClientsRepo, type ClientsRepo } from '../../../../src/db/repositories/clientsRepo.js';
+import { createTransportsRepo, type TransportsRepo } from '../../../../src/db/repositories/transportsRepo.js';
 import { createFileBackupRepositoriesRepo, type FileBackupRepositoriesRepo } from '../../../../src/fileBackup/db/repositories/fileBackupRepositoriesRepo.js';
 import { createFileBackupTasksRepo, type FileBackupTasksRepo } from '../../../../src/fileBackup/db/repositories/fileBackupTasksRepo.js';
 
@@ -15,18 +16,39 @@ function freshDb() {
 
 describe('fileBackupTasksRepo', () => {
   let clientsRepo: ClientsRepo;
+  let transportsRepo: TransportsRepo;
   let reposRepo: FileBackupRepositoriesRepo;
   let tasksRepo: FileBackupTasksRepo;
   let clientId: string;
   let repositoryId: string;
+  let sftpTransportId: string;
+  let sshTransportId: string;
 
   beforeEach(() => {
     const db = freshDb();
     clientsRepo = createClientsRepo(db);
+    transportsRepo = createTransportsRepo(db);
     reposRepo = createFileBackupRepositoriesRepo(db);
-    tasksRepo = createFileBackupTasksRepo(db);
+    tasksRepo = createFileBackupTasksRepo(db, transportsRepo);
     clientId = clientsRepo.create({ name: 'Acme', localBasePath: 'D:\\Backups\\Acme' }).id;
     repositoryId = reposRepo.create({ clientId, repoPath: 'D:\\Backups\\Acme\\_restic-repo', passwordSecretRef: 'ref-1' }).id;
+    sftpTransportId = transportsRepo.createSftp({
+      clientId,
+      name: 'sftp',
+      host: 'h',
+      username: 'u',
+      privateKeyPath: 'k',
+      remotePath: '/backups',
+    }).id;
+    sshTransportId = transportsRepo.createSsh({
+      clientId,
+      name: 'ssh',
+      host: 'h',
+      username: 'u',
+      privateKeyPath: 'k',
+      remoteCommand: 'echo hi',
+      remoteOutputPathTemplate: '/tmp/x',
+    }).id;
   });
 
   it('creates a local_folder task and reads it back', () => {
@@ -38,6 +60,8 @@ describe('fileBackupTasksRepo', () => {
     });
     expect(task.sourceKind).toBe('local_folder');
     expect(task.sourcePath).toBe('D:\\Sites\\acme\\uploads');
+    expect(task.transportId).toBeNull();
+    expect(task.remoteSourcePath).toBeNull();
     expect(task.isActive).toBe(true);
     expect(task.scheduleFrequency).toBe('daily');
     expect(tasksRepo.getById(task.id)).toEqual(task);
@@ -50,6 +74,52 @@ describe('fileBackupTasksRepo', () => {
     expect(() => tasksRepo.createLocalFolder({ clientId, repositoryId, name: 'Bad', sourcePath: '/C/Users/x' })).toThrow(
       /absolute Windows path/
     );
+  });
+
+  it('creates a remote_folder task and reads it back', () => {
+    const task = tasksRepo.createRemoteFolder({
+      clientId,
+      repositoryId,
+      name: 'Remote uploads',
+      transportId: sftpTransportId,
+      remoteSourcePath: '/srv/www/uploads',
+    });
+    expect(task.sourceKind).toBe('remote_folder');
+    expect(task.sourcePath).toBeNull();
+    expect(task.transportId).toBe(sftpTransportId);
+    expect(task.remoteSourcePath).toBe('/srv/www/uploads');
+    expect(tasksRepo.getById(task.id)).toEqual(task);
+  });
+
+  it('creates a remote_folder task against an ftp transport too', () => {
+    const ftpTransportId = transportsRepo.createFtp({
+      clientId,
+      name: 'ftp',
+      host: 'h',
+      username: 'u',
+      passwordSecretRef: 'pw-ref',
+      remotePath: '/backups',
+    }).id;
+    const task = tasksRepo.createRemoteFolder({ clientId, repositoryId, name: 'Remote', transportId: ftpTransportId, remoteSourcePath: '/uploads' });
+    expect(task.transportId).toBe(ftpTransportId);
+  });
+
+  it('rejects a remote_folder task pointed at a non-sftp/ftp transport (e.g. ssh)', () => {
+    expect(() =>
+      tasksRepo.createRemoteFolder({ clientId, repositoryId, name: 'Bad', transportId: sshTransportId, remoteSourcePath: '/uploads' })
+    ).toThrow(/sftp or ftp transport/);
+  });
+
+  it('rejects a remote_folder task with a nonexistent transport', () => {
+    expect(() =>
+      tasksRepo.createRemoteFolder({ clientId, repositoryId, name: 'Bad', transportId: 'nonexistent', remoteSourcePath: '/uploads' })
+    ).toThrow(/not found/);
+  });
+
+  it('rejects a remote_folder task with an empty remoteSourcePath', () => {
+    expect(() =>
+      tasksRepo.createRemoteFolder({ clientId, repositoryId, name: 'Bad', transportId: sftpTransportId, remoteSourcePath: '  ' })
+    ).toThrow(/remoteSourcePath is required/);
   });
 
   it('update() only changes name/retention, never sourcePath/sourceKind/repositoryId', () => {
@@ -69,9 +139,9 @@ describe('fileBackupTasksRepo', () => {
     expect(tasksRepo.getById(task.id)?.isActive).toBe(true);
   });
 
-  it('listByClient and listByRepository scope correctly', () => {
+  it('listByClient and listByRepository scope correctly across both source kinds', () => {
     const t1 = tasksRepo.createLocalFolder({ clientId, repositoryId, name: 'Uploads', sourcePath: 'D:\\Sites\\acme\\uploads' });
-    const t2 = tasksRepo.createLocalFolder({ clientId, repositoryId, name: 'Docs', sourcePath: 'D:\\Sites\\acme\\docs' });
+    const t2 = tasksRepo.createRemoteFolder({ clientId, repositoryId, name: 'Remote', transportId: sftpTransportId, remoteSourcePath: '/x' });
     expect(tasksRepo.listByClient(clientId).map((t) => t.id).sort()).toEqual([t1.id, t2.id].sort());
     expect(tasksRepo.listByRepository(repositoryId).map((t) => t.id).sort()).toEqual([t1.id, t2.id].sort());
   });

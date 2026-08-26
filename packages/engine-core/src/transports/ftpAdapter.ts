@@ -4,7 +4,40 @@ import { pipeline } from 'node:stream/promises';
 import type { SecretStore } from '../secrets/types.js';
 import type { Transport } from '../types.js';
 import { HashingProgressTransform } from './hashingProgressTransform.js';
-import type { FtpAdapter, FtpTransportConfig, RemoteFile, DownloadResult, DownloadOptions, ConnectionTestResult } from './types.js';
+import type { FtpAdapter, FtpTransportConfig, RemoteFile, RemoteTreeEntry, DownloadResult, DownloadOptions, ConnectionTestResult } from './types.js';
+
+/**
+ * Manual recursion — basic-ftp has no built-in recursive walker either.
+ * Symlinks (FileType.SymbolicLink) are skipped, not followed — same
+ * conservative default as the SFTP side. relativePath is always
+ * POSIX-style (forward slashes).
+ */
+async function listRemoteTreeRecursive(client: Client, currentDir: string, relativePrefix: string): Promise<RemoteTreeEntry[]> {
+  const entries = await client.list(currentDir);
+  const results: RemoteTreeEntry[] = [];
+  for (const entry of entries) {
+    const relativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
+    if (entry.type === FileType.Directory) {
+      const subEntries = await listRemoteTreeRecursive(client, `${currentDir}/${entry.name}`, relativePath);
+      results.push(...subEntries);
+    } else if (entry.type === FileType.File) {
+      // basic-ftp leaves modifiedAt undefined whenever it can't parse the
+      // server's LIST timestamp (e.g. the classic Unix ls -l format omits
+      // the year, which some FTP daemons — including ftp-srv, confirmed by
+      // hand — emit instead of an MLSD-style full-precision one). A fallback
+      // of `new Date()` here would be wrong in a way that's actively
+      // destructive: it produces a *different* timestamp on every single
+      // listing, which defeats syncRemoteFolder's whole size+mtime diff and
+      // makes every file look changed on every run forever, against any
+      // server without MLSD support. A fixed epoch is stable across calls
+      // instead — syncRemoteFolder still catches a real change via size, and
+      // only misses the rare same-size-different-content edge case, the same
+      // accepted limit the mtime+size heuristic already carries elsewhere.
+      results.push({ relativePath, size: entry.size, modifiedAt: entry.modifiedAt ?? new Date(0) });
+    }
+  }
+  return results;
+}
 
 export function createFtpAdapter(config: FtpTransportConfig): FtpAdapter {
   const client = new Client();
@@ -62,6 +95,11 @@ export function createFtpAdapter(config: FtpTransportConfig): FtpAdapter {
           // this never drives a real decision, just a display/sort hint.
           modifiedAt: entry.modifiedAt ?? new Date(),
         }));
+    },
+
+    async listRemoteTree(remoteDir: string): Promise<RemoteTreeEntry[]> {
+      const baseDir = remoteDir.replace(/\/$/, '');
+      return listRemoteTreeRecursive(client, baseDir, '');
     },
 
     async downloadFile(remote: RemoteFile, localTempPath: string, opts?: DownloadOptions): Promise<DownloadResult> {
