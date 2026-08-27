@@ -107,6 +107,7 @@ export { buildTaskDefinitionXml } from './scheduler/taskDefinitionXml.js';
 export type { TaskDefinitionInput } from './scheduler/taskDefinitionXml.js';
 export {
   scheduledTaskNameForBackupTask,
+  scheduledTaskDisplayName,
   installScheduledTask,
   uninstallScheduledTask,
   scheduledTaskStatus,

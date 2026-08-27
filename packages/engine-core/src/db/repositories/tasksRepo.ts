@@ -33,6 +33,7 @@ interface BackupTaskRow {
   created_at: string;
   updated_at: string;
   backup_set_id: string | null;
+  windows_task_name: string | null;
 }
 
 function parseDaysOfWeek(csv: string | null): number[] | null {
@@ -70,6 +71,7 @@ function toDomain(row: BackupTaskRow): BackupTask {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     backupSetId: row.backup_set_id,
+    windowsTaskName: row.windows_task_name,
   };
 }
 
@@ -161,6 +163,14 @@ export interface TasksRepo {
   /** Every active task with a schedule configured and enabled — what run-due iterates over. */
   listScheduled(): BackupTask[];
   setSchedule(taskId: string, input: SetScheduleInput): BackupTask;
+  /**
+   * Records (or clears, with null) the exact Windows Scheduled Task name
+   * this task is registered under — called only by a successful
+   * scheduler:install/:uninstall, never by anything else. See
+   * BackupTask.windowsTaskName's own doc comment for why this is stored
+   * instead of recomputed.
+   */
+  setWindowsTaskName(taskId: string, windowsTaskName: string | null): BackupTask;
 }
 
 export function createTasksRepo(
@@ -199,6 +209,9 @@ export function createTasksRepo(
      SET name = @name, retention_count = @retentionCount, retention_days = @retentionDays, backup_set_id = @backupSetId,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = @id`
+  );
+  const setWindowsTaskNameStmt = db.prepare(
+    `UPDATE backup_tasks SET windows_task_name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
   );
   const deactivateStmt = db.prepare(
     `UPDATE backup_tasks SET is_active = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
@@ -396,6 +409,15 @@ export function createTasksRepo(
       });
       const row = getByIdStmt.get(taskId);
       if (!row) throw new Error(`Failed to read back task ${taskId} after updating its schedule.`);
+      return toDomain(row);
+    },
+
+    setWindowsTaskName(taskId, windowsTaskName) {
+      const existing = getByIdStmt.get(taskId);
+      if (!existing) throw new Error(`Task ${taskId} not found.`);
+      setWindowsTaskNameStmt.run(windowsTaskName, taskId);
+      const row = getByIdStmt.get(taskId);
+      if (!row) throw new Error(`Failed to read back task ${taskId} after updating its Windows task name.`);
       return toDomain(row);
     },
   };

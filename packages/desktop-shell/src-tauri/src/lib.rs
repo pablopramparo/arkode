@@ -60,6 +60,104 @@ async fn get_api_port(state: tauri::State<'_, ApiPort>) -> Result<u16, String> {
   .map_err(|_| "timed out waiting for the backend to report its port -- it may have failed to start (check sidecar.log)".to_string())?
 }
 
+/// Registers a task's Windows Scheduled Task by shelling out to the
+/// installed engine-cli.exe's own `scheduler:install` -- elevated, via a
+/// single UAC prompt (ShellExecuteW "runas" under the hood, wrapped by the
+/// `runas` crate), rather than requiring this whole app to run elevated at
+/// all times. Mirrors the exact manual flow already verified by hand
+/// (Start-Process -Verb RunAs) -- the underlying scheduling logic stays in
+/// engine-core/engine-cli, this command only ever triggers the privileged
+/// process, never touches Task Scheduler or the database directly itself.
+///
+/// `task_id` reaches the child process as a separate argv element (never
+/// concatenated into a shell string), so there's no injection surface
+/// regardless of its content -- it's expected to be a UUID from the
+/// database either way.
+///
+/// Dev-mode (`tauri dev`) has no installed engine-cli.exe sibling to shell
+/// out to -- current_exe() there points into a cargo target directory, not
+/// a real install -- so this is production-only, matching every other
+/// production-only branch in this file (the sidecar spawn above).
+#[tauri::command]
+async fn register_task_schedule(task_id: String) -> Result<(), String> {
+  if cfg!(debug_assertions) {
+    return Err(
+      "No disponible en modo desarrollo -- corré esto desde una terminal elevada: engine-cli scheduler:install <taskId>".to_string(),
+    );
+  }
+
+  let exe_dir = std::env::current_exe()
+    .map_err(|e| format!("No se pudo resolver la ruta de la app: {e}"))?
+    .parent()
+    .map(|p| p.to_path_buf())
+    .ok_or_else(|| "No se pudo resolver la carpeta de instalación.".to_string())?;
+  let engine_cli = exe_dir.join("engine-cli.exe");
+
+  let status = tauri::async_runtime::spawn_blocking(move || {
+    runas::Command::new(&engine_cli)
+      .arg("scheduler:install")
+      .arg(&task_id)
+      .status()
+  })
+  .await
+  .map_err(|e| format!("Error interno esperando el proceso elevado: {e}"))?
+  .map_err(|e| format!("No se pudo iniciar engine-cli.exe elevado (¿cancelaste el aviso de administrador de Windows?): {e}"))?;
+
+  if status.success() {
+    Ok(())
+  } else {
+    Err(format!(
+      "engine-cli.exe scheduler:install terminó con un error (código {:?}) -- revisá que la tarea exista y tenga un horario configurado.",
+      status.code()
+    ))
+  }
+}
+
+/// The removal-side mirror of register_task_schedule — deactivating a task
+/// in arkode never touches Task Scheduler on its own (it's a plain DB
+/// update, no elevation needed), so a task that *was* registered stays
+/// registered after being deactivated. isTaskDue() already checks
+/// is_active, so a stale registration can never actually run anything —
+/// this exists purely so Task Scheduler doesn't accumulate dead entries,
+/// not because leaving one behind is unsafe. Same one-UAC-prompt-per-action
+/// shape as register_task_schedule; see that command's own doc comment for
+/// the full reasoning (dev-mode gate, argv-safety, why elevation is scoped
+/// to just this one call instead of the whole app).
+#[tauri::command]
+async fn unregister_task_schedule(task_id: String) -> Result<(), String> {
+  if cfg!(debug_assertions) {
+    return Err(
+      "No disponible en modo desarrollo -- corré esto desde una terminal elevada: engine-cli scheduler:uninstall <taskId>".to_string(),
+    );
+  }
+
+  let exe_dir = std::env::current_exe()
+    .map_err(|e| format!("No se pudo resolver la ruta de la app: {e}"))?
+    .parent()
+    .map(|p| p.to_path_buf())
+    .ok_or_else(|| "No se pudo resolver la carpeta de instalación.".to_string())?;
+  let engine_cli = exe_dir.join("engine-cli.exe");
+
+  let status = tauri::async_runtime::spawn_blocking(move || {
+    runas::Command::new(&engine_cli)
+      .arg("scheduler:uninstall")
+      .arg(&task_id)
+      .status()
+  })
+  .await
+  .map_err(|e| format!("Error interno esperando el proceso elevado: {e}"))?
+  .map_err(|e| format!("No se pudo iniciar engine-cli.exe elevado (¿cancelaste el aviso de administrador de Windows?): {e}"))?;
+
+  if status.success() {
+    Ok(())
+  } else {
+    Err(format!(
+      "engine-cli.exe scheduler:uninstall terminó con un error (código {:?}).",
+      status.code()
+    ))
+  }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   // Debug (`tauri dev`) never spawns its own sidecar (see the setup() branch
@@ -69,7 +167,7 @@ pub fn run() {
   let (api_port_tx, _api_port_rx) = tokio::sync::watch::channel(if cfg!(debug_assertions) { Some(4287) } else { None });
 
   tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![get_api_port])
+    .invoke_handler(tauri::generate_handler![get_api_port, register_task_schedule, unregister_task_schedule])
     // Must be the first plugin registered — it needs to intercept the app
     // launch before anything else runs. A second launch attempt is
     // redirected here instead of opening a second window: focus the

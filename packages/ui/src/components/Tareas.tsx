@@ -4,9 +4,10 @@ import type { BackupStrategyKind, ConnectionTestResult, DirectDumpCompatibilityR
 import { deactivateTask, fetchTasks, reactivateTask, IN_PROGRESS_RUN_STATUSES, type TaskRow } from '../lib/tasksClient';
 import { fetchConnections, type ConnectionsData } from '../lib/connectionsClient';
 import { runTaskNow, testTaskConnection, testTaskCompatibility } from '../lib/statusClient';
+import { canRegisterTaskSchedule, registerTaskSchedule, unregisterTaskSchedule } from '../lib/schedulerClient';
 import { Switch } from './Switch';
 import { IconButton, IconLinkButton } from './IconButton';
-import { EditIcon, PlayIcon, PulseIcon, CheckCircleIcon, DownloadIcon } from './icons';
+import { EditIcon, PlayIcon, PulseIcon, CheckCircleIcon, DownloadIcon, ClockIcon } from './icons';
 import { taskExportUrl } from '../lib/tasksClient';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { formatSchedule, formatConnectionTestVersions } from '../lib/format';
@@ -35,6 +36,20 @@ export function isTaskInProgress(task: TaskRow): boolean {
   return task.latestRunStatus != null && IN_PROGRESS_RUN_STATUSES.includes(task.latestRunStatus);
 }
 
+/**
+ * A real problem, not a cosmetic one: the task expects to run on its own
+ * every day, but nothing on this machine will ever actually trigger it —
+ * `windowsTaskName` is this app's stored record of the last successful
+ * scheduler:install (see schedulerClient.ts), so null here means either it
+ * was never registered at all, or it was unregistered/deactivated-and-
+ * reactivated without re-registering. Only flagged for a task that's
+ * actually active and expecting to run — an inactive or unscheduled task
+ * having no registration is completely normal, not a problem.
+ */
+export function isScheduleNotRegistered(task: TaskRow): boolean {
+  return task.isActive && task.scheduleEnabled && Boolean(task.scheduleTime) && !task.windowsTaskName;
+}
+
 function StrategyBadge({ strategy }: { strategy: BackupStrategyKind }) {
   return (
     <span
@@ -47,10 +62,11 @@ function StrategyBadge({ strategy }: { strategy: BackupStrategyKind }) {
 }
 
 interface RowActionState {
-  busy?: 'run' | 'test' | 'compatibility' | 'toggle';
+  busy?: 'run' | 'test' | 'compatibility' | 'toggle' | 'scheduler' | 'unscheduler';
   testResult?: ConnectionTestResult;
   compatibilityResult?: DirectDumpCompatibilityResult;
   actionError?: string;
+  schedulerMessage?: string;
 }
 
 export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) => void }) {
@@ -126,6 +142,26 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
     }
   }
 
+  async function handleRegisterScheduler(task: TaskRow) {
+    patchAction(task.id, { busy: 'scheduler', actionError: undefined, schedulerMessage: undefined });
+    try {
+      await registerTaskSchedule(task.id);
+      patchAction(task.id, { busy: undefined, schedulerMessage: 'Programación activada en Windows.' });
+    } catch (err) {
+      patchAction(task.id, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function handleUnregisterScheduler(task: TaskRow) {
+    patchAction(task.id, { busy: 'unscheduler', actionError: undefined, schedulerMessage: undefined });
+    try {
+      await unregisterTaskSchedule(task.id);
+      patchAction(task.id, { busy: undefined, schedulerMessage: 'Se quitó del Programador de tareas de Windows.' });
+    } catch (err) {
+      patchAction(task.id, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   return (
     <div className="max-w-[1600px] px-10 py-8">
       <header className="mb-6 flex items-baseline justify-between">
@@ -174,10 +210,18 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
             <tbody>
               {tasks.map((task) => {
                 const state = actionState[task.id];
-                const hasDetail = Boolean(state?.testResult || state?.compatibilityResult || state?.actionError);
+                const hasDetail = Boolean(state?.testResult || state?.compatibilityResult || state?.actionError || state?.schedulerMessage);
+                const scheduleProblem = isScheduleNotRegistered(task);
                 return (
                   <Fragment key={task.id}>
-                    <tr style={{ borderTop: '1px solid var(--separator)', opacity: task.isActive ? 1 : 0.55 }}>
+                    <tr
+                      style={{
+                        borderTop: '1px solid var(--separator)',
+                        opacity: task.isActive ? 1 : 0.55,
+                        borderLeft: scheduleProblem ? '3px solid var(--danger)' : '3px solid transparent',
+                        backgroundColor: scheduleProblem ? 'color-mix(in oklab, var(--danger) 6%, transparent)' : undefined,
+                      }}
+                    >
                       <td className="px-4 py-2.5 font-medium">
                         <ClientLink clientId={task.clientId} name={task.clientName} onSelect={onSelectClient} />
                       </td>
@@ -196,8 +240,11 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
                       <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                         {task.transportName ?? task.databaseConnectionName ?? '—'}
                       </td>
-                      <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                      <td className="px-4 py-2.5" style={{ color: scheduleProblem ? 'var(--danger)' : 'var(--muted)', fontWeight: scheduleProblem ? 600 : undefined }}>
                         {formatSchedule(task)}
+                        {scheduleProblem && (
+                          <div className="mt-0.5 text-xs font-normal">⚠ No está activa en el Programador de Windows — no va a correr sola.</div>
+                        )}
                       </td>
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-2">
@@ -244,6 +291,23 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
                               />
                             </>
                           )}
+                          {canRegisterTaskSchedule() && task.scheduleTime && (
+                            <>
+                              <IconButton
+                                icon={<ClockIcon />}
+                                label={state?.busy === 'scheduler' ? 'Activando programación…' : 'Activar programación en Windows (pide permisos)'}
+                                disabled={Boolean(state?.busy)}
+                                onPress={() => handleRegisterScheduler(task)}
+                              />
+                              <IconButton
+                                icon={<ClockIcon />}
+                                tone="danger"
+                                label={state?.busy === 'unscheduler' ? 'Quitando del Programador…' : 'Quitar del Programador de Windows (pide permisos)'}
+                                disabled={Boolean(state?.busy)}
+                                onPress={() => handleUnregisterScheduler(task)}
+                              />
+                            </>
+                          )}
                           <Button
                             size="sm"
                             className="rounded-full px-3"
@@ -260,6 +324,7 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
                       <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
                         <td colSpan={6} className="px-4 py-2 text-xs">
                           {state?.actionError && <span style={{ color: 'var(--danger)' }}>Error: {state.actionError}</span>}
+                          {state?.schedulerMessage && <span style={{ color: 'var(--success)' }}>{state.schedulerMessage}</span>}
                           {state?.testResult && !state.testResult.unknownHost && (
                             <span style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                               {state.testResult.ok ? 'Conexión OK' : 'Conexión fallida'}

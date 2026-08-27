@@ -18,6 +18,7 @@ import {
   importTaskBundle,
   runDueTasks,
   scheduledTaskNameForBackupTask,
+  scheduledTaskDisplayName,
   installScheduledTask,
   uninstallScheduledTask,
   scheduledTaskStatus,
@@ -856,7 +857,12 @@ program
       return;
     }
 
-    const taskName = scheduledTaskNameForBackupTask(taskId);
+    // A human-readable name, computed fresh from the task's *current* name
+    // right here at registration time, then stored (setWindowsTaskName
+    // below) so uninstall/status never need to recompute it later — see
+    // scheduledTaskDisplayName's own doc comment for why a later rename
+    // must never change what string those look for.
+    const taskName = scheduledTaskDisplayName(taskId, task.name);
     // `process.pkg` is set (to a truthy object) only when this code is
     // actually running as the @yao-pkg/pkg-compiled engine-cli.exe — see
     // CLAUDE.md's "Packaging" section. In that case process.execPath IS the
@@ -875,6 +881,7 @@ program
       command: process.execPath,
       arguments: isPkgExe ? `run-due --task ${taskId}` : `"${scriptPath}" run-due --task ${taskId}`,
     });
+    ctx.tasksRepo.setWindowsTaskName(taskId, taskName);
 
     console.log(`Registered Windows Scheduled Task "${taskName}" for task "${task.name}" at ${task.scheduleTime} daily, running as SYSTEM.`);
   });
@@ -884,8 +891,19 @@ program
   .description("Remove a task's Windows Scheduled Task.")
   .argument('<taskId>')
   .action(async (taskId: string) => {
-    const taskName = scheduledTaskNameForBackupTask(taskId);
+    const ctx = buildContext();
+    const task = ctx.tasksRepo.getById(taskId);
+    if (!task) {
+      console.error(`Task ${taskId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    // Falls back to the old id-only scheme for a task registered before
+    // scheduledTaskDisplayName existed — its stored windowsTaskName is null
+    // (never set), but the OS-side registration still used the old naming.
+    const taskName = task.windowsTaskName ?? scheduledTaskNameForBackupTask(taskId);
     await uninstallScheduledTask(taskName);
+    ctx.tasksRepo.setWindowsTaskName(taskId, null);
     console.log(`Removed Windows Scheduled Task "${taskName}".`);
   });
 
@@ -894,7 +912,14 @@ program
   .description("Check whether a task's Windows Scheduled Task is registered.")
   .argument('<taskId>')
   .action(async (taskId: string) => {
-    const taskName = scheduledTaskNameForBackupTask(taskId);
+    const ctx = buildContext();
+    const task = ctx.tasksRepo.getById(taskId);
+    if (!task) {
+      console.error(`Task ${taskId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    const taskName = task.windowsTaskName ?? scheduledTaskNameForBackupTask(taskId);
     const status = await scheduledTaskStatus(taskName);
     console.log(JSON.stringify(status, null, 2));
     if (status.ranNonElevated) {

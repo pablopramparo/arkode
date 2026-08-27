@@ -142,6 +142,16 @@ export interface BackupTask {
   updatedAt: string;
   /** Pure visual/reporting label — see BackupSet's own doc comment. Never affects scheduling/execution. */
   backupSetId: string | null;
+  /**
+   * The exact Windows Scheduled Task name this task is registered under —
+   * set only by a successful scheduler:install, cleared only by a
+   * successful scheduler:uninstall. Non-null is this app's only signal for
+   * "is this task's schedule actually active in Windows," without needing
+   * a live, elevated schtasks query just to render a list — see
+   * windowsTaskScheduler.ts's scheduledTaskDisplayName for why it's stored
+   * rather than recomputed from the task's current name on every call.
+   */
+  windowsTaskName: string | null;
 }
 
 export interface BackupRun {

@@ -4,6 +4,7 @@ import type { BackupStrategyKind, BackupSet, DbEngine, ScheduleFrequency, Direct
 import { createTask, setTaskSchedule } from '../lib/tasksClient';
 import { createDatabaseConnection, createTransport, type ConnectionsData } from '../lib/connectionsClient';
 import { fetchBackupSets } from '../lib/backupSetsClient';
+import { canRegisterTaskSchedule, registerTaskSchedule } from '../lib/schedulerClient';
 import { Modal } from './Modal';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { HelpCircleIcon } from './icons';
@@ -752,6 +753,36 @@ export function TaskCreateWizard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingSchedule, setPendingSchedule] = useState<{ taskId: string; compatibility: DirectDumpCompatibilityResult } | null>(null);
+  // Shown right after a task with an enabled schedule is created (or its
+  // schedule forced through) — registering the schedule with Windows Task
+  // Scheduler is a separate, elevated step (see schedulerClient.ts's own
+  // doc comment for why), so this offers it immediately instead of leaving
+  // a silently-inactive schedule for the user to discover later.
+  const [schedulerOffer, setSchedulerOffer] = useState<{ taskId: string } | null>(null);
+  const [schedulerBusy, setSchedulerBusy] = useState(false);
+  const [schedulerError, setSchedulerError] = useState<string | null>(null);
+
+  function offerSchedulerRegistrationIfNeeded(taskId: string) {
+    if (canRegisterTaskSchedule() && form.scheduleTime.trim() && form.scheduleEnabled) {
+      setSchedulerOffer({ taskId });
+      return true;
+    }
+    return false;
+  }
+
+  async function handleRegisterScheduler() {
+    if (!schedulerOffer) return;
+    setSchedulerBusy(true);
+    setSchedulerError(null);
+    try {
+      await registerTaskSchedule(schedulerOffer.taskId);
+      onClose();
+    } catch (err) {
+      setSchedulerError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSchedulerBusy(false);
+    }
+  }
 
   async function handleCreate() {
     setBusy(true);
@@ -829,8 +860,10 @@ export function TaskCreateWizard({
         return;
       }
 
-      onClose();
       await onCreated();
+      if (!offerSchedulerRegistrationIfNeeded(created.id)) {
+        onClose();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -851,12 +884,39 @@ export function TaskCreateWizard({
         scheduleDayOfMonth: form.scheduleFrequency === 'monthly' ? Number(form.scheduleDayOfMonth) : undefined,
         force: true,
       });
-      onClose();
+      if (!offerSchedulerRegistrationIfNeeded(pendingSchedule.taskId)) {
+        onClose();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
+  }
+
+  if (schedulerOffer) {
+    return (
+      <Modal title="Agregar backup" onClose={onClose}>
+        <p className="text-sm">
+          La tarea <strong>{form.name.trim()}</strong> se creó con horario habilitado, pero eso solo guarda la
+          configuración — activarla en el Programador de tareas de Windows es un paso aparte (necesita permisos de
+          administrador).
+        </p>
+        {schedulerError && (
+          <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
+            {schedulerError}
+          </p>
+        )}
+        <div className="mt-4 flex justify-end gap-2">
+          <Button size="sm" variant="ghost" className="rounded-full px-4" isDisabled={schedulerBusy} onPress={onClose}>
+            Ahora no
+          </Button>
+          <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} isDisabled={schedulerBusy} onPress={handleRegisterScheduler}>
+            {schedulerBusy ? 'Activando…' : 'Activar programación (pide permisos)'}
+          </Button>
+        </div>
+      </Modal>
+    );
   }
 
   if (pendingSchedule) {

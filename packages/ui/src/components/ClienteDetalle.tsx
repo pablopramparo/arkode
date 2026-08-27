@@ -16,17 +16,18 @@ import {
 } from '../lib/connectionsClient';
 import { deleteBackupRun, downloadRunUrl, fetchBackups, fetchRuns, type RunRow } from '../lib/runsClient';
 import { runTaskNow, testTaskConnection, testTaskCompatibility } from '../lib/statusClient';
+import { canRegisterTaskSchedule, registerTaskSchedule, unregisterTaskSchedule } from '../lib/schedulerClient';
 import type { ConnectionTestResult, DirectDumpCompatibilityResult } from 'engine-core';
 import { StatusChip } from './StatusChip';
 import { Switch } from './Switch';
 import { IconButton, IconLinkButton } from './IconButton';
-import { DownloadIcon, EditIcon, EyeIcon, FolderIcon, PlayIcon, PulseIcon, CheckCircleIcon, TrashIcon } from './icons';
+import { DownloadIcon, EditIcon, EyeIcon, FolderIcon, PlayIcon, PulseIcon, CheckCircleIcon, TrashIcon, ClockIcon } from './icons';
 import { Spinner } from './Spinner';
 import { formatRetention, formatDateTime, formatDuration, formatSize, formatSchedule, formatConnectionTestVersions } from '../lib/format';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { TaskCreateWizard } from './TaskCreateWizard';
 import { TaskEditModal } from './TaskEditModal';
-import { isTaskInProgress } from './Tareas';
+import { isTaskInProgress, isScheduleNotRegistered } from './Tareas';
 import { ConnectionEditModal } from './ConnectionEditModal';
 import { ConnectionCreateModal } from './ConnectionCreateModal';
 import { FileBackupsPanel } from './FileBackupsPanel';
@@ -45,10 +46,11 @@ type Tab = 'tareas' | 'conexiones' | 'backups' | 'historial' | 'archivos';
 const BACKUPS_PAGE_SIZE = 20;
 
 interface RowActionState {
-  busy?: 'run' | 'test' | 'compatibility' | 'toggle';
+  busy?: 'run' | 'test' | 'compatibility' | 'toggle' | 'scheduler' | 'unscheduler';
   testResult?: ConnectionTestResult;
   compatibilityResult?: DirectDumpCompatibilityResult;
   actionError?: string;
+  schedulerMessage?: string;
 }
 
 function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab) => void; counts: Partial<Record<Tab, number>> }) {
@@ -220,6 +222,26 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
     try {
       const result = await testTaskCompatibility(taskId);
       patchAction(taskId, { busy: undefined, compatibilityResult: result });
+    } catch (err) {
+      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function handleRegisterScheduler(taskId: string) {
+    patchAction(taskId, { busy: 'scheduler', actionError: undefined, schedulerMessage: undefined });
+    try {
+      await registerTaskSchedule(taskId);
+      patchAction(taskId, { busy: undefined, schedulerMessage: 'Programación activada en Windows.' });
+    } catch (err) {
+      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function handleUnregisterScheduler(taskId: string) {
+    patchAction(taskId, { busy: 'unscheduler', actionError: undefined, schedulerMessage: undefined });
+    try {
+      await unregisterTaskSchedule(taskId);
+      patchAction(taskId, { busy: undefined, schedulerMessage: 'Se quitó del Programador de tareas de Windows.' });
     } catch (err) {
       patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
     }
@@ -406,8 +428,17 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                   <tbody>
                     {visibleTasks.map((task) => {
                       const state = actionState[task.id];
+                      const scheduleProblem = isScheduleNotRegistered(task);
                       return (
-                        <tr key={task.id} style={{ borderTop: '1px solid var(--separator)', opacity: task.isActive ? 1 : 0.55 }}>
+                        <tr
+                          key={task.id}
+                          style={{
+                            borderTop: '1px solid var(--separator)',
+                            opacity: task.isActive ? 1 : 0.55,
+                            borderLeft: scheduleProblem ? '3px solid var(--danger)' : '3px solid transparent',
+                            backgroundColor: scheduleProblem ? 'color-mix(in oklab, var(--danger) 6%, transparent)' : undefined,
+                          }}
+                        >
                           <td className="px-4 py-2.5 font-medium">
                             {task.name}
                             <BackupSetBadge name={task.backupSetName} />
@@ -415,8 +446,11 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                           <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                             {STRATEGY_LABEL[task.strategy] ?? task.strategy}
                           </td>
-                          <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                          <td className="px-4 py-2.5" style={{ color: scheduleProblem ? 'var(--danger)' : 'var(--muted)', fontWeight: scheduleProblem ? 600 : undefined }}>
                             {formatSchedule(task)}
+                            {scheduleProblem && (
+                              <div className="mt-0.5 text-xs font-normal">⚠ No está activa en el Programador de Windows — no va a correr sola.</div>
+                            )}
                           </td>
                           <td className="px-4 py-2.5">
                             {task.isActive ? (
@@ -455,6 +489,23 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                   />
                                 )}
                                 <IconButton icon={<EditIcon />} label="Editar" onPress={() => setEditingTask(task)} />
+                                {canRegisterTaskSchedule() && task.scheduleTime && (
+                                  <>
+                                    <IconButton
+                                      icon={<ClockIcon />}
+                                      label={state?.busy === 'scheduler' ? 'Activando programación…' : 'Activar programación en Windows (pide permisos)'}
+                                      disabled={Boolean(state?.busy)}
+                                      onPress={() => handleRegisterScheduler(task.id)}
+                                    />
+                                    <IconButton
+                                      icon={<ClockIcon />}
+                                      tone="danger"
+                                      label={state?.busy === 'unscheduler' ? 'Quitando del Programador…' : 'Quitar del Programador de Windows (pide permisos)'}
+                                      disabled={Boolean(state?.busy)}
+                                      onPress={() => handleUnregisterScheduler(task.id)}
+                                    />
+                                  </>
+                                )}
                                 <IconLinkButton
                                   icon={<DownloadIcon />}
                                   label="Exportar (conexión + tarea, para adjuntar a otro cliente)"
@@ -469,6 +520,11 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                 >
                                   {state?.busy === 'toggle' ? '…' : 'Desactivar'}
                                 </Button>
+                                {state?.schedulerMessage && (
+                                  <span className="text-xs" style={{ color: 'var(--success)' }}>
+                                    {state.schedulerMessage}
+                                  </span>
+                                )}
                                 {state?.testResult && !state.testResult.unknownHost && (
                                   <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                                     {state.testResult.ok ? 'Conexión OK' : 'Conexión fallida'}
@@ -521,6 +577,20 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                 >
                                   {state?.busy === 'toggle' ? '…' : 'Reactivar'}
                                 </Button>
+                                {canRegisterTaskSchedule() && task.scheduleTime && (
+                                  <IconButton
+                                    icon={<ClockIcon />}
+                                    tone="danger"
+                                    label={state?.busy === 'unscheduler' ? 'Quitando del Programador…' : 'Quitar del Programador de Windows (pide permisos)'}
+                                    disabled={Boolean(state?.busy)}
+                                    onPress={() => handleUnregisterScheduler(task.id)}
+                                  />
+                                )}
+                                {state?.schedulerMessage && (
+                                  <span className="text-xs" style={{ color: 'var(--success)' }}>
+                                    {state.schedulerMessage}
+                                  </span>
+                                )}
                                 {state?.actionError && (
                                   <span className="text-xs" style={{ color: 'var(--danger)' }}>
                                     {state.actionError}

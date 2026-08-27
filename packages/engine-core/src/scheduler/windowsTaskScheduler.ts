@@ -13,6 +13,27 @@ export function scheduledTaskNameForBackupTask(taskId: string): string {
   return `\\arkode\\${taskId}`;
 }
 
+/**
+ * A human-readable Scheduled Task name — `\arkode\<task's own name> (<short
+ * id>)` — computed once at registration time and then stored (see
+ * tasksRepo.ts's `windowsTaskName` column), never recomputed from the task's
+ * *current* name on every install/uninstall/status call. That storage is
+ * deliberate: if this were recomputed live, renaming a task in arkode after
+ * it was already registered would make uninstall/status compute a different
+ * string than what's actually sitting in Task Scheduler, silently failing
+ * to find it (schtasks has no id-based lookup, only name-based).
+ *
+ * Windows Scheduled Task names can't contain `\ / : * ? " < > |` — stripped
+ * to a safe, still-readable set rather than rejecting a task name outright;
+ * a short id suffix (not the full UUID — the point is readability, and the
+ * full id is still in the app's own database either way) keeps two same-
+ * named tasks from colliding.
+ */
+export function scheduledTaskDisplayName(taskId: string, taskName: string): string {
+  const safeName = taskName.replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 200) || 'tarea';
+  return `\\arkode\\${safeName} (${taskId.slice(0, 8)})`;
+}
+
 export interface InstallScheduledTaskInput extends TaskDefinitionInput {
   taskName: string;
 }
