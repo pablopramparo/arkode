@@ -89,7 +89,17 @@ export interface SftpAdapter extends TransportAdapter {
 /** remote_dump strategy (not implemented in this slice): we generate the backup on the remote host first. */
 export interface SshAdapter extends TransportAdapter {
   kind: 'ssh';
-  runCommand(command: string, opts?: { timeoutMs?: number }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  /**
+   * `opts.stdin`, when set, is written to the remote command's stdin and the
+   * stream is then closed (EOF) — the one channel a secret value can travel
+   * over without ever appearing in argv/`ps aux`/`/proc/*\/cmdline` on the
+   * remote host, unlike a CLI flag baked into `command` itself (which, once
+   * that command reaches the remote login shell as `$SHELL -c "<command>"`,
+   * would sit in that shell process's own argv for its whole lifetime). See
+   * remoteDumpExecutor.ts's docker-mode dump-password handling for the real
+   * use case this exists for.
+   */
+  runCommand(command: string, opts?: { timeoutMs?: number; stdin?: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
   locateProducedFile(expectedRemotePath: string): Promise<RemoteFile>;
   removeRemoteFile(remotePath: string): Promise<void>;
 }

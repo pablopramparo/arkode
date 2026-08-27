@@ -6,6 +6,7 @@ import type { TransportsRepo } from '../db/repositories/transportsRepo.js';
 import type { DatabaseConnectionsRepo } from '../db/repositories/databaseConnectionsRepo.js';
 import type { TasksRepo } from '../db/repositories/tasksRepo.js';
 import { keysDir as defaultKeysDir } from '../paths.js';
+import { hardenKeyFileAclSync } from '../transports/keyFilePermissions.js';
 import type { ConfigExport, ExportedClient, ExportedDatabaseConnection, ExportedTask, ExportedTaskBundle, ExportedTransport } from './types.js';
 
 export interface ImportConfigDeps {
@@ -43,7 +44,12 @@ function resolveImportedPrivateKeyPath(
   const keysDir = importedKeysDir ?? defaultKeysDir();
   mkdirSync(keysDir, { recursive: true });
   const localPath = join(keysDir, `${randomUUID()}.key`);
+  // { mode: 0o600 } is kept as a harmless POSIX-world default but does NOT
+  // actually restrict anything on Windows — fs's `mode` option there only
+  // toggles the read-only attribute, not the real NTFS ACL. The real fix is
+  // hardenKeyFileAclSync right below (see its own doc comment for why).
   writeFileSync(localPath, Buffer.from(t.privateKeyContentBase64, 'base64'), { mode: 0o600 });
+  hardenKeyFileAclSync(localPath);
   return { path: localPath };
 }
 

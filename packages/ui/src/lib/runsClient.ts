@@ -5,6 +5,8 @@ export interface RunRow extends BackupRun {
   clientName: string | null;
   taskName: string | null;
   backupSetName: string | null;
+  /** Whether localPath still points at a real file — a manually-deleted or retention-pruned run keeps its DB row/localPath, so this is the real signal for whether download/delete are still meaningful, not just `localPath` being set. Only populated by GET /runs (Historial); GET /backups already excludes such rows entirely. */
+  localFileExists?: boolean;
 }
 
 export async function fetchRuns(opts: { taskId?: string; clientId?: string; limit?: number } = {}): Promise<RunRow[]> {

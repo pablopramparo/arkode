@@ -39,6 +39,7 @@ import {
   restoreFileBackupFile,
   deleteBackupRun,
   deleteFileBackupRun,
+  hardenExistingKeyStore,
   scheduledTaskNameForBackupTask as scheduledTaskNameForId,
   type DbEngine,
   type Transport,
@@ -218,15 +219,16 @@ program
   .requiredOption('--username <username>')
   .requiredOption('--private-key-path <path>')
   .option('--passphrase <passphrase>', 'SSH key passphrase — stored via Windows Credential Manager, never in SQLite')
-  .action((opts) => {
+  .action(async (opts) => {
     const ctx = buildContext();
+    const privateKeyPath = await copyPrivateKeyIntoAppStorage(opts.privateKeyPath);
     const transport = ctx.transportsRepo.createSftp({
       clientId: opts.client,
       name: opts.name,
       host: opts.host,
       port: Number(opts.port),
       username: opts.username,
-      privateKeyPath: copyPrivateKeyIntoAppStorage(opts.privateKeyPath),
+      privateKeyPath,
       passphraseSecretRef: resolvePassphraseSecretRef(ctx, opts.passphrase),
     });
     console.log(JSON.stringify(transport, null, 2));
@@ -242,15 +244,16 @@ program
   .requiredOption('--username <username>')
   .requiredOption('--private-key-path <path>')
   .option('--passphrase <passphrase>', 'SSH key passphrase — stored via Windows Credential Manager, never in SQLite')
-  .action((opts) => {
+  .action(async (opts) => {
     const ctx = buildContext();
+    const privateKeyPath = await copyPrivateKeyIntoAppStorage(opts.privateKeyPath);
     const transport = ctx.transportsRepo.createSsh({
       clientId: opts.client,
       name: opts.name,
       host: opts.host,
       port: Number(opts.port),
       username: opts.username,
-      privateKeyPath: copyPrivateKeyIntoAppStorage(opts.privateKeyPath),
+      privateKeyPath,
       passphraseSecretRef: resolvePassphraseSecretRef(ctx, opts.passphrase),
     });
     console.log(JSON.stringify(transport, null, 2));
@@ -317,14 +320,15 @@ program
   .option('--private-key-path <path>')
   .option('--passphrase <passphrase>', 'set a new SSH key passphrase — omit to leave the existing one untouched')
   .option('--password <password>', 'set a new FTP password — omit to leave the existing one untouched')
-  .action((transportId: string, opts) => {
+  .action(async (transportId: string, opts) => {
     const ctx = buildContext();
+    const privateKeyPath = opts.privateKeyPath ? await copyPrivateKeyIntoAppStorage(opts.privateKeyPath) : undefined;
     const transport = ctx.transportsRepo.update(transportId, {
       name: opts.name,
       host: opts.host,
       port: opts.port != null ? Number(opts.port) : undefined,
       username: opts.username,
-      privateKeyPath: opts.privateKeyPath ? copyPrivateKeyIntoAppStorage(opts.privateKeyPath) : undefined,
+      privateKeyPath,
       passphraseSecretRef: opts.passphrase ? resolvePassphraseSecretRef(ctx, opts.passphrase) : undefined,
       passwordSecretRef: opts.password ? resolveFtpPasswordSecretRef(ctx, opts.password) : undefined,
     });
@@ -413,6 +417,11 @@ program
     'required for remote_dump — expected produced-file path, e.g. /tmp/backups/winners_{date:YYYYMMDD_HHmm}.dump'
   )
   .option('--remote-cleanup', 'remote_dump only: delete the remote file after a successful download', false)
+  .option('--remote-dump-mode <host|docker>', 'remote_dump only: "host" (default) runs --remote-command directly; "docker" dumps a database running in a container instead', 'host')
+  .option('--docker-container <nameOrId>', 'required for --remote-dump-mode docker — the container to docker exec into')
+  .option('--remote-dump-database <name>', 'required for --remote-dump-mode docker — the database name inside the container')
+  .option('--remote-dump-db-user <user>', 'required for --remote-dump-mode docker — the DB user to authenticate as inside the container')
+  .option('--remote-dump-db-password <password>', 'optional for --remote-dump-mode docker — e.g. commonly unneeded for Postgres (trust/peer auth), usually needed for MySQL/MariaDB')
   .option('--retention-count <n>', 'override the client default: keep the last N Success backups for this task')
   .option('--retention-days <n>', 'override the client default: keep backups from the last N days for this task')
   .option('--backup-set <backupSetId>', 'optional — a pure visual/reporting label grouping this task with others')
@@ -450,16 +459,32 @@ program
     const base = { clientId: opts.client, transportId: opts.transport, name: opts.name, dbEngine, retentionCount, retentionDays, backupSetId };
     let task;
     if (opts.strategy === 'remote_dump') {
-      if (!opts.remoteCommand || !opts.remoteOutputPathTemplate) {
-        console.error('remote_dump tasks require --remote-command <command> and --remote-output-path-template <template>.');
+      if (!opts.remoteOutputPathTemplate) {
+        console.error('remote_dump tasks require --remote-output-path-template <template>.');
+        process.exitCode = 1;
+        return;
+      }
+      const dockerMode = opts.remoteDumpMode === 'docker';
+      if (!dockerMode && !opts.remoteCommand) {
+        console.error('remote_dump tasks with --remote-dump-mode host require --remote-command <command>.');
+        process.exitCode = 1;
+        return;
+      }
+      if (dockerMode && (!opts.dockerContainer || !opts.remoteDumpDatabase || !opts.remoteDumpDbUser)) {
+        console.error('remote_dump tasks with --remote-dump-mode docker require --docker-container, --remote-dump-database, and --remote-dump-db-user.');
         process.exitCode = 1;
         return;
       }
       task = ctx.tasksRepo.createRemoteDump({
         ...base,
-        remoteCommand: opts.remoteCommand,
+        remoteCommand: dockerMode ? undefined : opts.remoteCommand,
         remoteOutputPathTemplate: opts.remoteOutputPathTemplate,
         remoteCleanup: Boolean(opts.remoteCleanup),
+        remoteDumpExecMode: dockerMode ? 'docker' : 'host',
+        dockerContainer: dockerMode ? opts.dockerContainer : undefined,
+        remoteDumpDatabase: dockerMode ? opts.remoteDumpDatabase : undefined,
+        remoteDumpDbUser: dockerMode ? opts.remoteDumpDbUser : undefined,
+        remoteDumpDbPasswordSecretRef: dockerMode ? resolveSecretRef(ctx, opts.remoteDumpDbPassword, 'task:remoteDumpDbPassword') : undefined,
       });
     } else {
       if (!opts.remotePath) {
@@ -1939,7 +1964,7 @@ program
               return;
             }
             const passphraseSecretRef = resolvePassphraseSecretRef(ctx, body.passphrase);
-            const privateKeyPath = copyPrivateKeyIntoAppStorage(body.privateKeyPath);
+            const privateKeyPath = await copyPrivateKeyIntoAppStorage(body.privateKeyPath);
             if (body.type === 'ssh') {
               transport = ctx.transportsRepo.createSsh({
                 clientId: body.clientId,
@@ -2006,7 +2031,7 @@ program
           const patch: Record<string, unknown> = { ...rest };
           if (passphrase) patch.passphraseSecretRef = resolvePassphraseSecretRef(ctx, passphrase);
           if (password) patch.passwordSecretRef = resolveFtpPasswordSecretRef(ctx, password);
-          if (patch.privateKeyPath) patch.privateKeyPath = copyPrivateKeyIntoAppStorage(patch.privateKeyPath as string);
+          if (patch.privateKeyPath) patch.privateKeyPath = await copyPrivateKeyIntoAppStorage(patch.privateKeyPath as string);
           const transport = ctx.transportsRepo.update(transportIdMatch[1], patch);
           sendJson(res, 200, transport);
         } catch (err) {
@@ -2122,7 +2147,13 @@ program
           const client = ctx.clientsRepo.getById(run.clientId);
           const task = ctx.tasksRepo.getById(run.taskId);
           const backupSet = task?.backupSetId ? ctx.backupSetsRepo.getById(task.backupSetId) : null;
-          return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null, backupSetName: backupSet?.name ?? null };
+          // A run's local_path column is never cleared when its file is deleted
+          // (manually, or by automated retention — see "Retention" in
+          // CLAUDE.md) — this tells the UI whether the download/delete actions
+          // are still meaningful for this row, without hiding the row itself
+          // (Historial's whole point is showing every attempt, deleted or not).
+          const localFileExists = Boolean(run.localPath && existsSync(run.localPath));
+          return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null, backupSetName: backupSet?.name ?? null, localFileExists };
         });
         sendJson(res, 200, runs);
         return;
@@ -2139,12 +2170,23 @@ program
           limit: limitParam ? Number(limitParam) : undefined,
           offset: offsetParam ? Number(offsetParam) : undefined,
         });
-        const enriched = runs.map((run) => {
-          const client = ctx.clientsRepo.getById(run.clientId);
-          const task = ctx.tasksRepo.getById(run.taskId);
-          const backupSet = task?.backupSetId ? ctx.backupSetsRepo.getById(task.backupSetId) : null;
-          return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null, backupSetName: backupSet?.name ?? null };
-        });
+        // listBackups' "real backups only" contract means a deleted backup
+        // (manual or automated-retention) shouldn't appear here at all —
+        // the DB row's status/local_path alone can't tell (retention/manual
+        // delete never clear local_path), so this is the same existsSync
+        // check the download route already relies on, applied per row.
+        // Note: filtering after the SQL LIMIT/OFFSET means `total` (and a
+        // page's row count) can be a small overcount right after a
+        // deletion — an accepted, minor tradeoff over adding real
+        // "deleted" state to the schema just for exact pagination.
+        const enriched = runs
+          .filter((run) => run.localPath && existsSync(run.localPath))
+          .map((run) => {
+            const client = ctx.clientsRepo.getById(run.clientId);
+            const task = ctx.tasksRepo.getById(run.taskId);
+            const backupSet = task?.backupSetId ? ctx.backupSetsRepo.getById(task.backupSetId) : null;
+            return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null, backupSetName: backupSet?.name ?? null };
+          });
         sendJson(res, 200, { runs: enriched, total });
         return;
       }
@@ -2429,15 +2471,29 @@ program
             }
             const base = { clientId: body.clientId, transportId: body.transportId, name: body.name, dbEngine, retentionCount, retentionDays, backupSetId };
             if (body.strategy === 'remote_dump') {
-              if (!body.remoteCommand || !body.remoteOutputPathTemplate) {
-                sendJson(res, 400, { error: 'remoteCommand and remoteOutputPathTemplate are required for remote_dump.' });
+              if (!body.remoteOutputPathTemplate) {
+                sendJson(res, 400, { error: 'remoteOutputPathTemplate is required for remote_dump.' });
+                return;
+              }
+              const dockerMode = body.remoteDumpExecMode === 'docker';
+              if (!dockerMode && !body.remoteCommand) {
+                sendJson(res, 400, { error: 'remoteCommand is required for remote_dump tasks with remoteDumpExecMode "host".' });
+                return;
+              }
+              if (dockerMode && (!body.dockerContainer || !body.remoteDumpDatabase || !body.remoteDumpDbUser)) {
+                sendJson(res, 400, { error: 'dockerContainer, remoteDumpDatabase, and remoteDumpDbUser are required for remote_dump tasks with remoteDumpExecMode "docker".' });
                 return;
               }
               task = ctx.tasksRepo.createRemoteDump({
                 ...base,
-                remoteCommand: body.remoteCommand,
+                remoteCommand: dockerMode ? undefined : body.remoteCommand,
                 remoteOutputPathTemplate: body.remoteOutputPathTemplate,
                 remoteCleanup: Boolean(body.remoteCleanup),
+                remoteDumpExecMode: dockerMode ? 'docker' : 'host',
+                dockerContainer: dockerMode ? body.dockerContainer : undefined,
+                remoteDumpDatabase: dockerMode ? body.remoteDumpDatabase : undefined,
+                remoteDumpDbUser: dockerMode ? body.remoteDumpDbUser : undefined,
+                remoteDumpDbPasswordSecretRef: dockerMode ? resolveSecretRef(ctx, body.remoteDumpDbPassword, 'task:remoteDumpDbPassword') : undefined,
               });
             } else {
               if (!body.remotePath) {
@@ -2854,11 +2910,32 @@ program
     server.listen(port, '127.0.0.1');
   });
 
-program.parseAsync(process.argv).catch((err) => {
-  // A clean one-line error instead of a raw stack trace for anything an
-  // individual command didn't already catch itself (e.g. a schtasks.exe
-  // failure) — this is a CLI meant to be scripted/read by a human, not a
-  // stack-trace dump.
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exitCode = 1;
-});
+// Re-hardens any pre-existing key file's ACL on every startup, not just new
+// ones — covers keys copied/restored before this fix existed, which are
+// still sitting with %PROGRAMDATA%'s overly-broad inherited ACL (see
+// keyFilePermissions.ts's own doc comment for the full root cause). Cheap
+// (a handful of small files) and idempotent, so unconditional-every-startup
+// is simpler than tracking "have I migrated" state anywhere. Never fatal —
+// one bad file (or no keys dir yet, e.g. before the first `migrate`)
+// shouldn't block every other command from running.
+async function hardenExistingKeysAtStartup(): Promise<void> {
+  try {
+    const result = await hardenExistingKeyStore();
+    for (const { file, error } of result.errors) {
+      console.error(`Warning: could not update permissions on key file "${file}": ${error}`);
+    }
+  } catch (err) {
+    console.error(`Warning: could not check SSH key file permissions: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+hardenExistingKeysAtStartup()
+  .then(() => program.parseAsync(process.argv))
+  .catch((err) => {
+    // A clean one-line error instead of a raw stack trace for anything an
+    // individual command didn't already catch itself (e.g. a schtasks.exe
+    // failure) — this is a CLI meant to be scripted/read by a human, not a
+    // stack-trace dump.
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  });

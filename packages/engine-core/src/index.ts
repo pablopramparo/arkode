@@ -60,6 +60,8 @@ export { createFtpAdapter, createFtpAdapterFromTransport } from './transports/ft
 export { buildHostVerifier } from './transports/hostKeyVerification.js';
 export { resolveOutputPathTemplate } from './transports/outputPathTemplate.js';
 export { copyPrivateKeyIntoAppStorage } from './transports/copyPrivateKey.js';
+export { hardenKeyFileAcl, hardenKeyFileAclSync, hardenAllKeyFilesIn, hardenExistingKeyStore } from './transports/keyFilePermissions.js';
+export type { HardenAllKeyFilesResult } from './transports/keyFilePermissions.js';
 
 export * from './databaseConnections/types.js';
 export { createPostgresDumpClient } from './databaseConnections/postgresDumpClient.js';

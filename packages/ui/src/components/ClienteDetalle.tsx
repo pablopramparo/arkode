@@ -22,7 +22,7 @@ import { Switch } from './Switch';
 import { IconButton, IconLinkButton } from './IconButton';
 import { DownloadIcon, EditIcon, EyeIcon, FolderIcon, PlayIcon, PulseIcon, CheckCircleIcon, TrashIcon } from './icons';
 import { Spinner } from './Spinner';
-import { formatRetention, formatDateTime, formatDuration, formatSize, formatSchedule } from '../lib/format';
+import { formatRetention, formatDateTime, formatDuration, formatSize, formatSchedule, formatConnectionTestVersions } from '../lib/format';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { TaskCreateWizard } from './TaskCreateWizard';
 import { TaskEditModal } from './TaskEditModal';
@@ -471,7 +471,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                 </Button>
                                 {state?.testResult && !state.testResult.unknownHost && (
                                   <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
-                                    {state.testResult.ok ? 'OK' : state.testResult.message}
+                                    {state.testResult.ok ? 'Conexión OK' : 'Conexión fallida'}
+                                    {state.testResult.message ? ` — ${state.testResult.message}` : ''}
+                                    {state.testResult.latencyMs != null ? ` (${state.testResult.latencyMs} ms)` : ''}
+                                    {formatConnectionTestVersions(state.testResult)}
                                   </span>
                                 )}
                                 {state?.testResult?.unknownHost && (
@@ -583,7 +586,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                 </Button>
                                 {state?.testResult && !state.testResult.unknownHost && (
                                   <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
-                                    {state.testResult.ok ? 'OK' : state.testResult.message}
+                                    {state.testResult.ok ? 'Conexión OK' : 'Conexión fallida'}
+                                    {state.testResult.message ? ` — ${state.testResult.message}` : ''}
+                                    {state.testResult.latencyMs != null ? ` (${state.testResult.latencyMs} ms)` : ''}
+                                    {formatConnectionTestVersions(state.testResult)}
                                   </span>
                                 )}
                                 {state?.testResult?.unknownHost && (
@@ -750,7 +756,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                             </td>
                             <td className="px-4 py-2.5">
                               <div className="flex items-center gap-1">
-                                {run.localPath && (
+                                {run.localFileExists && (
                                   <>
                                     <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
                                     <IconButton
@@ -761,6 +767,11 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                       onPress={() => handleDeleteBackup(run.id, refresh)}
                                     />
                                   </>
+                                )}
+                                {run.localPath && !run.localFileExists && (
+                                  <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                                    Eliminado
+                                  </span>
                                 )}
                                 {run.errorMessage && (
                                   <IconButton

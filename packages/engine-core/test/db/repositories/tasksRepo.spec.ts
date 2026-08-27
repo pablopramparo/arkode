@@ -95,6 +95,127 @@ describe('tasksRepo transport/database-connection invariants', () => {
     ).toThrow(/require a ssh transport/);
   });
 
+  function seedSshTransport(ctx: ReturnType<typeof createTestContext>, clientId: string) {
+    return ctx.transportsRepo.createSsh({ clientId, name: 'ssh', host: 'h', username: 'u', privateKeyPath: 'k' });
+  }
+
+  it('creates a host-mode (default) remote_dump task exactly as before docker mode existed', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+    const transport = seedSshTransport(ctx, client.id);
+
+    const task = ctx.tasksRepo.createRemoteDump({
+      clientId: client.id,
+      transportId: transport.id,
+      name: 'task',
+      dbEngine: 'mysql',
+      remoteCommand: 'mysqldump db > /tmp/dump.sql',
+      remoteOutputPathTemplate: '/tmp/dump.sql',
+    });
+
+    expect(task.remoteDumpExecMode).toBe('host');
+    expect(task.dockerContainer).toBeNull();
+  });
+
+  it('rejects a host-mode remote_dump task with no remoteCommand', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+    const transport = seedSshTransport(ctx, client.id);
+
+    expect(() =>
+      ctx.tasksRepo.createRemoteDump({
+        clientId: client.id,
+        transportId: transport.id,
+        name: 'task',
+        dbEngine: 'mysql',
+        remoteOutputPathTemplate: '/tmp/dump.sql',
+      })
+    ).toThrow(/execMode "host" require remoteCommand/);
+  });
+
+  it('creates a docker-mode remote_dump task with its own structured fields', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+    const transport = seedSshTransport(ctx, client.id);
+
+    const task = ctx.tasksRepo.createRemoteDump({
+      clientId: client.id,
+      transportId: transport.id,
+      name: 'task',
+      dbEngine: 'postgres',
+      remoteDumpExecMode: 'docker',
+      dockerContainer: 'u088ggocosggggg4skws8ssc',
+      remoteDumpDatabase: 'grupocarena_erp',
+      remoteDumpDbUser: 'postgres',
+      remoteOutputPathTemplate: '/home/arkode-backup/grupocarena_erp.dump',
+    });
+
+    expect(task.remoteDumpExecMode).toBe('docker');
+    expect(task.dockerContainer).toBe('u088ggocosggggg4skws8ssc');
+    expect(task.remoteDumpDatabase).toBe('grupocarena_erp');
+    expect(task.remoteDumpDbUser).toBe('postgres');
+    expect(task.remoteDumpDbPasswordSecretRef).toBeNull();
+    expect(task.remoteCommand).toBeNull();
+  });
+
+  it('rejects a docker-mode remote_dump task missing dockerContainer/remoteDumpDatabase/remoteDumpDbUser', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+    const transport = seedSshTransport(ctx, client.id);
+
+    expect(() =>
+      ctx.tasksRepo.createRemoteDump({
+        clientId: client.id,
+        transportId: transport.id,
+        name: 'task',
+        dbEngine: 'postgres',
+        remoteDumpExecMode: 'docker',
+        remoteOutputPathTemplate: '/home/arkode-backup/db.dump',
+      })
+    ).toThrow(/execMode "docker" require dockerContainer/);
+  });
+
+  it('rejects a docker-mode remote_dump task with dbEngine "unknown"', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+    const transport = seedSshTransport(ctx, client.id);
+
+    expect(() =>
+      ctx.tasksRepo.createRemoteDump({
+        clientId: client.id,
+        transportId: transport.id,
+        name: 'task',
+        dbEngine: 'unknown',
+        remoteDumpExecMode: 'docker',
+        dockerContainer: 'c1',
+        remoteDumpDatabase: 'db',
+        remoteDumpDbUser: 'user',
+        remoteOutputPathTemplate: '/home/arkode-backup/db.dump',
+      })
+    ).toThrow(/require a specific dbEngine/);
+  });
+
+  it('creates a docker-mode remote_dump task with an optional password secret ref', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+    const transport = seedSshTransport(ctx, client.id);
+
+    const task = ctx.tasksRepo.createRemoteDump({
+      clientId: client.id,
+      transportId: transport.id,
+      name: 'task',
+      dbEngine: 'mysql',
+      remoteDumpExecMode: 'docker',
+      dockerContainer: 'c1',
+      remoteDumpDatabase: 'db',
+      remoteDumpDbUser: 'root',
+      remoteDumpDbPasswordSecretRef: 'secret:ref:1',
+      remoteOutputPathTemplate: '/home/arkode-backup/db.sql',
+    });
+
+    expect(task.remoteDumpDbPasswordSecretRef).toBe('secret:ref:1');
+  });
+
   it('creates a direct_dump task against a database connection', () => {
     const ctx = createTestContext();
     const client = seedClient(ctx);

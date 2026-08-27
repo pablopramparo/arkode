@@ -28,6 +28,14 @@ export interface TaskInput {
   remoteCommand?: string;
   remoteOutputPathTemplate?: string;
   remoteCleanup?: boolean;
+  /** remote_dump only — defaults to 'host' server-side when omitted. */
+  remoteDumpExecMode?: 'host' | 'docker';
+  /** remote_dump + remoteDumpExecMode 'docker' only. */
+  dockerContainer?: string;
+  remoteDumpDatabase?: string;
+  remoteDumpDbUser?: string;
+  /** remote_dump + remoteDumpExecMode 'docker' only, and itself optional even then. */
+  remoteDumpDbPassword?: string;
   retentionCount?: number | null;
   retentionDays?: number | null;
   scheduleTime?: string | null;

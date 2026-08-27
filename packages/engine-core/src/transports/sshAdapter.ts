@@ -34,7 +34,8 @@ function connectClient(client: Client, connectConfig: Parameters<Client['connect
 function execOnce(
   client: Client,
   command: string,
-  timeoutMs?: number
+  timeoutMs?: number,
+  stdin?: string
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     client.exec(command, (err, stream) => {
@@ -60,6 +61,16 @@ function execOnce(
         .stderr.on('data', (chunk: Buffer) => {
           stderr += chunk.toString('utf8');
         });
+
+      // Written after the listeners above are attached, not before — the
+      // remote process's stdout can start flowing the moment it sees EOF on
+      // its own stdin, so the 'data' handler must already be in place.
+      // Always closes stdin even with nothing to write: several remote
+      // commands (e.g. arkode-dump's own `cat -` read of an optional
+      // password) block waiting for EOF regardless of whether a password
+      // was actually sent.
+      if (stdin) stream.write(stdin);
+      stream.end();
     });
   });
 }
@@ -150,8 +161,8 @@ export function createSshAdapter(config: SshTransportConfig, knownHosts: KnownHo
       }
     },
 
-    async runCommand(command: string, opts?: { timeoutMs?: number }) {
-      return execOnce(client, command, opts?.timeoutMs);
+    async runCommand(command: string, opts?: { timeoutMs?: number; stdin?: string }) {
+      return execOnce(client, command, opts?.timeoutMs, opts?.stdin);
     },
 
     async locateProducedFile(expectedRemotePath: string): Promise<RemoteFile> {

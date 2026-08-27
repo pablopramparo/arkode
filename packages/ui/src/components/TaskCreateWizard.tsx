@@ -40,6 +40,13 @@ export interface FormValues {
   remoteCommand: string;
   remoteOutputPathTemplate: string;
   remoteCleanup: boolean;
+  /** remote_dump only — 'host' runs remoteCommand directly; 'docker' dumps a database running inside a container instead. */
+  remoteDumpExecMode: 'host' | 'docker';
+  dockerContainer: string;
+  remoteDumpDatabase: string;
+  remoteDumpDbUser: string;
+  /** Optional even for docker mode — e.g. commonly unneeded for Postgres (trust/peer auth). */
+  remoteDumpDbPassword: string;
   // "new" mode — direct_dump, and reused for ftp's password (see newTransportType)
   databaseName: string;
   password: string;
@@ -78,6 +85,11 @@ export const EMPTY_FORM: FormValues = {
   remoteCommand: '',
   remoteOutputPathTemplate: '',
   remoteCleanup: false,
+  remoteDumpExecMode: 'host',
+  dockerContainer: '',
+  remoteDumpDatabase: '',
+  remoteDumpDbUser: '',
+  remoteDumpDbPassword: '',
   databaseName: '',
   password: '',
   sslMode: '',
@@ -106,6 +118,14 @@ function retentionDefaultsFor(clientId: string, connections: ConnectionsData): {
   };
 }
 
+function isRemoteDumpValid(values: FormValues): boolean {
+  if (!values.remoteOutputPathTemplate.trim()) return false;
+  if (values.remoteDumpExecMode === 'docker') {
+    return Boolean(values.dockerContainer.trim() && values.remoteDumpDatabase.trim() && values.remoteDumpDbUser.trim());
+  }
+  return Boolean(values.remoteCommand.trim());
+}
+
 function isCreateValid(values: FormValues): boolean {
   if (!values.clientId || !values.name.trim()) return false;
   if (!isScheduleValid(values)) return false;
@@ -114,7 +134,7 @@ function isCreateValid(values: FormValues): boolean {
     if (values.strategy === 'direct_dump') return Boolean(values.databaseConnectionId);
     if (!values.transportId) return false;
     if (values.strategy === 'fetch_existing') return Boolean(values.remotePath.trim());
-    return Boolean(values.remoteCommand.trim() && values.remoteOutputPathTemplate.trim());
+    return isRemoteDumpValid(values);
   }
 
   // "new" connection mode
@@ -127,7 +147,7 @@ function isCreateValid(values: FormValues): boolean {
   }
   if (!values.privateKeyPath.trim()) return false;
   if (values.strategy === 'fetch_existing') return Boolean(values.remotePath.trim());
-  return Boolean(values.remoteCommand.trim() && values.remoteOutputPathTemplate.trim());
+  return isRemoteDumpValid(values);
 }
 
 export const inputStyle: React.CSSProperties = {
@@ -295,44 +315,106 @@ function NewConnectionFields({ values, onChange }: { values: FormValues; onChang
               />
             </Field>
           ) : (
-            <>
-              <button
-                type="button"
-                className="flex items-center gap-1.5 self-start text-xs"
-                style={{ color: 'var(--accent)' }}
-                onClick={() => setShowSshGuide(true)}
-              >
-                <HelpCircleIcon className="h-3.5 w-3.5" />
-                ¿Cómo configuro esto? (crear usuario, clave y comando de dump)
-              </button>
-              <Field label="Comando remoto *">
-                <input
-                  style={inputStyle}
-                  placeholder="Comando que genera el dump en el host remoto"
-                  value={values.remoteCommand}
-                  onChange={(e) => onChange({ remoteCommand: e.target.value })}
-                />
-              </Field>
-              <Field label="Plantilla de ruta de salida *">
-                <input
-                  style={inputStyle}
-                  placeholder="Ej: /tmp/backups/db_{date:YYYYMMDD_HHmm}.dump"
-                  value={values.remoteOutputPathTemplate}
-                  onChange={(e) => onChange({ remoteOutputPathTemplate: e.target.value })}
-                />
-              </Field>
-              <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
-                <input
-                  type="checkbox"
-                  checked={values.remoteCleanup}
-                  onChange={(e) => onChange({ remoteCleanup: e.target.checked })}
-                />
-                Eliminar el archivo remoto tras una descarga exitosa
-              </label>
-            </>
+            <RemoteDumpFields values={values} onChange={onChange} onShowSshGuide={() => setShowSshGuide(true)} />
           )}
         </>
       )}
+    </>
+  );
+}
+
+/**
+ * The remote_dump-specific fields shared by both "new connection" and
+ * "existing connection" modes — identical regardless of which transport is
+ * used, since these describe *what to dump*, not *how to connect*. Host
+ * mode is unchanged from before docker mode existed; docker mode replaces
+ * the freeform command with structured container/database/user/password
+ * fields, since arkode itself constructs the dump command server-side (see
+ * remoteDumpExecutor.ts's docker-mode dispatch) rather than running
+ * whatever the user typed.
+ */
+function RemoteDumpFields({ values, onChange, onShowSshGuide }: { values: FormValues; onChange: (patch: Partial<FormValues>) => void; onShowSshGuide?: () => void }) {
+  return (
+    <>
+      <Field label="Modo de ejecución">
+        <SegmentedButtons
+          value={values.remoteDumpExecMode}
+          onChange={(remoteDumpExecMode) => onChange({ remoteDumpExecMode })}
+          options={[
+            { value: 'host', label: 'Directo en el host' },
+            { value: 'docker', label: 'Dentro de un contenedor Docker' },
+          ]}
+        />
+      </Field>
+
+      {onShowSshGuide && (
+        <button
+          type="button"
+          className="flex items-center gap-1.5 self-start text-xs"
+          style={{ color: 'var(--accent)' }}
+          onClick={onShowSshGuide}
+        >
+          <HelpCircleIcon className="h-3.5 w-3.5" />
+          ¿Cómo configuro esto? (paso a paso, ambos modos)
+        </button>
+      )}
+
+      {values.remoteDumpExecMode === 'host' ? (
+        <Field label="Comando remoto *">
+          <input
+            style={inputStyle}
+            placeholder="Comando que genera el dump en el host remoto"
+            value={values.remoteCommand}
+            onChange={(e) => onChange({ remoteCommand: e.target.value })}
+          />
+        </Field>
+      ) : (
+        <>
+          <p className="text-xs" style={{ color: 'var(--muted)' }}>
+            Requiere el wrapper <code>arkode-dump</code> instalado en el servidor (ver <code>ops/arkode-dump/README.md</code>) —
+            arkode arma el comando de dump por vos, nunca corre <code>docker exec</code> directo ni necesita el usuario SSH en el grupo{' '}
+            <code>docker</code>.
+          </p>
+          <Field label="Contenedor *">
+            <input
+              style={inputStyle}
+              placeholder="Ej: u088ggocosggggg4skws8ssc"
+              value={values.dockerContainer}
+              onChange={(e) => onChange({ dockerContainer: e.target.value })}
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Base de datos *">
+              <input style={inputStyle} value={values.remoteDumpDatabase} onChange={(e) => onChange({ remoteDumpDatabase: e.target.value })} />
+            </Field>
+            <Field label="Usuario de BD *">
+              <input style={inputStyle} value={values.remoteDumpDbUser} onChange={(e) => onChange({ remoteDumpDbUser: e.target.value })} />
+            </Field>
+          </div>
+          <Field label="Contraseña de BD">
+            <input
+              style={inputStyle}
+              type="password"
+              placeholder="Dejar en blanco si el contenedor no la requiere (ej. Postgres con auth por socket)"
+              value={values.remoteDumpDbPassword}
+              onChange={(e) => onChange({ remoteDumpDbPassword: e.target.value })}
+            />
+          </Field>
+        </>
+      )}
+
+      <Field label="Plantilla de ruta de salida *">
+        <input
+          style={inputStyle}
+          placeholder="Ej: /tmp/backups/db_{date:YYYYMMDD_HHmm}.dump"
+          value={values.remoteOutputPathTemplate}
+          onChange={(e) => onChange({ remoteOutputPathTemplate: e.target.value })}
+        />
+      </Field>
+      <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
+        <input type="checkbox" checked={values.remoteCleanup} onChange={(e) => onChange({ remoteCleanup: e.target.checked })} />
+        Eliminar el archivo remoto tras una descarga exitosa
+      </label>
     </>
   );
 }
@@ -474,8 +556,11 @@ function CreateFields({
       .catch(() => setBackupSets([]));
   }, [values.clientId]);
 
+  const [showSshGuide, setShowSshGuide] = useState(false);
+
   return (
     <div className="flex flex-col gap-3">
+      {showSshGuide && <SshSetupGuide onClose={() => setShowSshGuide(false)} />}
       {fixedClientId ? (
         <Field label="Cliente">
           <div style={{ ...inputStyle, color: 'var(--muted)' }}>{fixedClientName ?? fixedClientId}</div>
@@ -592,32 +677,7 @@ function CreateFields({
             </Field>
           )}
           {values.strategy === 'remote_dump' && (
-            <>
-              <Field label="Comando remoto *">
-                <input
-                  style={inputStyle}
-                  placeholder="Comando que genera el dump en el host remoto"
-                  value={values.remoteCommand}
-                  onChange={(e) => onChange({ remoteCommand: e.target.value })}
-                />
-              </Field>
-              <Field label="Plantilla de ruta de salida *">
-                <input
-                  style={inputStyle}
-                  placeholder="Ej: /tmp/backups/db_{date:YYYYMMDD_HHmm}.dump"
-                  value={values.remoteOutputPathTemplate}
-                  onChange={(e) => onChange({ remoteOutputPathTemplate: e.target.value })}
-                />
-              </Field>
-              <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
-                <input
-                  type="checkbox"
-                  checked={values.remoteCleanup}
-                  onChange={(e) => onChange({ remoteCleanup: e.target.checked })}
-                />
-                Eliminar el archivo remoto tras una descarga exitosa
-              </label>
-            </>
+            <RemoteDumpFields values={values} onChange={onChange} onShowSshGuide={() => setShowSshGuide(true)} />
           )}
         </>
       )}
@@ -739,9 +799,17 @@ export function TaskCreateWizard({
         dbEngine: form.dbEngine,
         remotePath: form.strategy === 'fetch_existing' ? form.remotePath.trim() : undefined,
         remoteFilePattern: form.strategy === 'fetch_existing' ? form.remoteFilePattern.trim() || null : undefined,
-        remoteCommand: form.strategy === 'remote_dump' ? form.remoteCommand.trim() : undefined,
+        remoteCommand: form.strategy === 'remote_dump' && form.remoteDumpExecMode === 'host' ? form.remoteCommand.trim() : undefined,
         remoteOutputPathTemplate: form.strategy === 'remote_dump' ? form.remoteOutputPathTemplate.trim() : undefined,
         remoteCleanup: form.strategy === 'remote_dump' ? form.remoteCleanup : undefined,
+        remoteDumpExecMode: form.strategy === 'remote_dump' ? form.remoteDumpExecMode : undefined,
+        dockerContainer: form.strategy === 'remote_dump' && form.remoteDumpExecMode === 'docker' ? form.dockerContainer.trim() : undefined,
+        remoteDumpDatabase: form.strategy === 'remote_dump' && form.remoteDumpExecMode === 'docker' ? form.remoteDumpDatabase.trim() : undefined,
+        remoteDumpDbUser: form.strategy === 'remote_dump' && form.remoteDumpExecMode === 'docker' ? form.remoteDumpDbUser.trim() : undefined,
+        remoteDumpDbPassword:
+          form.strategy === 'remote_dump' && form.remoteDumpExecMode === 'docker' && form.remoteDumpDbPassword.trim()
+            ? form.remoteDumpDbPassword.trim()
+            : undefined,
         retentionCount: form.retentionCount.trim() ? Number(form.retentionCount) : null,
         retentionDays: form.retentionDays.trim() ? Number(form.retentionDays) : null,
         backupSetId: form.backupSetId || null,

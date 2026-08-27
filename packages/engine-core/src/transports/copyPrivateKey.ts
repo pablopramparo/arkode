@@ -2,6 +2,7 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { keysDir as defaultKeysDir } from '../paths.js';
+import { hardenKeyFileAcl } from './keyFilePermissions.js';
 
 /**
  * Copies a user-supplied SSH private key file into this app's own keys
@@ -19,10 +20,14 @@ import { keysDir as defaultKeysDir } from '../paths.js';
  * sidesteps both problems instead of hoping the original is always
  * reachable and readable.
  */
-export function copyPrivateKeyIntoAppStorage(sourcePath: string, keysDirOverride?: string): string {
+export async function copyPrivateKeyIntoAppStorage(sourcePath: string, keysDirOverride?: string): Promise<string> {
   const dir = keysDirOverride ?? defaultKeysDir();
   mkdirSync(dir, { recursive: true });
   const destPath = join(dir, `${randomUUID()}.key`);
   copyFileSync(sourcePath, destPath);
+  // Hardens only this app-owned copy, never sourcePath — see hardenKeyFileAcl's
+  // own doc comment for why ProgramData's default inherited ACL is too broad
+  // for OpenSSH's taste and why fs's `mode` option can't fix it on Windows.
+  await hardenKeyFileAcl(destPath);
   return destPath;
 }

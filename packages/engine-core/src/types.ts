@@ -85,6 +85,18 @@ export interface DatabaseConnection {
   updatedAt: string;
 }
 
+/**
+ * remote_dump only. 'host' (default): remoteCommand is a raw shell command
+ * run directly on the SSH host, exactly as this strategy has always worked.
+ * 'docker': the database runs inside a Docker container (e.g. Coolify) —
+ * remoteCommand is unused, and arkode itself constructs the dump command
+ * from dockerContainer/remoteDumpDatabase/remoteDumpDbUser/dbEngine via a
+ * root-owned, allowlisting wrapper script on the remote host (never direct
+ * `docker exec`, and never `docker` group membership for the SSH user —
+ * see remoteDumpExecutor.ts's docker-mode dispatch for the full design).
+ */
+export type RemoteDumpExecMode = 'host' | 'docker';
+
 export interface BackupTask {
   id: string;
   clientId: string;
@@ -100,6 +112,22 @@ export interface BackupTask {
   remoteCommand: string | null;
   remoteOutputPathTemplate: string | null;
   remoteCleanup: boolean;
+  /** remote_dump only. */
+  remoteDumpExecMode: RemoteDumpExecMode;
+  /** remote_dump + exec_mode 'docker' only — the container name/id to `docker exec` into. */
+  dockerContainer: string | null;
+  /** remote_dump + exec_mode 'docker' only — the database name inside the container. */
+  remoteDumpDatabase: string | null;
+  /** remote_dump + exec_mode 'docker' only — the DB user to authenticate as inside the container. */
+  remoteDumpDbUser: string | null;
+  /**
+   * remote_dump + exec_mode 'docker' only, and itself optional even then —
+   * a Postgres container commonly needs no password at all (trust/peer auth
+   * over its own unix socket), while MySQL/MariaDB normally does. Never
+   * required for host mode, which relies on the remote user's own
+   * ~/.pgpass / ~/.my.cnf instead (see the in-app SSH setup guide).
+   */
+  remoteDumpDbPasswordSecretRef: string | null;
   scheduleTime: string | null;
   scheduleEnabled: boolean;
   scheduleFrequency: ScheduleFrequency;

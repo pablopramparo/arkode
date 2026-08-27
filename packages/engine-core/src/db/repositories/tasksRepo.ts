@@ -1,6 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import type { BackupTask, DbEngine, ScheduleFrequency } from '../../types.js';
+import type { BackupTask, DbEngine, RemoteDumpExecMode, ScheduleFrequency } from '../../types.js';
 import type { TransportsRepo } from './transportsRepo.js';
 import type { DatabaseConnectionsRepo } from './databaseConnectionsRepo.js';
 
@@ -17,6 +17,11 @@ interface BackupTaskRow {
   remote_command: string | null;
   remote_output_path_template: string | null;
   remote_cleanup: number;
+  remote_dump_exec_mode: string;
+  docker_container: string | null;
+  remote_dump_database: string | null;
+  remote_dump_db_user: string | null;
+  remote_dump_db_password_secret_ref: string | null;
   schedule_time: string | null;
   schedule_enabled: number;
   schedule_frequency: string;
@@ -49,6 +54,11 @@ function toDomain(row: BackupTaskRow): BackupTask {
     remoteCommand: row.remote_command,
     remoteOutputPathTemplate: row.remote_output_path_template,
     remoteCleanup: row.remote_cleanup === 1,
+    remoteDumpExecMode: row.remote_dump_exec_mode as RemoteDumpExecMode,
+    dockerContainer: row.docker_container,
+    remoteDumpDatabase: row.remote_dump_database,
+    remoteDumpDbUser: row.remote_dump_db_user,
+    remoteDumpDbPasswordSecretRef: row.remote_dump_db_password_secret_ref,
     scheduleTime: row.schedule_time,
     scheduleEnabled: row.schedule_enabled === 1,
     scheduleFrequency: row.schedule_frequency as ScheduleFrequency,
@@ -81,13 +91,24 @@ export interface CreateRemoteDumpTaskInput {
   transportId: string;
   name: string;
   dbEngine: DbEngine;
-  remoteCommand: string;
+  /** Required (and the only thing that matters) for execMode 'host' (the default); ignored for 'docker', which builds its own command instead. */
+  remoteCommand?: string;
   remoteOutputPathTemplate: string;
   remoteCleanup?: boolean;
   scheduleTime?: string | null;
   retentionCount?: number | null;
   retentionDays?: number | null;
   backupSetId?: string | null;
+  /** Defaults to 'host' — every existing remote_dump task is implicitly this mode. */
+  remoteDumpExecMode?: RemoteDumpExecMode;
+  /** Required for execMode 'docker'; unused for 'host'. */
+  dockerContainer?: string;
+  /** Required for execMode 'docker'; unused for 'host'. */
+  remoteDumpDatabase?: string;
+  /** Required for execMode 'docker'; unused for 'host'. */
+  remoteDumpDbUser?: string;
+  /** Optional even for execMode 'docker' — e.g. a Postgres container commonly needs no password. Unused for 'host'. */
+  remoteDumpDbPasswordSecretRef?: string | null;
 }
 
 export interface CreateDirectDumpTaskInput {
@@ -151,10 +172,12 @@ export function createTasksRepo(
     `INSERT INTO backup_tasks
        (id, client_id, strategy, transport_id, database_connection_id, name, db_engine,
         remote_path, remote_file_pattern, remote_command, remote_output_path_template, remote_cleanup,
+        remote_dump_exec_mode, docker_container, remote_dump_database, remote_dump_db_user, remote_dump_db_password_secret_ref,
         retention_count, retention_days, backup_set_id)
      VALUES
        (@id, @clientId, @strategy, @transportId, @databaseConnectionId, @name, @dbEngine,
         @remotePath, @remoteFilePattern, @remoteCommand, @remoteOutputPathTemplate, @remoteCleanup,
+        @remoteDumpExecMode, @dockerContainer, @remoteDumpDatabase, @remoteDumpDbUser, @remoteDumpDbPasswordSecretRef,
         @retentionCount, @retentionDays, @backupSetId)`
   );
   const getByIdStmt = db.prepare<[string], BackupTaskRow>('SELECT * FROM backup_tasks WHERE id = ?');
@@ -195,6 +218,11 @@ export function createTasksRepo(
       remoteCommand?: string | null;
       remoteOutputPathTemplate?: string | null;
       remoteCleanup?: boolean;
+      remoteDumpExecMode?: RemoteDumpExecMode;
+      dockerContainer?: string | null;
+      remoteDumpDatabase?: string | null;
+      remoteDumpDbUser?: string | null;
+      remoteDumpDbPasswordSecretRef?: string | null;
       retentionCount?: number | null;
       retentionDays?: number | null;
       backupSetId?: string | null;
@@ -216,6 +244,11 @@ export function createTasksRepo(
       remoteCommand: input.remoteCommand ?? null,
       remoteOutputPathTemplate: input.remoteOutputPathTemplate ?? null,
       remoteCleanup: input.remoteCleanup ? 1 : 0,
+      remoteDumpExecMode: input.remoteDumpExecMode ?? 'host',
+      dockerContainer: input.dockerContainer ?? null,
+      remoteDumpDatabase: input.remoteDumpDatabase ?? null,
+      remoteDumpDbUser: input.remoteDumpDbUser ?? null,
+      remoteDumpDbPasswordSecretRef: input.remoteDumpDbPasswordSecretRef ?? null,
       retentionCount: input.retentionCount ?? null,
       retentionDays: input.retentionDays ?? null,
       backupSetId: input.backupSetId ?? null,
@@ -223,6 +256,23 @@ export function createTasksRepo(
     const row = getByIdStmt.get(id);
     if (!row) throw new Error(`Failed to read back created backup task ${id}`);
     return toDomain(row);
+  }
+
+  function validateRemoteDumpInput(input: CreateRemoteDumpTaskInput): void {
+    const mode = input.remoteDumpExecMode ?? 'host';
+    if (mode === 'host') {
+      if (!input.remoteCommand) {
+        throw new Error('remote_dump tasks with execMode "host" require remoteCommand.');
+      }
+      return;
+    }
+    // mode === 'docker'
+    if (!input.dockerContainer || !input.remoteDumpDatabase || !input.remoteDumpDbUser) {
+      throw new Error('remote_dump tasks with execMode "docker" require dockerContainer, remoteDumpDatabase, and remoteDumpDbUser.');
+    }
+    if (input.dbEngine === 'unknown') {
+      throw new Error('remote_dump tasks with execMode "docker" require a specific dbEngine (postgres, mysql, or mariadb) — the dump wrapper dispatches by it.');
+    }
   }
 
   function insertTransportBackedTask(
@@ -243,6 +293,9 @@ export function createTasksRepo(
       throw new Error(
         `${strategy} tasks require a ${allowedTransportTypes.join(' or ')} transport; transport ${input.transportId} is "${transport.type}".`
       );
+    }
+    if (strategy === 'remote_dump') {
+      validateRemoteDumpInput(input as CreateRemoteDumpTaskInput);
     }
 
     return insertTask(strategy, input, input.transportId, null);

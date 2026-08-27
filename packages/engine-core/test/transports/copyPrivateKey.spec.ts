@@ -11,7 +11,7 @@ describe('copyPrivateKeyIntoAppStorage', () => {
         const sourcePath = join(sourceDir, 'id_rsa');
         writeFileSync(sourcePath, 'the-actual-key-bytes');
 
-        const destPath = copyPrivateKeyIntoAppStorage(sourcePath, keysDir);
+        const destPath = await copyPrivateKeyIntoAppStorage(sourcePath, keysDir);
 
         expect(destPath).not.toBe(sourcePath);
         expect(destPath.startsWith(keysDir)).toBe(true);
@@ -27,7 +27,7 @@ describe('copyPrivateKeyIntoAppStorage', () => {
         const sourcePath = join(sourceDir, 'id_rsa');
         writeFileSync(sourcePath, 'key-bytes');
 
-        const destPath = copyPrivateKeyIntoAppStorage(sourcePath, keysDir);
+        const destPath = await copyPrivateKeyIntoAppStorage(sourcePath, keysDir);
 
         expect(readFileSync(destPath, 'utf8')).toBe('key-bytes');
       });
@@ -40,8 +40,8 @@ describe('copyPrivateKeyIntoAppStorage', () => {
         const sourcePath = join(sourceDir, 'id_rsa');
         writeFileSync(sourcePath, 'key-bytes');
 
-        const first = copyPrivateKeyIntoAppStorage(sourcePath, keysDir);
-        const second = copyPrivateKeyIntoAppStorage(sourcePath, keysDir);
+        const first = await copyPrivateKeyIntoAppStorage(sourcePath, keysDir);
+        const second = await copyPrivateKeyIntoAppStorage(sourcePath, keysDir);
 
         expect(first).not.toBe(second);
         expect(readdirSync(keysDir)).toHaveLength(2);

@@ -159,7 +159,7 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
                       </td>
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-1">
-                          {run.localPath && (
+                          {run.localFileExists && (
                             <>
                               <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
                               <IconButton
@@ -170,6 +170,11 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
                                 onPress={() => handleDelete(run.id)}
                               />
                             </>
+                          )}
+                          {run.localPath && !run.localFileExists && (
+                            <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                              Eliminado
+                            </span>
                           )}
                           {run.errorMessage && (
                             <IconButton
