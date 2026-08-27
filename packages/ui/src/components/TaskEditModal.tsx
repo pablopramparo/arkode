@@ -28,7 +28,62 @@ function taskToFormValues(task: TaskRow): FormValues {
   };
 }
 
-function EditFields({ values, onChange }: { values: FormValues; onChange: (patch: Partial<FormValues>) => void }) {
+/** Same "shown, not editable" visual as TaskCreateWizard's fixedClientId display — a muted, input-shaped div instead of a real input. */
+function ReadOnlyField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <Field label={label}>
+      <div style={{ ...inputStyle, color: 'var(--muted)' }}>{children}</div>
+    </Field>
+  );
+}
+
+/**
+ * The pipeline fields (remoteCommand, dockerContainer, etc.) are
+ * deliberately immutable after creation — same reasoning as strategy/
+ * transport, see UpdateTaskInput's own doc comment — but that's a reason
+ * not to let them be *edited* here, not a reason to hide them entirely.
+ * Read directly off `task` (not `values`/FormValues, which only carries
+ * the fields this modal actually edits) since there's nothing to route
+ * through form state for a read-only display.
+ */
+function ImmutableTaskDetails({ task }: { task: TaskRow }) {
+  if (task.strategy === 'fetch_existing') {
+    return (
+      <>
+        <ReadOnlyField label="Ruta remota">{task.remotePath}</ReadOnlyField>
+        {task.remoteFilePattern && <ReadOnlyField label="Patrón de archivo">{task.remoteFilePattern}</ReadOnlyField>}
+      </>
+    );
+  }
+  if (task.strategy === 'remote_dump') {
+    return (
+      <>
+        <ReadOnlyField label="Modo de ejecución">
+          {task.remoteDumpExecMode === 'docker' ? 'Dentro de un contenedor Docker' : 'Directo en el host'}
+        </ReadOnlyField>
+        {task.remoteDumpExecMode === 'docker' ? (
+          <>
+            <ReadOnlyField label="Contenedor">{task.dockerContainer}</ReadOnlyField>
+            <div className="grid grid-cols-2 gap-3">
+              <ReadOnlyField label="Base de datos">{task.remoteDumpDatabase}</ReadOnlyField>
+              <ReadOnlyField label="Usuario de BD">{task.remoteDumpDbUser}</ReadOnlyField>
+            </div>
+            <ReadOnlyField label="Contraseña de BD">
+              {task.remoteDumpDbPasswordSecretRef ? 'Configurada' : 'No configurada'}
+            </ReadOnlyField>
+          </>
+        ) : (
+          <ReadOnlyField label="Comando remoto">{task.remoteCommand}</ReadOnlyField>
+        )}
+        <ReadOnlyField label="Plantilla de ruta de salida">{task.remoteOutputPathTemplate}</ReadOnlyField>
+        <ReadOnlyField label="Eliminar archivo remoto">{task.remoteCleanup ? 'Sí' : 'No'}</ReadOnlyField>
+      </>
+    );
+  }
+  return null;
+}
+
+function EditFields({ task, values, onChange }: { task: TaskRow; values: FormValues; onChange: (patch: Partial<FormValues>) => void }) {
   const [backupSets, setBackupSets] = useState<BackupSet[]>([]);
   useEffect(() => {
     // includeInactive so the currently-assigned set still shows up in the
@@ -43,6 +98,7 @@ function EditFields({ values, onChange }: { values: FormValues; onChange: (patch
       <Field label="Nombre *">
         <input style={inputStyle} value={values.name} onChange={(e) => onChange({ name: e.target.value })} />
       </Field>
+      <ImmutableTaskDetails task={task} />
       <div className="grid grid-cols-2 gap-3">
         <Field label="Retención (N backups)">
           <input
@@ -170,7 +226,7 @@ export function TaskEditModal({ task, onClose, onSaved }: { task: TaskRow; onClo
 
   return (
     <Modal title={`Editar "${task.name}"`} onClose={onClose}>
-      <EditFields values={form} onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))} />
+      <EditFields task={task} values={form} onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))} />
       {error && (
         <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
           {error}
