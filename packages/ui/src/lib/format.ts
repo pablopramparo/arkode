@@ -24,11 +24,14 @@ export function formatSchedule(task: ScheduleLike): string {
   return `${task.scheduleTime} · ${frequencyPart}${task.scheduleEnabled ? '' : ' (deshabilitado)'}`;
 }
 
-/** "142 MB", "1.2 GB" — matches project.md's own dashboard example formatting. */
+/** "512 B", "84 KB", "142 MB", "1.2 GB" — scales the unit so a sub-MB backup doesn't read as "0 MB". */
 export function formatSize(bytes: number | null): string {
   if (bytes == null) return '—';
-  const mb = bytes / (1024 * 1024);
-  if (mb < 1024) return `${Math.round(mb)} MB`;
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
   return `${(mb / 1024).toFixed(1)} GB`;
 }
 

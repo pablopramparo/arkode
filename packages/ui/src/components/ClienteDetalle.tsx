@@ -201,7 +201,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
     try {
       await runTaskNow(taskId);
       patchAction(taskId, { busy: undefined });
-      await refresh();
+      // refresh() reloads the Historial tab's runs; the Backups tab has its
+      // own paginated fetch, so reload it too or a just-produced backup
+      // won't show until the user navigates away and back.
+      await Promise.all([refresh(), loadBackups(backupsPage)]);
     } catch (err) {
       patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
     }
