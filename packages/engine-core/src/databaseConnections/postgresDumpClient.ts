@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { stat } from 'node:fs/promises';
+import { resolveToolPath } from '../toolPaths.js';
 import type { DatabaseDumpClient, DatabaseConnectionConfig } from './types.js';
 import type { PostgresToolRegistry } from './postgresToolRegistry.js';
 
@@ -67,8 +68,8 @@ async function detectServerVersion(psqlPath: string, config: DatabaseConnectionC
  * of a child process are not.
  */
 export function createPostgresDumpClient(deps: PostgresDumpClientDeps = {}): DatabaseDumpClient {
-  const defaultPgDumpPath = deps.defaultPgDumpPath ?? process.env.PG_DUMP_PATH;
-  const psqlPath = deps.psqlPath ?? process.env.PSQL_PATH;
+  const defaultPgDumpPath = deps.defaultPgDumpPath ?? resolveToolPath('PG_DUMP_PATH', 'pg_dump.exe');
+  const psqlPath = deps.psqlPath ?? resolveToolPath('PSQL_PATH', 'psql.exe');
   const registry = deps.registry;
 
   return {

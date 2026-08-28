@@ -154,11 +154,16 @@ export interface BackupTask {
   windowsTaskName: string | null;
 }
 
+/** How a run was initiated. 'scheduled' only when invoked by `run-due` off a Windows Scheduled Task; everything else ("Ejecutar ahora", task:run) is 'manual'. */
+export type RunTrigger = 'manual' | 'scheduled';
+
 export interface BackupRun {
   id: string;
   taskId: string;
   clientId: string;
   strategy: BackupStrategyKind;
+  /** See RunTrigger. Used by isTaskDue so a manual run never suppresses that day's scheduled run. */
+  trigger: RunTrigger;
   transportId: string | null;
   databaseConnectionId: string | null;
   status: BackupRunStatus;

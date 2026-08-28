@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveToolPath } from '../toolPaths.js';
 import type { ConnectionTestResult } from '../transports/types.js';
 import type { DatabaseConnectionConfig } from './types.js';
 
@@ -41,7 +42,9 @@ async function getLocalToolVersion(psqlPath: string): Promise<string | undefined
  * not a compatibility gate — nothing here blocks a task from running based
  * on a version mismatch.
  */
-export function createPostgresConnectionTester(psqlPath: string | undefined = process.env.PSQL_PATH) {
+export function createPostgresConnectionTester(
+  psqlPath: string | undefined = resolveToolPath('PSQL_PATH', 'psql.exe')
+) {
   return async function testPostgresConnection(config: DatabaseConnectionConfig): Promise<ConnectionTestResult> {
     if (!psqlPath) {
       return { ok: false, message: 'PSQL_PATH is not configured — cannot test the connection.' };

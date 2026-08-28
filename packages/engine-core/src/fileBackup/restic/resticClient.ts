@@ -4,6 +4,7 @@ import { createWriteStream } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { toResticPath } from './paths.js';
+import { resolveToolPath } from '../../toolPaths.js';
 import type { ResticBackupSummary, ResticDiffStats, ResticSnapshot } from '../types.js';
 
 const execFileAsync = promisify(execFile);
@@ -23,16 +24,17 @@ interface ExecErrorWithOutput {
 }
 
 /**
- * Dev-time only for this increment, matching how PG_DUMP_PATH/PSQL_PATH
- * etc. started — a plain env var. Vendoring restic.exe into the Tauri
- * sidecar (mirroring prepare-pg-tools.mjs) is real but separate packaging
- * work, deliberately deferred to when the DB tools' own vendoring was.
+ * RESTIC_PATH when set (dev, and the Tauri sidecar which sets it
+ * explicitly), otherwise the restic.exe vendored next to engine-cli.exe on
+ * a real install — the same fallback the Postgres tools use, so a Windows
+ * Scheduled Task running `file-task:run-due` (which inherits no env vars)
+ * can still find restic. See toolPaths.ts.
  */
 function resolveResticPath(): string {
-  const configured = process.env.RESTIC_PATH;
+  const configured = resolveToolPath('RESTIC_PATH', 'restic.exe');
   if (!configured) {
     throw new Error(
-      'RESTIC_PATH is not configured — cannot run restic. Point it at a real restic.exe (packaging/vendoring is a separate, later increment).'
+      'RESTIC_PATH is not configured and no vendored restic.exe was found next to engine-cli.exe — cannot run restic.'
     );
   }
   return configured;

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { BackupRun, BackupTask, Client, DbEngine } from '../types.js';
+import type { BackupRun, BackupTask, Client, DbEngine, RunTrigger } from '../types.js';
 import type { ClientsRepo } from '../db/repositories/clientsRepo.js';
 import type { TransportsRepo } from '../db/repositories/transportsRepo.js';
 import type { DatabaseConnectionsRepo } from '../db/repositories/databaseConnectionsRepo.js';
@@ -38,6 +38,16 @@ export interface RunBackupTaskDeps {
   /** Only needed for direct_dump's postgres version-aware tool registry (see postgresToolRegistry.ts) — omit to keep today's single-PG_DUMP_PATH behavior exactly as-is. */
   settingsRepo?: SettingsRepo;
   onUnknownHost?: (presented: { keyType: string; fingerprintSha256: string }) => Promise<boolean>;
+  /**
+   * How this run was initiated. `runDueTasks` (the scheduler's entry point,
+   * invoked by a Windows Scheduled Task via `engine-cli run-due`) forces
+   * this to 'scheduled' for every run it starts; every other caller
+   * ("Ejecutar ahora", task:run) leaves it undefined and the run is
+   * recorded as 'manual'. isTaskDue() keys its "did the scheduled run
+   * already happen today?" check off this, so a manual run during the day
+   * never makes that day's scheduled run get skipped.
+   */
+  runTrigger?: RunTrigger;
   /**
    * Overrides how the strategy executor is resolved. Production code never
    * sets this — it exists so tests can inject a fake BackupStrategyExecutor
@@ -225,6 +235,7 @@ export async function runBackupTask(task: BackupTask, deps: RunBackupTaskDeps): 
     transportId: task.transportId,
     databaseConnectionId: task.databaseConnectionId,
     pid: process.pid,
+    trigger: deps.runTrigger,
   });
 
   const logger = createRunLogger(run.id, deps.logEventsRepo);

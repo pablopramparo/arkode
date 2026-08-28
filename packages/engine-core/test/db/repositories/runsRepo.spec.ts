@@ -43,6 +43,62 @@ function insertRunWithFile(ctx: TestContext, taskId: string, clientId: string, s
   return id;
 }
 
+function insertRunWithTrigger(
+  ctx: TestContext,
+  taskId: string,
+  clientId: string,
+  trigger: 'manual' | 'scheduled',
+  hoursAgo: number
+) {
+  const id = randomUUID();
+  ctx.db
+    .prepare(
+      `INSERT INTO backup_runs (id, task_id, client_id, strategy, status, trigger, started_at, finished_at, pid)
+       VALUES (?, ?, ?, 'fetch_existing', 'Success', ?, datetime('now', '-' || ? || ' hours'), datetime('now', '-' || ? || ' hours'), 1)`
+    )
+    .run(id, taskId, clientId, trigger, hoursAgo, hoursAgo);
+  return id;
+}
+
+describe('runsRepo.getLatestScheduledByTask', () => {
+  it('returns the newest run with trigger = scheduled, ignoring manual runs entirely', () => {
+    const ctx = createTestContext();
+    const { task, client } = seedTask(ctx);
+    insertRunWithTrigger(ctx, task.id, client.id, 'scheduled', 30);
+    const newerScheduled = insertRunWithTrigger(ctx, task.id, client.id, 'scheduled', 10);
+    insertRunWithTrigger(ctx, task.id, client.id, 'manual', 1); // most recent overall, but manual
+
+    const latest = ctx.runsRepo.getLatestScheduledByTask(task.id);
+
+    expect(latest?.id).toBe(newerScheduled);
+    expect(latest?.trigger).toBe('scheduled');
+  });
+
+  it('returns null when the task has only ever had manual runs', () => {
+    const ctx = createTestContext();
+    const { task, client } = seedTask(ctx);
+    insertRunWithTrigger(ctx, task.id, client.id, 'manual', 2);
+    insertRunWithTrigger(ctx, task.id, client.id, 'manual', 1);
+
+    expect(ctx.runsRepo.getLatestScheduledByTask(task.id)).toBeNull();
+  });
+
+  it("defaults a run created without an explicit trigger to 'manual'", () => {
+    const ctx = createTestContext();
+    const { task, client } = seedTask(ctx);
+    const run = ctx.runsRepo.create({
+      taskId: task.id,
+      clientId: client.id,
+      strategy: 'fetch_existing',
+      transportId: null,
+      databaseConnectionId: null,
+      pid: 1,
+    });
+    expect(run.trigger).toBe('manual');
+    expect(ctx.runsRepo.getLatestScheduledByTask(task.id)).toBeNull();
+  });
+});
+
 describe('runsRepo.listBackups', () => {
   it('only returns Success/Warning runs that have a file on disk', () => {
     const ctx = createTestContext();

@@ -1,0 +1,12 @@
+-- Distinguishes a run started by the Windows Scheduled Task (via
+-- `engine-cli run-due`) from one a person started by hand ("Ejecutar
+-- ahora" / task:run). isTaskDue() now only lets a *scheduled* attempt on a
+-- given calendar day suppress that day's scheduled trigger — previously
+-- ANY attempt did, so running a backup manually in the morning silently
+-- cancelled that night's scheduled run, which is exactly the surprise a
+-- user hit in production.
+--
+-- Existing rows default to 'manual': the safe direction, since a stale
+-- 'scheduled' value could suppress a real scheduled run, whereas 'manual'
+-- never can.
+ALTER TABLE backup_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'manual';

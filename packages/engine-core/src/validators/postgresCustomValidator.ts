@@ -1,17 +1,20 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveToolPath } from '../toolPaths.js';
 import type { DumpValidator, ValidationResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
 
 /**
  * Validates a PostgreSQL custom-format dump structurally via `pg_restore
- * --list`, rather than just trusting file existence/size. The binary path is
- * a dev-time env var for now (PG_RESTORE_PATH) — vendoring pg_restore.exe
- * into the installer is a packaging concern deferred until after the
- * vertical slice works, per the architecture plan (§2).
+ * --list`, rather than just trusting file existence/size. The binary path
+ * comes from PG_RESTORE_PATH, or — on a real install, where a Scheduled
+ * Task run has no env vars at all — the pg_restore.exe vendored next to
+ * engine-cli.exe (see toolPaths.ts).
  */
-export function createPostgresCustomValidator(pgRestorePath: string | undefined = process.env.PG_RESTORE_PATH): DumpValidator {
+export function createPostgresCustomValidator(
+  pgRestorePath: string | undefined = resolveToolPath('PG_RESTORE_PATH', 'pg_restore.exe')
+): DumpValidator {
   return {
     engine: 'postgres',
     async validate(localFilePath: string): Promise<ValidationResult> {

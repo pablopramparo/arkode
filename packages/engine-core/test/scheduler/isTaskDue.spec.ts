@@ -25,6 +25,7 @@ function makeTask(overrides: Partial<BackupTask> = {}): BackupTask {
   };
 }
 
+/** isTaskDue is only ever handed the latest *scheduled* run, so these fixtures represent that. */
 function makeRun(startedAt: string): BackupRun {
   return {
     id: 'r1',
@@ -34,6 +35,7 @@ function makeRun(startedAt: string): BackupRun {
     transportId: 'tr1',
     databaseConnectionId: null,
     status: 'Success',
+    trigger: 'scheduled',
     remoteFileName: 'f.dump',
     remotePath: null,
     remoteModifiedAt: null,
@@ -79,13 +81,20 @@ describe('isTaskDue', () => {
     expect(isTaskDue(task, new Date(2026, 0, 1, 9, 0), null)).toBe(true);
   });
 
-  it('is not due if any attempt already happened today, regardless of the scheduled time', () => {
+  it('is not due if a scheduled attempt already happened today, regardless of the scheduled time', () => {
     const task = makeTask({ scheduleTime: '03:00' });
-    const runToday = makeRun(new Date(2026, 0, 1, 3, 0).toISOString());
-    expect(isTaskDue(task, new Date(2026, 0, 1, 9, 0), runToday)).toBe(false);
+    const scheduledRunToday = makeRun(new Date(2026, 0, 1, 3, 0).toISOString());
+    expect(isTaskDue(task, new Date(2026, 0, 1, 9, 0), scheduledRunToday)).toBe(false);
   });
 
-  it('is due again if the last attempt was on a previous day (a new day has started)', () => {
+  it('is still due when only a MANUAL run happened today (runDueTasks passes the latest *scheduled* run, so a manual "Ejecutar ahora" is simply not seen here — null)', () => {
+    const task = makeTask({ scheduleTime: '21:30' });
+    // A manual run earlier today does not become `latestScheduledRun`, so
+    // the due-check is handed null and the scheduled run must still fire.
+    expect(isTaskDue(task, new Date(2026, 0, 1, 21, 30), null)).toBe(true);
+  });
+
+  it('is due again if the last scheduled attempt was on a previous day (a new day has started)', () => {
     const task = makeTask({ scheduleTime: '03:00' });
     const runYesterday = makeRun(new Date(2025, 11, 31, 3, 0).toISOString());
     expect(isTaskDue(task, new Date(2026, 0, 1, 9, 0), runYesterday)).toBe(true);

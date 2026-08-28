@@ -825,7 +825,11 @@ program
       logEventsRepo: ctx.logEventsRepo,
       knownHostsRepo: ctx.knownHostsRepo,
       retentionDeletionsRepo: ctx.retentionDeletionsRepo,
+      settingsRepo: ctx.settingsRepo,
       secretStore: ctx.secretStore,
+      // runDueTasks itself stamps every run it starts as 'scheduled' (see
+      // its own note) — nothing to set here for that.
+      //
       // An unattended run has no interactive terminal, so this correctly
       // (and intentionally) rejects any host that isn't already known —
       // never silently trusting a new host just because nobody's watching.

@@ -26,14 +26,18 @@ export async function runDueTasks(
 ): Promise<RunDueResult[]> {
   const results: RunDueResult[] = [];
   for (const task of tasks) {
-    const latestRun = deps.runsRepo.getLatestByTask(task.id);
-    if (!isTaskDue(task, now, latestRun)) {
+    const latestScheduledRun = deps.runsRepo.getLatestScheduledByTask(task.id);
+    if (!isTaskDue(task, now, latestScheduledRun)) {
       results.push({ taskId: task.id, taskName: task.name, ran: false });
       continue;
     }
 
     try {
-      const result = await runBackupTask(task, deps);
+      // runDueTasks is the scheduler's own entry point (a Windows Scheduled
+      // Task invokes it via `engine-cli run-due`), so every run it starts is
+      // 'scheduled' by definition — recorded so isTaskDue can tell it apart
+      // from a manual "Ejecutar ahora" the same day.
+      const result = await runBackupTask(task, { ...deps, runTrigger: 'scheduled' });
       results.push({ taskId: task.id, taskName: task.name, ran: true, result });
     } catch (err) {
       results.push({

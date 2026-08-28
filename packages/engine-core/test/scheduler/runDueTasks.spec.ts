@@ -128,6 +128,68 @@ describe('runDueTasks', () => {
     });
   });
 
+  it('still runs a task whose only attempt today was a MANUAL run — a manual "Ejecutar ahora" must not cancel that day\'s scheduled run', async () => {
+    await withTempDir(async (dir) => {
+      const ctx = createTestContext();
+      // scheduleTime in the past relative to `now` below, so the only thing
+      // that could hold it back is the "already ran today" guard.
+      const task = seedTask(ctx, join(dir, 'manual-then-scheduled'), '00:00');
+
+      // A manual run earlier "today" (real wall-clock date, matching the
+      // real `now` passed to runDueTasks below).
+      const manualRun = ctx.runsRepo.create({
+        taskId: task.id,
+        clientId: task.clientId,
+        strategy: 'fetch_existing',
+        transportId: task.transportId,
+        databaseConnectionId: null,
+        pid: process.pid,
+        trigger: 'manual',
+      });
+      ctx.runsRepo.markFinished(manualRun.id, 'Success');
+
+      let produceCalls = 0;
+      const results = await runDueTasks(
+        [task],
+        buildDeps(ctx, createFakeExecutor(() => produceCalls++)),
+        new Date()
+      );
+
+      expect(produceCalls).toBe(1);
+      expect(results[0].ran).toBe(true);
+      expect(results[0].result?.run.status).toBe('Success');
+      expect(results[0].result?.run.trigger).toBe('scheduled');
+    });
+  });
+
+  it('does NOT re-run a task that already had a SCHEDULED run today (both Windows triggers firing the same day stay deduped)', async () => {
+    await withTempDir(async (dir) => {
+      const ctx = createTestContext();
+      const task = seedTask(ctx, join(dir, 'scheduled-twice'), '00:00');
+
+      const scheduledRun = ctx.runsRepo.create({
+        taskId: task.id,
+        clientId: task.clientId,
+        strategy: 'fetch_existing',
+        transportId: task.transportId,
+        databaseConnectionId: null,
+        pid: process.pid,
+        trigger: 'scheduled',
+      });
+      ctx.runsRepo.markFinished(scheduledRun.id, 'Success');
+
+      let produceCalls = 0;
+      const results = await runDueTasks(
+        [task],
+        buildDeps(ctx, createFakeExecutor(() => produceCalls++)),
+        new Date()
+      );
+
+      expect(produceCalls).toBe(0);
+      expect(results[0].ran).toBe(false);
+    });
+  });
+
   it("isolates a task that throws before runBackupTask's own error handling even starts (e.g. a bad client reference)", async () => {
     await withTempDir(async (dir) => {
       const ctx = createTestContext();

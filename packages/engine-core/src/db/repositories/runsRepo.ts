@@ -1,6 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import type { BackupRun, BackupRunStatus } from '../../types.js';
+import type { BackupRun, BackupRunStatus, RunTrigger } from '../../types.js';
 
 interface BackupRunRow {
   id: string;
@@ -10,6 +10,7 @@ interface BackupRunRow {
   transport_id: string | null;
   database_connection_id: string | null;
   status: string;
+  trigger: string;
   remote_file_name: string | null;
   remote_path: string | null;
   remote_modified_at: string | null;
@@ -36,6 +37,7 @@ function toDomain(row: BackupRunRow): BackupRun {
     transportId: row.transport_id,
     databaseConnectionId: row.database_connection_id,
     status: row.status as BackupRunStatus,
+    trigger: row.trigger as RunTrigger,
     remoteFileName: row.remote_file_name,
     remotePath: row.remote_path,
     remoteModifiedAt: row.remote_modified_at,
@@ -61,6 +63,8 @@ export interface CreateRunInput {
   transportId: string | null;
   databaseConnectionId: string | null;
   pid: number;
+  /** Defaults to 'manual' when omitted. */
+  trigger?: RunTrigger;
 }
 
 export interface SuccessfulFileSignature {
@@ -77,6 +81,8 @@ export interface RunsRepo {
   getLatestByTask(taskId: string): BackupRun | null;
   /** Latest run that actually has a file on disk (Success or Warning) — for showing size/age of the last real backup, distinct from the latest attempt's status. */
   getLatestWithFileByTask(taskId: string): BackupRun | null;
+  /** Latest run initiated by the scheduler (trigger = 'scheduled'), newest first — the due-check's "did the scheduled run already happen today?" signal, deliberately blind to manual runs. */
+  getLatestScheduledByTask(taskId: string): BackupRun | null;
   /** Signatures of Success runs for a task, used to avoid redundant re-downloads. */
   listSuccessfulFileSignatures(taskId: string): SuccessfulFileSignature[];
   /** Success runs for a task, newest first — the population retention operates over. */
@@ -99,9 +105,9 @@ export interface ListBackupsOptions {
 export function createRunsRepo(db: Database): RunsRepo {
   const insertStmt = db.prepare(
     `INSERT INTO backup_runs
-       (id, task_id, client_id, strategy, transport_id, database_connection_id, status, started_at, pid)
+       (id, task_id, client_id, strategy, transport_id, database_connection_id, status, trigger, started_at, pid)
      VALUES
-       (@id, @taskId, @clientId, @strategy, @transportId, @databaseConnectionId, 'Pending', strftime('%Y-%m-%dT%H:%M:%fZ','now'), @pid)`
+       (@id, @taskId, @clientId, @strategy, @transportId, @databaseConnectionId, 'Pending', @trigger, strftime('%Y-%m-%dT%H:%M:%fZ','now'), @pid)`
   );
   const getStmt = db.prepare<[string], BackupRunRow>('SELECT * FROM backup_runs WHERE id = ?');
   // `, rowid DESC` on every "newest first" query below is a real, hit-in-CI
@@ -120,6 +126,9 @@ export function createRunsRepo(db: Database): RunsRepo {
   );
   const getLatestWithFileByTaskStmt = db.prepare<[string], BackupRunRow>(
     `SELECT * FROM backup_runs WHERE task_id = ? AND local_path IS NOT NULL ORDER BY started_at DESC, rowid DESC LIMIT 1`
+  );
+  const getLatestScheduledByTaskStmt = db.prepare<[string], BackupRunRow>(
+    `SELECT * FROM backup_runs WHERE task_id = ? AND trigger = 'scheduled' ORDER BY started_at DESC, rowid DESC LIMIT 1`
   );
   const setStatusStmt = db.prepare('UPDATE backup_runs SET status = ? WHERE id = ?');
   const markProducingStmt = db.prepare(`UPDATE backup_runs SET status = 'Producing' WHERE id = ?`);
@@ -191,6 +200,7 @@ export function createRunsRepo(db: Database): RunsRepo {
         transportId: input.transportId,
         databaseConnectionId: input.databaseConnectionId,
         pid: input.pid,
+        trigger: input.trigger ?? 'manual',
       });
       setStatusStmt.run('Running', id);
       const row = getStmt.get(id);
@@ -234,6 +244,11 @@ export function createRunsRepo(db: Database): RunsRepo {
 
     getLatestWithFileByTask(taskId) {
       const row = getLatestWithFileByTaskStmt.get(taskId);
+      return row ? toDomain(row) : null;
+    },
+
+    getLatestScheduledByTask(taskId) {
+      const row = getLatestScheduledByTaskStmt.get(taskId);
       return row ? toDomain(row) : null;
     },
 
