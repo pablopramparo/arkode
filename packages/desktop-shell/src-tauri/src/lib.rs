@@ -6,6 +6,20 @@ use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+/// Tauri's `path().resolve(.., Resource)` returns a Windows extended-length
+/// ("verbatim") path, `\\?\C:\...`. That works for the OS, but it leaks into
+/// child processes' argv[0] and shows up verbatim in e.g. a `--version`
+/// banner surfaced in the UI. Strip the prefix for a clean path -- the
+/// non-verbatim form is equivalent for every path this app resolves (all
+/// short, all local).
+fn clean_resource_path(p: std::path::PathBuf) -> String {
+  let s = p.to_string_lossy().to_string();
+  s.strip_prefix(r"\\?\UNC\")
+    .map(|rest| format!(r"\\{rest}"))
+    .or_else(|| s.strip_prefix(r"\\?\").map(str::to_string))
+    .unwrap_or(s)
+}
+
 /// Mirrors engine-core's paths.ts logsDir() (CODEBIUS_APP_DATA_DIR override,
 /// else %PROGRAMDATA%\arkode\logs) without depending on any TypeScript code
 /// -- this is Rust-side only, used solely to find where to append the
@@ -210,17 +224,17 @@ pub fn run() {
         // and CLAUDE.md's "Packaging" section) — engine-core already reads
         // these exact env vars as its default tool paths, so no engine-core
         // code needed to change for a real install to have them "just work"
-        // without the dev-time env vars being set by hand. mysqldump/
-        // mariadb-dump are deliberately NOT vendored (GPLv2 — a real,
-        // confirmed decision, not an oversight) and so get no equivalent env
-        // var here; those stay a manual per-machine install either way.
+        // without the dev-time env vars being set by hand. The MariaDB
+        // dumper + client (resources/mariadb/, prepare-mariadb-tools.mjs) get
+        // the same treatment below via MARIADB_DUMP_PATH/MYSQL_CLI_PATH;
+        // Oracle's own mysqldump/mysql stay unbundled (arkode ships one
+        // family).
         let resolve_pg_tool = |name: &str| {
           app
             .path()
             .resolve(format!("resources/pgsql/bin/{name}"), tauri::path::BaseDirectory::Resource)
+            .map(clean_resource_path)
             .unwrap_or_else(|_| panic!("failed to resolve vendored {name} path"))
-            .to_string_lossy()
-            .to_string()
         };
 
         // Vendored by prepare-restic.mjs (see that script + CLAUDE.md's
@@ -234,9 +248,8 @@ pub fn run() {
           app
             .path()
             .resolve(format!("resources/restic/{name}"), tauri::path::BaseDirectory::Resource)
+            .map(clean_resource_path)
             .unwrap_or_else(|_| panic!("failed to resolve vendored {name} path"))
-            .to_string_lossy()
-            .to_string()
         };
 
         // MariaDB's dumper + client, GPLv2 (see LICENSES/NOTICE.md). Bundled
@@ -251,9 +264,8 @@ pub fn run() {
           app
             .path()
             .resolve(format!("resources/mariadb/{name}"), tauri::path::BaseDirectory::Resource)
+            .map(clean_resource_path)
             .unwrap_or_else(|_| panic!("failed to resolve vendored {name} path"))
-            .to_string_lossy()
-            .to_string()
         };
 
         let (mut rx, child) = app
