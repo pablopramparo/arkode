@@ -8,7 +8,14 @@ on:
 
 jobs:
   engine-core:
-    runs-on: ubuntu-latest
+    # windows-2022, not ubuntu: arkode is Windows-only, and the file-backup
+    # domain's code enforces absolute Windows paths (fileBackupTasksRepo's
+    # createLocalFolder, restic/paths.ts's toResticPath) — the real-restic
+    # test suites literally cannot pass on Linux, where the temp dir is
+    # /tmp/... Pinned to 2022 for the same reason release.yml is (newer
+    # images moved to a VS version node-gyp's finder doesn't recognise,
+    # breaking better-sqlite3's native build).
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
@@ -19,24 +26,24 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Cache vendored restic binary
+        uses: actions/cache@v4
+        with:
+          path: packages/desktop-shell/.build-cache
+          key: restic-tool-${{ hashFiles('packages/desktop-shell/scripts/prepare-restic.mjs') }}
+
       - run: pnpm install --frozen-lockfile
 
-      # engine-core/test/fileBackup/**/*.spec.ts's real-restic suites
-      # self-skip when RESTIC_PATH isn't set (see resticClient.spec.ts) --
-      # without this they've never actually run in CI, only by hand on the
-      # dev machine. Windows packaging vendors restic via
-      # scripts/prepare-restic.mjs (a .zip), but this job runs on
-      # ubuntu-latest, so it needs restic's separate Linux release asset
-      # (a single bzip2-compressed binary, not a zip -- confirmed by hand
-      # against a real release) instead of reusing that script.
-      - name: Fetch restic (for the real-restic-gated file-backup tests)
-        run: |
-          curl -fL -o /tmp/restic.bz2 https://github.com/restic/restic/releases/download/v0.19.1/restic_0.19.1_linux_amd64.bz2
-          bunzip2 /tmp/restic.bz2
-          chmod +x /tmp/restic
-          /tmp/restic version
-          echo "RESTIC_PATH=/tmp/restic" >> "$GITHUB_ENV"
+      # Vendors the real Windows restic.exe so the real-restic-gated
+      # file-backup suites (test/fileBackup/**) actually run instead of
+      # self-skipping — same step release.yml uses.
+      - name: Vendor restic (for the real-restic-gated file-backup tests)
+        run: pnpm --filter desktop-shell prepare-restic
 
-      - run: pnpm --filter engine-core build
-      - run: pnpm --filter engine-cli build
-      - run: pnpm --filter engine-core test
+      - name: Run engine-core tests
+        env:
+          RESTIC_PATH: ${{ github.workspace }}\packages\desktop-shell\src-tauri\resources\restic\restic.exe
+        run: |
+          pnpm --filter engine-core build
+          pnpm --filter engine-cli build
+          pnpm --filter engine-core test
