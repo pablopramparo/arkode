@@ -83,6 +83,12 @@ jobs:
           path: packages/desktop-shell/.build-cache
           key: restic-tool-${{ hashFiles('packages/desktop-shell/scripts/prepare-restic.mjs') }}
 
+      - name: Cache vendored MariaDB client tools
+        uses: actions/cache@v4
+        with:
+          path: packages/desktop-shell/.build-cache
+          key: mariadb-tools-${{ hashFiles('packages/desktop-shell/scripts/prepare-mariadb-tools.mjs') }}
+
       - name: Cache pkg base binaries
         uses: actions/cache@v4
         with:

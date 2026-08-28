@@ -39,6 +39,13 @@ const BUNDLED_RELATIVE_PATH: Record<string, string> = {
   'pg_restore.exe': 'resources/pgsql/bin/pg_restore.exe',
   'psql.exe': 'resources/pgsql/bin/psql.exe',
   'restic.exe': 'resources/restic/restic.exe',
+  // MariaDB's dumper + client, GPLv2 (see LICENSES/NOTICE.md). Bundled so a
+  // direct_dump of a MySQL *or* MariaDB server needs zero configuration —
+  // mariadb-dump / mariadb speak the MySQL wire protocol. Oracle's own
+  // mysqldump/mysql are deliberately NOT bundled (also GPLv2, but arkode
+  // ships one family, not both).
+  'mariadb-dump.exe': 'resources/mariadb/mariadb-dump.exe',
+  'mariadb.exe': 'resources/mariadb/mariadb.exe',
 };
 
 /**

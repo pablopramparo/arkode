@@ -9,6 +9,7 @@ import { createMariaDbDumpClient } from '../databaseConnections/mariaDbDumpClien
 import { createPostgresToolRegistry } from '../databaseConnections/postgresToolRegistry.js';
 import { createMysqlToolRegistry } from '../databaseConnections/mysqlToolRegistry.js';
 import { createMariaDbToolRegistry } from '../databaseConnections/mariaDbToolRegistry.js';
+import { resolveToolPath } from '../toolPaths.js';
 import type { BackupStrategyContext, BackupStrategyExecutor, ProducedDump } from './types.js';
 
 const EXTENSION_BY_ENGINE: Record<DatabaseConnection['engine'], string> = {
@@ -32,8 +33,24 @@ function resolveDumpClient(engine: DatabaseConnection['engine'], settingsRepo?: 
       return createPostgresDumpClient(
         settingsRepo ? { registry: createPostgresToolRegistry(settingsRepo) } : undefined
       );
-    case 'mysql':
-      return createMysqlDumpClient(settingsRepo ? { registry: createMysqlToolRegistry(settingsRepo) } : undefined);
+    case 'mysql': {
+      const mysqlRegistry = settingsRepo ? createMysqlToolRegistry(settingsRepo) : undefined;
+      // Use the real mysqldump only if one is actually available — an
+      // explicit MYSQLDUMP_PATH, or a registered version. Otherwise fall
+      // back to the bundled `mariadb-dump` (zero-config): it produces a
+      // valid plain-SQL dump of a MySQL server for the common cases, and
+      // the result still validates as MySQL SQL (mysqlDumpValidator covers
+      // both engines). Oracle's mysqldump is never bundled.
+      const hasRealMysqldump =
+        Boolean(resolveToolPath('MYSQLDUMP_PATH', 'mysqldump.exe')) ||
+        (mysqlRegistry ? Object.keys(mysqlRegistry.list()).length > 0 : false);
+      if (hasRealMysqldump) {
+        return createMysqlDumpClient(mysqlRegistry ? { registry: mysqlRegistry } : undefined);
+      }
+      return createMariaDbDumpClient(
+        settingsRepo ? { registry: createMariaDbToolRegistry(settingsRepo) } : undefined
+      );
+    }
     case 'mariadb':
       return createMariaDbDumpClient(settingsRepo ? { registry: createMariaDbToolRegistry(settingsRepo) } : undefined);
   }

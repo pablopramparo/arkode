@@ -1,8 +1,10 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { stat } from 'node:fs/promises';
+import { resolveToolPath } from '../toolPaths.js';
 import type { DatabaseDumpClient, DatabaseConnectionConfig } from './types.js';
 import type { MysqlToolRegistry } from './mysqlToolRegistry.js';
+import { resolveMysqlFamilyCli } from './mysqlClientResolution.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -61,8 +63,11 @@ async function detectServerVersion(mysqlPath: string, config: DatabaseConnection
  * CLI argument, for the same reason as pg_dump's PGPASSWORD.
  */
 export function createMysqlDumpClient(deps: MysqlDumpClientDeps = {}): DatabaseDumpClient {
-  const defaultMysqldumpPath = deps.defaultMysqldumpPath ?? process.env.MYSQLDUMP_PATH;
-  const mysqlPath = deps.mysqlPath ?? process.env.MYSQL_CLI_PATH;
+  // No bundled fallback here on purpose: arkode ships mariadb-dump, not
+  // Oracle's mysqldump. directDumpExecutor.ts routes a `mysql`-engine task
+  // to the MariaDB dumper when no real mysqldump is configured.
+  const defaultMysqldumpPath = deps.defaultMysqldumpPath ?? resolveToolPath('MYSQLDUMP_PATH', 'mysqldump.exe');
+  const mysqlPath = deps.mysqlPath ?? resolveMysqlFamilyCli()?.path;
   const registry = deps.registry;
 
   return {

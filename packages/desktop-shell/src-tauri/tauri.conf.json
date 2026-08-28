@@ -1,13 +1,13 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "arkode",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "identifier": "com.codebius.arkode",
   "build": {
     "frontendDist": "../../ui/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "pnpm --filter ui dev",
-    "beforeBuildCommand": "pnpm --filter desktop-shell prepare-sidecar && pnpm --filter desktop-shell prepare-pg-tools && pnpm --filter desktop-shell prepare-restic && pnpm --filter ui build"
+    "beforeBuildCommand": "pnpm --filter desktop-shell prepare-sidecar && pnpm --filter desktop-shell prepare-pg-tools && pnpm --filter desktop-shell prepare-restic && pnpm --filter desktop-shell prepare-mariadb-tools && pnpm --filter ui build"
   },
   "app": {
     "windows": [
@@ -44,7 +44,10 @@
     ],
     "resources": [
       "resources/pgsql/bin/*",
-      "resources/restic/*"
+      "resources/restic/*",
+      "resources/mariadb/*",
+      "resources/mariadb/plugin/*",
+      "LICENSES/*"
     ],
     "windows": {
       "nsis": {

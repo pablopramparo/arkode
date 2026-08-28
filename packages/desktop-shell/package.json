@@ -7,7 +7,8 @@
     "build": "tauri build",
     "prepare-sidecar": "node scripts/prepare-sidecar.mjs",
     "prepare-pg-tools": "node scripts/prepare-pg-tools.mjs",
-    "prepare-restic": "node scripts/prepare-restic.mjs"
+    "prepare-restic": "node scripts/prepare-restic.mjs",
+    "prepare-mariadb-tools": "node scripts/prepare-mariadb-tools.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

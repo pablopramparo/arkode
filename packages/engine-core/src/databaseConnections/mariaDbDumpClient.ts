@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { stat } from 'node:fs/promises';
 import type { DatabaseDumpClient, DatabaseConnectionConfig } from './types.js';
 import type { MariaDbToolRegistry } from './mariaDbToolRegistry.js';
+import { mysqlBinaryExtraArgs, resolveMariaDbFamilyDump, resolveMysqlFamilyCli } from './mysqlClientResolution.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -30,18 +31,23 @@ export interface MariaDbDumpClientDeps {
   registry?: MariaDbToolRegistry;
 }
 
-function baseArgs(config: DatabaseConnectionConfig): string[] {
-  const args = ['--host', config.host, '--port', String(config.port), '--user', config.username];
+function baseArgs(config: DatabaseConnectionConfig, extraArgs: string[] = []): string[] {
+  const args = [...extraArgs, '--host', config.host, '--port', String(config.port), '--user', config.username];
   if (config.sslMode) args.push(...SSL_ARGS[config.sslMode]);
   return args;
 }
 
 /** Best-effort — a failure here just means falling back to the default path, never blocks the dump itself. */
-async function detectServerVersion(mysqlPath: string, config: DatabaseConnectionConfig, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+async function detectServerVersion(
+  mysqlPath: string,
+  mysqlExtraArgs: string[],
+  config: DatabaseConnectionConfig,
+  env: NodeJS.ProcessEnv
+): Promise<string | undefined> {
   try {
     const { stdout } = await execFileAsync(
       mysqlPath,
-      [...baseArgs(config), '--batch', '--skip-column-names', '--execute=SELECT VERSION()', config.databaseName],
+      [...baseArgs(config, mysqlExtraArgs), '--batch', '--skip-column-names', '--execute=SELECT VERSION()', config.databaseName],
       { env }
     );
     return stdout.trim() || undefined;
@@ -78,8 +84,8 @@ async function detectServerVersion(mysqlPath: string, config: DatabaseConnection
  * PGPASSWORD.
  */
 export function createMariaDbDumpClient(deps: MariaDbDumpClientDeps = {}): DatabaseDumpClient {
-  const defaultMariaDbDumpPath = deps.defaultMariaDbDumpPath ?? process.env.MARIADB_DUMP_PATH;
-  const mysqlPath = deps.mysqlPath ?? process.env.MYSQL_CLI_PATH;
+  const defaultDump = resolveMariaDbFamilyDump(deps.defaultMariaDbDumpPath);
+  const cli = resolveMysqlFamilyCli(deps.mysqlPath);
   const registry = deps.registry;
 
   return {
@@ -88,18 +94,22 @@ export function createMariaDbDumpClient(deps: MariaDbDumpClientDeps = {}): Datab
       const env: NodeJS.ProcessEnv = { ...process.env };
       if (config.password) env.MYSQL_PWD = config.password;
 
-      let mariadbDumpPath = defaultMariaDbDumpPath;
-      if (registry && mysqlPath) {
-        const serverVersion = await detectServerVersion(mysqlPath, config, env);
+      let mariadbDumpPath = defaultDump?.path;
+      let dumpExtraArgs = defaultDump?.extraArgs ?? [];
+      if (registry && cli) {
+        const serverVersion = await detectServerVersion(cli.path, cli.extraArgs, config, env);
         const resolved = serverVersion ? registry.resolve(serverVersion) : null;
-        if (resolved) mariadbDumpPath = resolved.mariaDbDumpPath;
+        if (resolved) {
+          mariadbDumpPath = resolved.mariaDbDumpPath;
+          dumpExtraArgs = mysqlBinaryExtraArgs(resolved.mariaDbDumpPath);
+        }
       }
 
       if (!mariadbDumpPath) {
-        throw new Error('MARIADB_DUMP_PATH is not configured — cannot run mariadb-dump.');
+        throw new Error('No hay un mariadb-dump disponible — configurá MARIADB_DUMP_PATH o reinstalá arkode (lo trae incluido).');
       }
 
-      const args = [...baseArgs(config), `--result-file=${localTempPath}`, config.databaseName];
+      const args = [...baseArgs(config, dumpExtraArgs), `--result-file=${localTempPath}`, config.databaseName];
 
       try {
         await execFileAsync(mariadbDumpPath, args, { env });

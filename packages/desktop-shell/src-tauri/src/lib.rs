@@ -224,17 +224,33 @@ pub fn run() {
         };
 
         // Vendored by prepare-restic.mjs (see that script + CLAUDE.md's
-        // file-backup "Packaging" notes) — restic.exe is BSD-2-Clause
-        // (unlike mysqldump/mariadb-dump's GPLv2, which is why those two
-        // stay unvendored), a single static binary, so this needs no
-        // per-file exclusion list the way pgsql's DLL vendoring does.
-        // engine-core already reads RESTIC_PATH as its default restic
-        // binary location (see fileBackup/restic/resticClient.ts), so no
-        // engine-core code needed to change for this to "just work."
+        // file-backup "Packaging" notes) — restic.exe is BSD-2-Clause, a
+        // single static binary, so this needs no per-file exclusion list
+        // the way pgsql's DLL vendoring does. engine-core already reads
+        // RESTIC_PATH as its default restic binary location (see
+        // fileBackup/restic/resticClient.ts), so no engine-core code needed
+        // to change for this to "just work."
         let resolve_restic_tool = |name: &str| {
           app
             .path()
             .resolve(format!("resources/restic/{name}"), tauri::path::BaseDirectory::Resource)
+            .unwrap_or_else(|_| panic!("failed to resolve vendored {name} path"))
+            .to_string_lossy()
+            .to_string()
+        };
+
+        // MariaDB's dumper + client, GPLv2 (see LICENSES/NOTICE.md). Bundled
+        // as the zero-config tooling for BOTH direct_dump engines: a `mysql`
+        // task falls back to mariadb-dump when no real mysqldump is
+        // configured (see directDumpExecutor.ts), and the connection tester
+        // uses mariadb.exe when MYSQL_CLI_PATH is unset. engine-core's
+        // toolPaths.ts already resolves these relative to engine-cli.exe, so
+        // these env vars are belt-and-suspenders / explicitness, matching
+        // the pg + restic entries.
+        let resolve_mariadb_tool = |name: &str| {
+          app
+            .path()
+            .resolve(format!("resources/mariadb/{name}"), tauri::path::BaseDirectory::Resource)
             .unwrap_or_else(|_| panic!("failed to resolve vendored {name} path"))
             .to_string_lossy()
             .to_string()
@@ -250,6 +266,8 @@ pub fn run() {
             ("PG_RESTORE_PATH", resolve_pg_tool("pg_restore.exe")),
             ("PSQL_PATH", resolve_pg_tool("psql.exe")),
             ("RESTIC_PATH", resolve_restic_tool("restic.exe")),
+            ("MARIADB_DUMP_PATH", resolve_mariadb_tool("mariadb-dump.exe")),
+            ("MYSQL_CLI_PATH", resolve_mariadb_tool("mariadb.exe")),
           ])
           .spawn()
           .expect("failed to spawn the engine-cli sidecar");

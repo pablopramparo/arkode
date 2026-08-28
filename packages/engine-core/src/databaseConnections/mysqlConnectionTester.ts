@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ConnectionTestResult } from '../transports/types.js';
 import type { DatabaseConnectionConfig } from './types.js';
+import { mysqlFamilySslArgs, resolveMysqlFamilyCli } from './mysqlClientResolution.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -47,28 +48,45 @@ async function getLocalToolVersion(mysqlPath: string): Promise<string | undefine
  * "MariaDB" (e.g. "10.11.6-MariaDB") while MySQL's doesn't. This is version
  * *visibility*, not a compatibility gate — nothing here blocks a task from
  * running based on a version mismatch.
+ *
+ * With no explicit path and no MYSQL_CLI_PATH, this resolves the bundled
+ * MariaDB client (see mysqlClientResolution.ts) — so a MySQL/MariaDB
+ * connection test works out of the box on a real install. SSL flags are
+ * emitted in the syntax the resolved binary's flavor actually accepts
+ * (`mariadb` has no `--ssl-mode=X`).
  */
-export function createMysqlConnectionTester(mysqlPath: string | undefined = process.env.MYSQL_CLI_PATH) {
+export function createMysqlConnectionTester(mysqlPath?: string) {
+  const resolved = resolveMysqlFamilyCli(mysqlPath);
   return async function testMysqlConnection(config: DatabaseConnectionConfig): Promise<ConnectionTestResult> {
-    if (!mysqlPath) {
-      return { ok: false, message: 'MYSQL_CLI_PATH is not configured — cannot test the connection.' };
+    if (!resolved) {
+      return {
+        ok: false,
+        message: 'No hay un cliente mysql/mariadb disponible — configurá MYSQL_CLI_PATH o reinstalá arkode (trae el cliente de MariaDB incluido).',
+      };
     }
+    const { path: clientPath, flavor, extraArgs } = resolved;
 
-    const baseArgs = ['--host', config.host, '--port', String(config.port), '--user', config.username];
-    if (config.sslMode === 'disable') baseArgs.push('--ssl-mode=DISABLED');
-    else if (config.sslMode === 'require') baseArgs.push('--ssl-mode=REQUIRED');
-    else if (config.sslMode === 'verify-full') baseArgs.push('--ssl-mode=VERIFY_IDENTITY');
+    const baseArgs = [
+      ...extraArgs,
+      '--host',
+      config.host,
+      '--port',
+      String(config.port),
+      '--user',
+      config.username,
+      ...mysqlFamilySslArgs(flavor, config.sslMode),
+    ];
 
     const env: NodeJS.ProcessEnv = { ...process.env };
     if (config.password) env.MYSQL_PWD = config.password;
 
     const startedAt = Date.now();
     try {
-      await execFileAsync(mysqlPath, [...baseArgs, '--execute=SELECT 1', config.databaseName], { env });
+      await execFileAsync(clientPath, [...baseArgs, '--execute=SELECT 1', config.databaseName], { env });
       const latencyMs = Date.now() - startedAt;
       const [serverVersion, localToolVersion] = await Promise.all([
-        getServerVersion(mysqlPath, baseArgs, env, config.databaseName),
-        getLocalToolVersion(mysqlPath),
+        getServerVersion(clientPath, baseArgs, env, config.databaseName),
+        getLocalToolVersion(clientPath),
       ]);
       return { ok: true, message: 'Connection succeeded.', latencyMs, serverVersion, localToolVersion };
     } catch (err) {

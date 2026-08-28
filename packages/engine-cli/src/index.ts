@@ -24,6 +24,7 @@ import {
   scheduledTaskStatus,
   getDashboardStatus,
   getSystemInfo,
+  detectInstalledDbTools,
   copyPrivateKeyIntoAppStorage,
   createPostgresToolRegistry,
   downloadTool,
@@ -1127,6 +1128,13 @@ program
   .description("Show where the app's data lives and whether each direct_dump tool-path env var is configured and points at a real file.")
   .action(() => {
     console.log(JSON.stringify(getSystemInfo(), null, 2));
+  });
+
+program
+  .command('db-tools:detect')
+  .description('Scan the usual Windows install locations (Program Files, WAMP/XAMPP/Laragon) for pg_dump/psql/mysqldump/mysql/mariadb-dump/mariadb and print what was found, with versions.')
+  .action(async () => {
+    console.log(JSON.stringify(await detectInstalledDbTools(), null, 2));
   });
 
 program
@@ -2322,6 +2330,11 @@ program
           mysql: createMysqlToolRegistry(ctx.settingsRepo).list(),
           mariadb: createMariaDbToolRegistry(ctx.settingsRepo).list(),
         });
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/tool-registry/detect') {
+        sendJson(res, 200, { tools: await detectInstalledDbTools() });
         return;
       }
 

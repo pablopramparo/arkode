@@ -80,6 +80,8 @@ export { testDirectDumpCompatibility } from './databaseConnections/testDirectDum
 export type { DirectDumpCompatibilityResult, ToolCompatibility } from './databaseConnections/testDirectDumpCompatibility.js';
 export { downloadTool } from './databaseConnections/downloadTool.js';
 export type { DownloadableEngine, DownloadToolInput } from './databaseConnections/downloadTool.js';
+export { detectInstalledDbTools } from './databaseConnections/detectInstalledTools.js';
+export type { DetectedTool, DetectedToolKind } from './databaseConnections/detectInstalledTools.js';
 
 export * from './strategies/types.js';
 export { createFetchExistingExecutor } from './strategies/fetchExistingExecutor.js';

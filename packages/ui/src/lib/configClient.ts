@@ -85,3 +85,27 @@ export async function downloadTool(
   );
   return body.paths;
 }
+
+export type DetectedToolKind =
+  | 'pg_dump'
+  | 'pg_restore'
+  | 'psql'
+  | 'mysqldump'
+  | 'mysql'
+  | 'mariadb-dump'
+  | 'mariadb';
+
+export interface DetectedTool {
+  kind: DetectedToolKind;
+  path: string;
+  version: string | null;
+  majorMinor: string | null;
+}
+
+/** Scans the machine's usual install locations for DB client tools — see engine-core's detectInstalledTools.ts. */
+export async function detectInstalledTools(): Promise<DetectedTool[]> {
+  const body = await handleToolRegistryJson<{ tools: DetectedTool[] }>(
+    await fetch(`${getApiBase()}/tool-registry/detect`)
+  );
+  return body.tools;
+}

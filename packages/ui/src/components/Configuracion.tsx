@@ -15,8 +15,10 @@ import {
   registerTool,
   unregisterTool,
   downloadTool,
+  detectInstalledTools,
   type ToolRegistryData,
   type ToolRegistryEngine,
+  type DetectedTool,
 } from '../lib/configClient';
 import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
 import { primaryPillStyle } from '../lib/pillStyles';
@@ -237,12 +239,22 @@ function ToolRegistrySection({
   );
 }
 
-function ToolStatusBadge({ path, exists }: { path: string | null; exists: boolean }) {
+function ToolStatusBadge({
+  path,
+  exists,
+  source,
+}: {
+  path: string | null;
+  exists: boolean;
+  source?: 'env' | 'bundled' | 'bundled-fallback' | null;
+}) {
   const { label, color } = path == null
     ? { label: 'No configurada', color: 'var(--muted)' }
-    : exists
-      ? { label: 'Disponible', color: 'var(--success)' }
-      : { label: 'Configurada, no encontrada', color: 'var(--danger)' };
+    : !exists
+      ? { label: 'Configurada, no encontrada', color: 'var(--danger)' }
+      : source === 'bundled' || source === 'bundled-fallback'
+        ? { label: source === 'bundled' ? 'Incluida' : 'Incluida (MariaDB)', color: 'var(--success)' }
+        : { label: 'Disponible', color: 'var(--success)' };
   return (
     <span
       className="rounded-full px-2 py-0.5 text-xs font-medium"
@@ -254,6 +266,143 @@ function ToolStatusBadge({ path, exists }: { path: string | null; exists: boolea
 }
 
 const monoStyle: React.CSSProperties = { fontFamily: 'monospace', fontSize: '0.8125rem', color: 'var(--muted)' };
+
+/**
+ * What a detected binary can be registered as, if anything. A `mysqldump`
+ * whose --version says "MariaDB" is really a MariaDB tool, so it routes to
+ * the mariadb registry; a `pg_dump` needs its `pg_restore` sibling from the
+ * same folder to register the pair.
+ */
+function registerTarget(
+  tool: DetectedTool,
+  all: DetectedTool[]
+): { engine: ToolRegistryEngine; version: string; values: Record<string, string>; note?: string } | null {
+  if (!tool.majorMinor) return null;
+  const isMaria = (tool.version ?? '').toLowerCase().includes('mariadb');
+  if (tool.kind === 'pg_dump') {
+    const dir = tool.path.slice(0, Math.max(tool.path.lastIndexOf('\\'), tool.path.lastIndexOf('/')));
+    const restore = all.find(
+      (t) => t.kind === 'pg_restore' && t.path.toLowerCase().startsWith(dir.toLowerCase())
+    );
+    if (!restore) return null;
+    return {
+      engine: 'postgres',
+      version: tool.majorMinor,
+      values: { pgDumpPath: tool.path, pgRestorePath: restore.path },
+    };
+  }
+  if (tool.kind === 'mariadb-dump' || (tool.kind === 'mysqldump' && isMaria)) {
+    return { engine: 'mariadb', version: tool.majorMinor, values: { mariaDbDumpPath: tool.path } };
+  }
+  if (tool.kind === 'mysqldump') {
+    return { engine: 'mysql', version: tool.majorMinor, values: { mysqldumpPath: tool.path } };
+  }
+  return null;
+}
+
+function DetectToolsSection({ onRegistered }: { onRegistered: () => void }) {
+  const [tools, setTools] = useState<DetectedTool[] | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busyPath, setBusyPath] = useState<string | null>(null);
+
+  async function scan() {
+    setScanning(true);
+    setError(null);
+    try {
+      setTools(await detectInstalledTools());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  async function register(tool: DetectedTool) {
+    const target = registerTarget(tool, tools ?? []);
+    if (!target) return;
+    setBusyPath(tool.path);
+    setError(null);
+    try {
+      await registerTool(target.engine, target.version, target.values);
+      onRegistered();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyPath(null);
+    }
+  }
+
+  return (
+    <section>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">Detectar herramientas instaladas</h2>
+        <Button size="sm" variant="ghost" className="rounded-full px-3 text-xs" onPress={scan} isDisabled={scanning}>
+          {scanning ? 'Buscando…' : tools ? 'Volver a buscar' : 'Buscar en el equipo'}
+        </Button>
+      </div>
+      <p className="mb-3 text-xs" style={{ color: 'var(--muted)' }}>
+        arkode ya trae los binarios de PostgreSQL y de MariaDB — esto es solo para usar una instalación local de una versión
+        específica (WAMP, XAMPP, un MySQL/MariaDB propio) en vez de la incluida.
+      </p>
+      {error && (
+        <p className="mb-2 text-xs" style={{ color: 'var(--danger)' }}>
+          {error}
+        </p>
+      )}
+      {tools && tools.length === 0 && (
+        <p className="text-xs" style={{ color: 'var(--muted)' }}>
+          No se encontró ninguna instalación en las ubicaciones habituales.
+        </p>
+      )}
+      {tools && tools.length > 0 && (
+        <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
+          <table className="w-full text-left text-sm">
+            <thead style={{ color: 'var(--muted)' }}>
+              <tr>
+                <th className="px-4 py-2 font-medium">Herramienta</th>
+                <th className="px-4 py-2 font-medium">Versión</th>
+                <th className="px-4 py-2 font-medium">Ruta</th>
+                <th className="px-4 py-2 font-medium" />
+              </tr>
+            </thead>
+            <tbody>
+              {tools.map((tool) => {
+                const target = registerTarget(tool, tools);
+                return (
+                  <tr key={tool.path} style={{ borderTop: '1px solid var(--separator)' }}>
+                    <td className="px-4 py-2.5">{tool.kind}</td>
+                    <td className="px-4 py-2.5" style={monoStyle}>
+                      {tool.majorMinor ?? '—'}
+                    </td>
+                    <td className="px-4 py-2.5" style={monoStyle}>
+                      {tool.path}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      {target ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="rounded-full px-3 text-xs"
+                          onPress={() => register(tool)}
+                          isDisabled={busyPath === tool.path}
+                        >
+                          {busyPath === tool.path
+                            ? 'Registrando…'
+                            : `Registrar (${target.engine} ${target.version})`}
+                        </Button>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
 
 type ConfigTab = 'general' | 'herramientas' | 'clientes';
 
@@ -553,7 +702,7 @@ export function Configuracion() {
                           {tool.path ?? '—'}
                         </td>
                         <td className="px-4 py-2.5">
-                          <ToolStatusBadge path={tool.path} exists={tool.exists} />
+                          <ToolStatusBadge path={tool.path} exists={tool.exists} source={tool.source} />
                         </td>
                       </tr>
                     ))}
@@ -562,9 +711,12 @@ export function Configuracion() {
               </div>
             )}
             <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
-              Solo aplica a tareas direct_dump. Estas rutas se configuran hoy por variable de entorno, no desde esta pantalla.
+              Solo aplica a tareas direct_dump. arkode incluye PostgreSQL y MariaDB, así que normalmente no hay que configurar
+              nada; las variables de entorno son para forzar una ruta propia.
             </p>
           </section>
+
+          <DetectToolsSection onRegistered={refreshToolRegistry} />
 
           <section>
             <h2 className="mb-2 text-sm font-semibold">Herramientas por versión (direct_dump)</h2>
