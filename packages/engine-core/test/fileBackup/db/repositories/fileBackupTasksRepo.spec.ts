@@ -118,13 +118,25 @@ describe('fileBackupTasksRepo', () => {
     ).toThrow(/remoteSourcePath is required/);
   });
 
-  it('update() only changes name/retention, never sourcePath/sourceKind/repositoryId', () => {
+  it('update() changes name/retention but never sourceKind/repositoryId', () => {
     const task = tasksRepo.createLocalFolder({ clientId, repositoryId, name: 'Uploads', sourcePath: 'D:\\Sites\\acme\\uploads' });
     const updated = tasksRepo.update(task.id, { name: 'Uploads renamed', retentionCount: 5 });
     expect(updated.name).toBe('Uploads renamed');
     expect(updated.retentionCount).toBe(5);
-    expect(updated.sourcePath).toBe(task.sourcePath);
+    expect(updated.sourcePath).toBe(task.sourcePath); // unchanged when not passed
     expect(updated.repositoryId).toBe(task.repositoryId);
+  });
+
+  it('update() can change sourcePath (local) / remoteSourcePath (remote), with validation', () => {
+    const local = tasksRepo.createLocalFolder({ clientId, repositoryId, name: 'L', sourcePath: 'D:\\a' });
+    expect(tasksRepo.update(local.id, { sourcePath: 'E:\\b\\c' }).sourcePath).toBe('E:\\b\\c');
+    expect(() => tasksRepo.update(local.id, { sourcePath: 'relative\\path' })).toThrow(/absolute Windows path/);
+    expect(() => tasksRepo.update(local.id, { remoteSourcePath: '/x' })).toThrow(/only applies to a remote_folder/);
+
+    const remote = tasksRepo.createRemoteFolder({ clientId, repositoryId, name: 'R', transportId: sftpTransportId, remoteSourcePath: '/old' });
+    expect(tasksRepo.update(remote.id, { remoteSourcePath: '/public_html/public/uploads' }).remoteSourcePath).toBe('/public_html/public/uploads');
+    expect(() => tasksRepo.update(remote.id, { remoteSourcePath: '  ' })).toThrow(/cannot be empty/);
+    expect(() => tasksRepo.update(remote.id, { sourcePath: 'D:\\x' })).toThrow(/only applies to a local_folder/);
   });
 
   it('deactivate/reactivate round-trip', () => {

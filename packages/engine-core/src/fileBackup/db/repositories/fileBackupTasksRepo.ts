@@ -90,16 +90,24 @@ export interface SetFileBackupScheduleInput {
 }
 
 /**
- * `sourceKind`/`sourcePath`/`transportId`/`remoteSourcePath`/`repositoryId`
- * are deliberately not editable — create a new task to point at a different
- * folder. `backupSetId` is editable — see tasksRepo.ts's UpdateTaskInput for
- * the identical reasoning.
+ * `sourceKind`/`transportId`/`repositoryId` stay immutable — those reshape
+ * the pipeline, so create a new task instead. `backupSetId` is editable
+ * (see tasksRepo.ts's UpdateTaskInput). `sourcePath` (local_folder) and
+ * `remoteSourcePath` (remote_folder) are editable too — a folder path is
+ * just "where to sync from", not pipeline-shaping; changing it makes the
+ * next sync re-download everything (the staging diff sees all-new, keyed by
+ * taskId not path), which is expected. Only the field matching the task's
+ * own `sourceKind` may be set.
  */
 export interface UpdateFileBackupTaskInput {
   name?: string;
   retentionCount?: number | null;
   retentionDays?: number | null;
   backupSetId?: string | null;
+  /** local_folder tasks only — absolute Windows path. */
+  sourcePath?: string;
+  /** remote_folder tasks only — path on the remote host. */
+  remoteSourcePath?: string;
 }
 
 const SCHEDULE_TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -154,6 +162,7 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
   const updateStmt = db.prepare(
     `UPDATE file_backup_tasks
      SET name = @name, retention_count = @retentionCount, retention_days = @retentionDays, backup_set_id = @backupSetId,
+         source_path = @sourcePath, remote_source_path = @remoteSourcePath,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = @id`
   );
@@ -219,12 +228,36 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
     update(id, patch) {
       const current = getByIdStmt.get(id);
       if (!current) throw new Error(`File-backup task ${id} not found.`);
+
+      let sourcePath = current.source_path;
+      let remoteSourcePath = current.remote_source_path;
+      if (patch.sourcePath !== undefined) {
+        if (current.source_kind !== 'local_folder') {
+          throw new Error(`sourcePath only applies to a local_folder task; task ${id} is "${current.source_kind}".`);
+        }
+        if (!ABSOLUTE_WINDOWS_PATH.test(patch.sourcePath)) {
+          throw new Error(`sourcePath must be an absolute Windows path (e.g. "D:\\Uploads"); got "${patch.sourcePath}".`);
+        }
+        sourcePath = patch.sourcePath;
+      }
+      if (patch.remoteSourcePath !== undefined) {
+        if (current.source_kind !== 'remote_folder') {
+          throw new Error(`remoteSourcePath only applies to a remote_folder task; task ${id} is "${current.source_kind}".`);
+        }
+        if (!patch.remoteSourcePath.trim()) {
+          throw new Error('remoteSourcePath cannot be empty.');
+        }
+        remoteSourcePath = patch.remoteSourcePath;
+      }
+
       updateStmt.run({
         id,
         name: patch.name ?? current.name,
         retentionCount: patch.retentionCount !== undefined ? patch.retentionCount : current.retention_count,
         retentionDays: patch.retentionDays !== undefined ? patch.retentionDays : current.retention_days,
         backupSetId: patch.backupSetId !== undefined ? patch.backupSetId : current.backup_set_id,
+        sourcePath,
+        remoteSourcePath,
       });
       const row = getByIdStmt.get(id);
       if (!row) throw new Error(`Failed to read back updated file_backup_task ${id}`);

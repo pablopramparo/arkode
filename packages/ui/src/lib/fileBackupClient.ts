@@ -173,8 +173,12 @@ export interface UpdateFileBackupTaskInput {
   name?: string;
   retentionCount?: number | null;
   retentionDays?: number | null;
-  /** Assign/reassign/unassign (pass null) — editable after creation, unlike source/transport. */
+  /** Assign/reassign/unassign (pass null) — editable after creation, unlike sourceKind/transport. */
   backupSetId?: string | null;
+  /** local_folder tasks only — absolute Windows path. */
+  sourcePath?: string;
+  /** remote_folder tasks only — path on the remote host. */
+  remoteSourcePath?: string;
 }
 
 export async function updateFileBackupTask(id: string, patch: UpdateFileBackupTaskInput): Promise<FileBackupTask> {
