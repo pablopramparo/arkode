@@ -10,10 +10,11 @@ import {
   createFileBackupTask,
   type FileBackupRepository,
 } from '../lib/fileBackupClient';
-import { fetchConnections, type TransportWithClientName } from '../lib/connectionsClient';
+import { fetchConnections, type TransportWithClientName, type ConnectionsData } from '../lib/connectionsClient';
 import { Modal } from './Modal';
 import { Field, inputStyle } from './TaskCreateWizard';
 import { FileScheduleFields, EMPTY_FILE_SCHEDULE, isFileScheduleValid, type FileScheduleValue } from './FileScheduleFields';
+import { ConnectionCreateModal } from './ConnectionCreateModal';
 import { primaryPillStyle } from '../lib/pillStyles';
 
 type SourceKind = 'local_folder' | 'remote_folder';
@@ -35,9 +36,10 @@ export function FileTaskCreateModal({
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
+  const [clients, setClients] = useState<ConnectionsData['clients']>([]);
   const [clientId, setClientId] = useState(fixedClientId ?? '');
   const [transports, setTransports] = useState<TransportWithClientName[]>([]);
+  const [showNewConn, setShowNewConn] = useState(false);
 
   const [repository, setRepository] = useState<FileBackupRepository | null | undefined>(undefined);
   const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
@@ -56,13 +58,18 @@ export function FileTaskCreateModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchConnections()
+  function reloadConnections(): Promise<ConnectionsData | void> {
+    return fetchConnections()
       .then((data) => {
-        setClients(data.clients.map((c) => ({ id: c.id, name: c.name })));
+        setClients(data.clients);
         setTransports(data.transports);
+        return data;
       })
       .catch(() => {});
+  }
+
+  useEffect(() => {
+    reloadConnections();
   }, []);
 
   useEffect(() => {
@@ -248,20 +255,29 @@ export function FileTaskCreateModal({
             ) : (
               <>
                 <Field label="Conexión (SFTP/FTP) *">
-                  {remoteTransports.length > 0 ? (
-                    <select style={inputStyle} value={transportId} onChange={(e) => setTransportId(e.target.value)}>
-                      <option value="">Elegir…</option>
+                  <div className="flex gap-2">
+                    <select
+                      style={{ ...inputStyle, flex: 1 }}
+                      value={transportId}
+                      onChange={(e) => setTransportId(e.target.value)}
+                      disabled={remoteTransports.length === 0}
+                    >
+                      <option value="">{remoteTransports.length > 0 ? 'Elegir…' : 'Sin conexiones SFTP/FTP'}</option>
                       {remoteTransports.map((t) => (
                         <option key={t.id} value={t.id}>
                           {t.name} ({t.type.toUpperCase()} — {t.host})
                         </option>
                       ))}
                     </select>
-                  ) : (
-                    <p className="text-xs" style={{ color: 'var(--warning)' }}>
-                      Este cliente no tiene conexiones SFTP/FTP todavía — creá una en Conexiones primero.
-                    </p>
-                  )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="shrink-0 rounded-full px-3"
+                      onPress={() => setShowNewConn(true)}
+                    >
+                      + Nueva
+                    </Button>
+                  </div>
                 </Field>
                 <Field label="Carpeta remota de origen *">
                   <input
@@ -315,6 +331,23 @@ export function FileTaskCreateModal({
           </Button>
         </div>
       </div>
+
+      {showNewConn && (
+        <ConnectionCreateModal
+          clients={clients}
+          fixedClientId={clientId || undefined}
+          onClose={() => setShowNewConn(false)}
+          onCreated={async () => {
+            const data = await reloadConnections();
+            if (data) {
+              const mine = data.transports
+                .filter((t) => t.clientId === clientId && (t.type === 'sftp' || t.type === 'ftp'))
+                .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+              if (mine[0]) setTransportId(mine[0].id);
+            }
+          }}
+        />
+      )}
     </Modal>
   );
 }
