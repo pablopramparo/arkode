@@ -1,7 +1,9 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
 import { fetchDashboardStatus, runTaskNow, testTaskConnection, type ConnectionTestResult, type DashboardRow } from '../lib/statusClient';
+import { runFileBackupTaskNow, testFileBackupTaskConnection } from '../lib/fileBackupClient';
 import { IN_PROGRESS_RUN_STATUSES } from '../lib/tasksClient';
+import { KindBadge } from './KindBadge';
 import { formatAge, formatSize, ageInHours, formatConnectionTestVersions, formatDateTime } from '../lib/format';
 import { StatusChip } from './StatusChip';
 import { StatCard } from './StatCard';
@@ -71,24 +73,27 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
     setActionState((prev) => ({ ...prev, [taskId]: { ...prev[taskId], ...patch } }));
   }
 
-  async function handleRun(taskId: string) {
-    patchAction(taskId, { busy: 'run', actionError: undefined, testResult: undefined });
+  async function handleRun(row: DashboardRow) {
+    patchAction(row.taskId, { busy: 'run', actionError: undefined, testResult: undefined });
     try {
-      await runTaskNow(taskId);
-      patchAction(taskId, { busy: undefined });
+      await (row.kind === 'file' ? runFileBackupTaskNow(row.taskId) : runTaskNow(row.taskId));
+      patchAction(row.taskId, { busy: undefined });
       await refresh();
     } catch (err) {
-      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
+      patchAction(row.taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
     }
   }
 
-  async function handleTest(taskId: string, trustHost?: boolean) {
-    patchAction(taskId, { busy: 'test', actionError: undefined, testResult: undefined });
+  async function handleTest(row: DashboardRow, trustHost?: boolean) {
+    patchAction(row.taskId, { busy: 'test', actionError: undefined, testResult: undefined });
     try {
-      const result = await testTaskConnection(taskId, trustHost);
-      patchAction(taskId, { busy: undefined, testResult: result });
+      const result =
+        row.kind === 'file'
+          ? await testFileBackupTaskConnection(row.taskId, trustHost)
+          : await testTaskConnection(row.taskId, trustHost);
+      patchAction(row.taskId, { busy: undefined, testResult: result });
     } catch (err) {
-      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
+      patchAction(row.taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -197,6 +202,7 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                         </td>
                         <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                           {row.task}
+                          <KindBadge kind={row.kind} />
                           <BackupSetBadge name={row.backupSetName} />
                         </td>
                         <td className="px-4 py-2.5">
@@ -219,7 +225,7 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                               className="rounded-full px-3"
                               style={primaryPillStyle}
                               isDisabled={Boolean(state?.busy) || isRowInProgress(row)}
-                              onPress={() => handleRun(row.taskId)}
+                              onPress={() => handleRun(row)}
                             >
                               {state?.busy === 'run' || isRowInProgress(row) ? (
                                 <span className="flex items-center gap-1.5">
@@ -233,12 +239,14 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                                 </span>
                               )}
                             </Button>
-                            <IconButton
-                              icon={<PulseIcon />}
-                              label={state?.busy === 'test' ? 'Probando conexión…' : 'Probar conexión'}
-                              disabled={Boolean(state?.busy)}
-                              onPress={() => handleTest(row.taskId)}
-                            />
+                            {(row.kind === 'db' || row.strategy === 'remote_folder') && (
+                              <IconButton
+                                icon={<PulseIcon />}
+                                label={state?.busy === 'test' ? 'Probando conexión…' : 'Probar conexión'}
+                                disabled={Boolean(state?.busy)}
+                                onPress={() => handleTest(row)}
+                              />
+                            )}
                             {row.status === 'Failed' && row.latestErrorMessage && (
                               <IconButton
                                 icon={<EyeIcon />}
@@ -285,7 +293,7 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                                   className="rounded-full px-3"
                                   style={primaryPillStyle}
                                   isDisabled={state.busy === 'test'}
-                                  onPress={() => handleTest(row.taskId, true)}
+                                  onPress={() => handleTest(row, true)}
                                 >
                                   Confiar y probar de nuevo
                                 </Button>

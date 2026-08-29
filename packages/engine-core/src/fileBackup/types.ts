@@ -45,6 +45,8 @@ export interface FileBackupTask {
   updatedAt: string;
   /** Pure visual/reporting label — see BackupSet's own doc comment in the DB-backup domain's types.ts. Never affects scheduling/execution. */
   backupSetId: string | null;
+  /** Set by a successful `file-task:scheduler:install`, cleared by `:uninstall` — see 0014's migration comment. Non-null means "registered in Windows Task Scheduler". */
+  windowsTaskName: string | null;
 }
 
 export interface FileBackupRun {

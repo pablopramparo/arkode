@@ -3,7 +3,16 @@ import { Button } from '@heroui/react';
 import { isTauri } from '@tauri-apps/api/core';
 import { openPath } from '@tauri-apps/plugin-opener';
 import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
-import { fetchTasks, taskExportUrl, importTaskBundle, deactivateTask, reactivateTask, type TaskRow } from '../lib/tasksClient';
+import { fetchTasks, importTaskBundle, type TaskRow } from '../lib/tasksClient';
+import {
+  fetchFileBackupTasks,
+  fetchFileBackupRuns,
+  restoreFileBackupRun,
+  deleteFileBackupRun,
+  type FileBackupRun,
+} from '../lib/fileBackupClient';
+import { mergeTasks } from '../lib/unifiedTasks';
+import { mergeRuns, toUnifiedDbRun, toUnifiedFileRun } from '../lib/unifiedRuns';
 import {
   fetchConnections,
   testTransport,
@@ -15,31 +24,24 @@ import {
   type ConnectionsData,
 } from '../lib/connectionsClient';
 import { deleteBackupRun, downloadRunUrl, fetchBackups, fetchRuns, type RunRow } from '../lib/runsClient';
-import { runTaskNow, testTaskConnection, testTaskCompatibility } from '../lib/statusClient';
-import { canRegisterTaskSchedule, registerTaskSchedule, unregisterTaskSchedule } from '../lib/schedulerClient';
 import type { ConnectionTestResult, DirectDumpCompatibilityResult } from 'engine-core';
 import { StatusChip } from './StatusChip';
 import { Switch } from './Switch';
 import { IconButton, IconLinkButton } from './IconButton';
-import { DownloadIcon, EditIcon, EyeIcon, FolderIcon, PlayIcon, PulseIcon, CheckCircleIcon, TrashIcon, ClockIcon } from './icons';
-import { Spinner } from './Spinner';
-import { formatRetention, formatDateTime, formatDuration, formatSize, formatSchedule, formatConnectionTestVersions } from '../lib/format';
+import { DownloadIcon, EditIcon, EyeIcon, FolderIcon, PulseIcon, TrashIcon, UndoIcon } from './icons';
+import { KindBadge } from './KindBadge';
+import { formatRetention, formatDateTime, formatDuration, formatSize, formatConnectionTestVersions } from '../lib/format';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { TaskCreateWizard } from './TaskCreateWizard';
-import { TaskEditModal } from './TaskEditModal';
-import { isTaskInProgress, isScheduleNotRegistered } from './Tareas';
+import { UnifiedTaskTable } from './UnifiedTaskTable';
+import { AddBackupChoiceModal } from './AddBackupChoiceModal';
+import { FileTaskCreateModal } from './FileTaskCreateModal';
 import { ConnectionEditModal } from './ConnectionEditModal';
 import { ConnectionCreateModal } from './ConnectionCreateModal';
 import { FileBackupsPanel } from './FileBackupsPanel';
 import { BackupSetsSection } from './BackupSetsSection';
 import { BackupSetBadge } from './BackupSetBadge';
 import type { ConnectionRow } from './Conexiones';
-
-const STRATEGY_LABEL: Record<string, string> = {
-  fetch_existing: 'SFTP existente',
-  remote_dump: 'SSH remoto',
-  direct_dump: 'Conexión directa a BD',
-};
 
 type Tab = 'tareas' | 'conexiones' | 'backups' | 'historial' | 'archivos';
 
@@ -57,7 +59,7 @@ function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab
   const tabs: { id: Tab; label: string }[] = [
     { id: 'tareas', label: 'Tareas' },
     { id: 'conexiones', label: 'Conexiones' },
-    { id: 'archivos', label: 'Archivos' },
+    { id: 'archivos', label: 'Repositorio' },
     { id: 'backups', label: 'Backups' },
     { id: 'historial', label: 'Historial' },
   ];
@@ -85,8 +87,10 @@ function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab
 export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack: () => void }) {
   const [client, setClient] = useState<ClientWithTaskCount | null>(null);
   const [tasks, setTasks] = useState<TaskRow[] | null>(null);
+  const [fileTasks, setFileTasks] = useState<Awaited<ReturnType<typeof fetchFileBackupTasks>> | null>(null);
   const [connections, setConnections] = useState<ConnectionsData | null>(null);
   const [runs, setRuns] = useState<RunRow[] | null>(null);
+  const [fileRuns, setFileRuns] = useState<FileBackupRun[] | null>(null);
   const [backups, setBackups] = useState<RunRow[] | null>(null);
   const [backupsTotal, setBackupsTotal] = useState(0);
   const [backupsPage, setBackupsPage] = useState(0);
@@ -95,9 +99,9 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   const [activeTab, setActiveTab] = useState<Tab>('tareas');
   const [showInactive, setShowInactive] = useState(false);
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
+  const [choosingKind, setChoosingKind] = useState(false);
+  const [creatingKind, setCreatingKind] = useState<'db' | 'file' | null>(null);
   const [showCreateConnection, setShowCreateConnection] = useState(false);
-  const [editingTask, setEditingTask] = useState<TaskRow | null>(null);
   const [editingConnectionRow, setEditingConnectionRow] = useState<ConnectionRow | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [importBusy, setImportBusy] = useState(false);
@@ -170,22 +174,57 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
     }
   }
 
+  async function handleDeleteFileRun(runId: string, afterDelete: () => Promise<void>) {
+    if (!window.confirm('¿Eliminar este snapshot? El espacio en disco recién se libera en el próximo prune.')) return;
+    setDeletingRunId(runId);
+    try {
+      await deleteFileBackupRun(runId);
+      await afterDelete();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingRunId(null);
+    }
+  }
+
+  async function handleRestoreFileRun(runId: string) {
+    const target = window.prompt('Carpeta donde restaurar este snapshot completo:');
+    if (!target) return;
+    setDeletingRunId(runId);
+    try {
+      const r = await restoreFileBackupRun(runId, target);
+      window.alert(
+        r.warning
+          ? `Restaurado con una advertencia (${r.filesRestored} archivos): ${r.warning}`
+          : `Restaurado: ${r.filesRestored} archivos en ${r.targetDir}`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingRunId(null);
+    }
+  }
+
   function patchAction(id: string, patch: RowActionState) {
     setActionState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
   }
 
   const refresh = useCallback(async () => {
     try {
-      const [clients, allTasks, allConnections, clientRuns] = await Promise.all([
+      const [clients, allTasks, clientFileTasks, allConnections, clientRuns, clientFileRuns] = await Promise.all([
         fetchClients({ includeInactive: true }),
         fetchTasks({ includeInactive: true }),
+        fetchFileBackupTasks(clientId, { includeInactive: true }),
         fetchConnections({ includeInactive: true }),
-        fetchRuns({ clientId, limit: 15 }),
+        fetchRuns({ clientId, limit: 30 }),
+        fetchFileBackupRuns({ clientId, limit: 30 }),
       ]);
       setClient(clients.find((c) => c.id === clientId) ?? null);
       setTasks(allTasks.filter((t) => t.clientId === clientId));
+      setFileTasks(clientFileTasks);
       setConnections(allConnections);
       setRuns(clientRuns);
+      setFileRuns(clientFileRuns);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo conectar con el motor de backups.');
@@ -196,60 +235,6 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
     refresh();
   }, [refresh]);
 
-  async function handleRun(taskId: string) {
-    patchAction(taskId, { busy: 'run', actionError: undefined });
-    try {
-      await runTaskNow(taskId);
-      patchAction(taskId, { busy: undefined });
-      // refresh() reloads the Historial tab's runs; the Backups tab has its
-      // own paginated fetch, so reload it too or a just-produced backup
-      // won't show until the user navigates away and back.
-      await Promise.all([refresh(), loadBackups(backupsPage)]);
-    } catch (err) {
-      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  async function handleTestTask(taskId: string, trustHost?: boolean) {
-    patchAction(taskId, { busy: 'test', actionError: undefined, testResult: undefined, compatibilityResult: undefined });
-    try {
-      const result = await testTaskConnection(taskId, trustHost);
-      patchAction(taskId, { busy: undefined, testResult: result });
-    } catch (err) {
-      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  async function handleTestTaskCompatibility(taskId: string) {
-    patchAction(taskId, { busy: 'compatibility', actionError: undefined, testResult: undefined, compatibilityResult: undefined });
-    try {
-      const result = await testTaskCompatibility(taskId);
-      patchAction(taskId, { busy: undefined, compatibilityResult: result });
-    } catch (err) {
-      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  async function handleRegisterScheduler(taskId: string) {
-    patchAction(taskId, { busy: 'scheduler', actionError: undefined, schedulerMessage: undefined });
-    try {
-      await registerTaskSchedule(taskId);
-      patchAction(taskId, { busy: undefined, schedulerMessage: 'Programación activada en Windows.' });
-    } catch (err) {
-      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  async function handleUnregisterScheduler(taskId: string) {
-    patchAction(taskId, { busy: 'unscheduler', actionError: undefined, schedulerMessage: undefined });
-    try {
-      await unregisterTaskSchedule(taskId);
-      patchAction(taskId, { busy: undefined, schedulerMessage: 'Se quitó del Programador de tareas de Windows.' });
-    } catch (err) {
-      patchAction(taskId, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
   async function handleTestConnection(id: string, kind: 'transport' | 'database', trustHost?: boolean) {
     patchAction(id, { busy: 'test', actionError: undefined, testResult: undefined });
     try {
@@ -257,20 +242,6 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
       patchAction(id, { busy: undefined, testResult: result });
     } catch (err) {
       patchAction(id, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  async function handleToggleTask(task: TaskRow) {
-    if (task.isActive && !window.confirm(`¿Desactivar "${task.name}"? Dejará de programarse; su historial no se toca.`)) {
-      return;
-    }
-    patchAction(task.id, { busy: 'toggle', actionError: undefined });
-    try {
-      await (task.isActive ? deactivateTask(task.id) : reactivateTask(task.id));
-      patchAction(task.id, { busy: undefined });
-      await refresh();
-    } catch (err) {
-      patchAction(task.id, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -298,8 +269,27 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
     ...clientTransports.map((t): ConnectionRow => ({ kind: 'transport', id: t.id, data: t })),
     ...clientDbConnections.map((d): ConnectionRow => ({ kind: 'database', id: d.id, data: d })),
   ];
-  const visibleTasks = tasks?.filter((t) => showInactive || t.isActive) ?? null;
+  const unifiedTaskRows =
+    tasks && fileTasks
+      ? mergeTasks(
+          tasks.filter((t) => showInactive || t.isActive),
+          fileTasks.filter((t) => showInactive || t.isActive)
+        )
+      : null;
   const visibleConnectionRows = connectionRows.filter((r) => showInactive || r.data.isActive);
+
+  // Historial tab: DB attempts + file runs, newest first, capped.
+  const historialRows = runs && fileRuns ? mergeRuns(runs, fileRuns).slice(0, 30) : null;
+  // Backups tab: keep DB pagination; file snapshots (Success/Warning with a
+  // real snapshot) all show on page 0, merged and re-sorted by date.
+  const fileBackupRows = (fileRuns ?? [])
+    .filter((r) => (r.status === 'Success' || r.status === 'Warning') && r.snapshotId)
+    .map(toUnifiedFileRun);
+  const backupsRows = backups
+    ? [...(backupsPage === 0 ? fileBackupRows : []), ...backups.map(toUnifiedDbRun)].sort((a, b) =>
+        b.startedAt.localeCompare(a.startedAt)
+      )
+    : null;
 
   return (
     <div className="max-w-[1600px] px-10 py-8">
@@ -355,7 +345,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             <TabBar
               active={activeTab}
               onChange={setActiveTab}
-              counts={{ tareas: visibleTasks?.length ?? 0, conexiones: visibleConnectionRows.length, backups: backupsTotal, historial: runs?.length ?? 0 }}
+              counts={{ tareas: unifiedTaskRows?.length ?? 0, conexiones: visibleConnectionRows.length, backups: backupsTotal, historial: historialRows?.length ?? 0 }}
             />
             <div className="mb-1.5 flex items-center gap-3">
               {(activeTab === 'tareas' || activeTab === 'conexiones') && (
@@ -382,7 +372,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                       if (file) handleImportTaskFile(file);
                     }}
                   />
-                  <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setShowCreate(true)}>
+                  <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setChoosingKind(true)}>
                     + Agregar backup
                   </Button>
                 </>
@@ -417,197 +407,12 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
           )}
 
           {activeTab === 'tareas' &&
-            (visibleTasks && visibleTasks.length > 0 ? (
-              <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
-                <table className="w-full border-collapse text-sm">
-                  <thead>
-                    <tr className="text-left" style={{ color: 'var(--muted)' }}>
-                      <th className="px-4 py-2 font-medium">Nombre</th>
-                      <th className="px-4 py-2 font-medium">Estrategia</th>
-                      <th className="px-4 py-2 font-medium">Horario</th>
-                      <th className="px-4 py-2 font-medium">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleTasks.map((task) => {
-                      const state = actionState[task.id];
-                      const scheduleProblem = isScheduleNotRegistered(task);
-                      return (
-                        <tr
-                          key={task.id}
-                          style={{
-                            borderTop: '1px solid var(--separator)',
-                            opacity: task.isActive ? 1 : 0.55,
-                            borderLeft: scheduleProblem ? '3px solid var(--danger)' : '3px solid transparent',
-                            backgroundColor: scheduleProblem ? 'color-mix(in oklab, var(--danger) 6%, transparent)' : undefined,
-                          }}
-                        >
-                          <td className="px-4 py-2.5 font-medium">
-                            {task.name}
-                            <BackupSetBadge name={task.backupSetName} />
-                          </td>
-                          <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                            {STRATEGY_LABEL[task.strategy] ?? task.strategy}
-                          </td>
-                          <td className="px-4 py-2.5" style={{ color: scheduleProblem ? 'var(--danger)' : 'var(--muted)', fontWeight: scheduleProblem ? 600 : undefined }}>
-                            {formatSchedule(task)}
-                            {scheduleProblem && (
-                              <div className="mt-0.5 text-xs font-normal">⚠ No está activa en el Programador de Windows — no va a correr sola.</div>
-                            )}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            {task.isActive ? (
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  size="sm"
-                                  className="rounded-full px-3"
-                                  style={primaryPillStyle}
-                                  isDisabled={Boolean(state?.busy) || isTaskInProgress(task)}
-                                  onPress={() => handleRun(task.id)}
-                                >
-                                  {state?.busy === 'run' || isTaskInProgress(task) ? (
-                                    <span className="flex items-center gap-1.5">
-                                      <Spinner />
-                                      {isTaskInProgress(task) && state?.busy !== 'run' ? 'En curso…' : 'Ejecutando…'}
-                                    </span>
-                                  ) : (
-                                    <span className="flex items-center gap-1.5">
-                                      <PlayIcon className="h-3.5 w-3.5" />
-                                      Ejecutar ahora
-                                    </span>
-                                  )}
-                                </Button>
-                                <IconButton
-                                  icon={<PulseIcon />}
-                                  label="Probar conexión"
-                                  disabled={Boolean(state?.busy)}
-                                  onPress={() => handleTestTask(task.id)}
-                                />
-                                {task.strategy === 'direct_dump' && (
-                                  <IconButton
-                                    icon={<CheckCircleIcon />}
-                                    label="Probar compatibilidad (versión + herramienta)"
-                                    disabled={Boolean(state?.busy)}
-                                    onPress={() => handleTestTaskCompatibility(task.id)}
-                                  />
-                                )}
-                                <IconButton icon={<EditIcon />} label="Editar" onPress={() => setEditingTask(task)} />
-                                {canRegisterTaskSchedule() && task.scheduleTime && (
-                                  <>
-                                    <IconButton
-                                      icon={<ClockIcon />}
-                                      label={state?.busy === 'scheduler' ? 'Activando programación…' : 'Activar programación en Windows (pide permisos)'}
-                                      disabled={Boolean(state?.busy)}
-                                      onPress={() => handleRegisterScheduler(task.id)}
-                                    />
-                                    <IconButton
-                                      icon={<ClockIcon />}
-                                      tone="danger"
-                                      label={state?.busy === 'unscheduler' ? 'Quitando del Programador…' : 'Quitar del Programador de Windows (pide permisos)'}
-                                      disabled={Boolean(state?.busy)}
-                                      onPress={() => handleUnregisterScheduler(task.id)}
-                                    />
-                                  </>
-                                )}
-                                <IconLinkButton
-                                  icon={<DownloadIcon />}
-                                  label="Exportar (conexión + tarea, para adjuntar a otro cliente)"
-                                  href={taskExportUrl(task.id)}
-                                />
-                                <Button
-                                  size="sm"
-                                  className="rounded-full px-3"
-                                  style={dangerPillStyle}
-                                  isDisabled={state?.busy === 'toggle'}
-                                  onPress={() => handleToggleTask(task)}
-                                >
-                                  {state?.busy === 'toggle' ? '…' : 'Desactivar'}
-                                </Button>
-                                {state?.schedulerMessage && (
-                                  <span className="text-xs" style={{ color: 'var(--success)' }}>
-                                    {state.schedulerMessage}
-                                  </span>
-                                )}
-                                {state?.testResult && !state.testResult.unknownHost && (
-                                  <span className="text-xs" style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
-                                    {state.testResult.ok ? 'Conexión OK' : 'Conexión fallida'}
-                                    {state.testResult.message ? ` — ${state.testResult.message}` : ''}
-                                    {state.testResult.latencyMs != null ? ` (${state.testResult.latencyMs} ms)` : ''}
-                                    {formatConnectionTestVersions(state.testResult)}
-                                  </span>
-                                )}
-                                {state?.testResult?.unknownHost && (
-                                  <span
-                                    className="flex flex-wrap items-center gap-2 text-xs"
-                                    style={{ color: state.testResult.unknownHost.previousFingerprintSha256 ? 'var(--danger)' : 'var(--warning)' }}
-                                  >
-                                    {state.testResult.unknownHost.previousFingerprintSha256
-                                      ? `⚠ La clave del host cambió — ahora ${state.testResult.unknownHost.fingerprintSha256}, antes ${state.testResult.unknownHost.previousFingerprintSha256}`
-                                      : `Host desconocido — ${state.testResult.unknownHost.fingerprintSha256}`}
-                                    <Button
-                                      size="sm"
-                                      className="rounded-full px-3"
-                                      style={primaryPillStyle}
-                                      isDisabled={Boolean(state.busy)}
-                                      onPress={() => handleTestTask(task.id, true)}
-                                    >
-                                      Confiar y probar de nuevo
-                                    </Button>
-                                  </span>
-                                )}
-                                {state?.compatibilityResult && (
-                                  <span className="text-xs" style={{ color: state.compatibilityResult.ok ? 'var(--success)' : 'var(--danger)' }}>
-                                    {state.compatibilityResult.ok ? 'Compatible' : state.compatibilityResult.message}
-                                  </span>
-                                )}
-                                {state?.actionError && (
-                                  <span className="text-xs" style={{ color: 'var(--danger)' }}>
-                                    {state.actionError}
-                                  </span>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                                  (inactiva)
-                                </span>
-                                <Button
-                                  size="sm"
-                                  className="rounded-full px-3"
-                                  style={primaryPillStyle}
-                                  isDisabled={state?.busy === 'toggle'}
-                                  onPress={() => handleToggleTask(task)}
-                                >
-                                  {state?.busy === 'toggle' ? '…' : 'Reactivar'}
-                                </Button>
-                                {canRegisterTaskSchedule() && task.scheduleTime && (
-                                  <IconButton
-                                    icon={<ClockIcon />}
-                                    tone="danger"
-                                    label={state?.busy === 'unscheduler' ? 'Quitando del Programador…' : 'Quitar del Programador de Windows (pide permisos)'}
-                                    disabled={Boolean(state?.busy)}
-                                    onPress={() => handleUnregisterScheduler(task.id)}
-                                  />
-                                )}
-                                {state?.schedulerMessage && (
-                                  <span className="text-xs" style={{ color: 'var(--success)' }}>
-                                    {state.schedulerMessage}
-                                  </span>
-                                )}
-                                {state?.actionError && (
-                                  <span className="text-xs" style={{ color: 'var(--danger)' }}>
-                                    {state.actionError}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+            (unifiedTaskRows && unifiedTaskRows.length > 0 ? (
+              <UnifiedTaskTable
+                rows={unifiedTaskRows}
+                showClientColumn={false}
+                onChanged={() => Promise.all([refresh(), loadBackups(backupsPage)])}
+              />
             ) : (
               <p className="text-sm" style={{ color: 'var(--muted)' }}>
                 Este cliente no tiene tareas todavía.
@@ -717,7 +522,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
           {activeTab === 'archivos' && <FileBackupsPanel clientId={clientId} />}
 
           {activeTab === 'backups' &&
-            (backups && backups.length > 0 ? (
+            (backupsRows && backupsRows.length > 0 ? (
               <>
                 <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
                   <table className="w-full border-collapse text-sm">
@@ -731,10 +536,11 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                       </tr>
                     </thead>
                     <tbody>
-                      {backups.map((run) => (
-                        <tr key={run.id} style={{ borderTop: '1px solid var(--separator)' }}>
+                      {backupsRows.map((run) => (
+                        <tr key={`${run.kind}-${run.id}`} style={{ borderTop: '1px solid var(--separator)' }}>
                           <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                             {run.taskName ?? '—'}
+                            <KindBadge kind={run.kind} />
                             <BackupSetBadge name={run.backupSetName} />
                           </td>
                           <td className="px-4 py-2.5">{formatDateTime(run.startedAt)}</td>
@@ -746,14 +552,34 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                           </td>
                           <td className="px-4 py-2.5">
                             <div className="flex items-center gap-1">
-                              <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
-                              <IconButton
-                                icon={<TrashIcon />}
-                                label="Eliminar backup"
-                                tone="danger"
-                                disabled={deletingRunId === run.id}
-                                onPress={() => handleDeleteBackup(run.id, () => loadBackups(backupsPage))}
-                              />
+                              {run.kind === 'db' ? (
+                                <>
+                                  <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
+                                  <IconButton
+                                    icon={<TrashIcon />}
+                                    label="Eliminar backup"
+                                    tone="danger"
+                                    disabled={deletingRunId === run.id}
+                                    onPress={() => handleDeleteBackup(run.id, () => loadBackups(backupsPage))}
+                                  />
+                                </>
+                              ) : (
+                                <>
+                                  <IconButton
+                                    icon={<UndoIcon />}
+                                    label="Restaurar snapshot completo"
+                                    disabled={deletingRunId === run.id}
+                                    onPress={() => handleRestoreFileRun(run.id)}
+                                  />
+                                  <IconButton
+                                    icon={<TrashIcon />}
+                                    label="Eliminar snapshot"
+                                    tone="danger"
+                                    disabled={deletingRunId === run.id}
+                                    onPress={() => handleDeleteFileRun(run.id, refresh)}
+                                  />
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -794,7 +620,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             ))}
 
           {activeTab === 'historial' &&
-            (runs && runs.length > 0 ? (
+            (historialRows && historialRows.length > 0 ? (
               <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
                 <table className="w-full border-collapse text-sm">
                   <thead>
@@ -808,13 +634,14 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                     </tr>
                   </thead>
                   <tbody>
-                    {runs.map((run) => {
+                    {historialRows.map((run) => {
                       const expanded = expandedRunId === run.id;
                       return (
-                        <Fragment key={run.id}>
+                        <Fragment key={`${run.kind}-${run.id}`}>
                           <tr style={{ borderTop: '1px solid var(--separator)' }}>
                             <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                               {run.taskName ?? '—'}
+                              <KindBadge kind={run.kind} />
                               <BackupSetBadge name={run.backupSetName} />
                             </td>
                             <td className="px-4 py-2.5">
@@ -829,7 +656,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                             </td>
                             <td className="px-4 py-2.5">
                               <div className="flex items-center gap-1">
-                                {run.localFileExists && (
+                                {run.kind === 'db' && run.localFileExists && (
                                   <>
                                     <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
                                     <IconButton
@@ -841,10 +668,27 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                                     />
                                   </>
                                 )}
-                                {run.localPath && !run.localFileExists && (
+                                {run.kind === 'db' && run.hadLocalPath && !run.localFileExists && (
                                   <span className="text-xs" style={{ color: 'var(--muted)' }}>
                                     Eliminado
                                   </span>
+                                )}
+                                {run.kind === 'file' && run.snapshotId && (
+                                  <>
+                                    <IconButton
+                                      icon={<UndoIcon />}
+                                      label="Restaurar snapshot completo"
+                                      disabled={deletingRunId === run.id}
+                                      onPress={() => handleRestoreFileRun(run.id)}
+                                    />
+                                    <IconButton
+                                      icon={<TrashIcon />}
+                                      label="Eliminar snapshot"
+                                      tone="danger"
+                                      disabled={deletingRunId === run.id}
+                                      onPress={() => handleDeleteFileRun(run.id, refresh)}
+                                    />
+                                  </>
                                 )}
                                 {run.errorMessage && (
                                   <IconButton
@@ -877,16 +721,28 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
         </>
       )}
 
-      {showCreate && connections && (
+      {choosingKind && (
+        <AddBackupChoiceModal
+          onClose={() => setChoosingKind(false)}
+          onChoose={(kind) => {
+            setChoosingKind(false);
+            setCreatingKind(kind);
+          }}
+        />
+      )}
+
+      {creatingKind === 'db' && connections && (
         <TaskCreateWizard
           connections={connections}
           fixedClientId={clientId}
-          onClose={() => setShowCreate(false)}
+          onClose={() => setCreatingKind(null)}
           onCreated={refresh}
         />
       )}
 
-      {editingTask && <TaskEditModal task={editingTask} onClose={() => setEditingTask(null)} onSaved={refresh} />}
+      {creatingKind === 'file' && (
+        <FileTaskCreateModal fixedClientId={clientId} onClose={() => setCreatingKind(null)} onCreated={refresh} />
+      )}
 
       {showCreateConnection && connections && (
         <ConnectionCreateModal

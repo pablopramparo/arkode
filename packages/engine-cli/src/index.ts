@@ -1644,6 +1644,7 @@ program
       command: process.execPath,
       arguments: isPkgExe ? `file-task:run-due --task ${taskId}` : `"${process.argv[1]}" file-task:run-due --task ${taskId}`,
     });
+    ctx.fileBackupTasksRepo.setWindowsTaskName(taskId, taskName);
     console.log(`Registered Windows Scheduled Task "${taskName}" for file-backup task "${task.name}" at ${task.scheduleTime} daily, running as SYSTEM.`);
   });
 
@@ -1653,6 +1654,10 @@ program
   .action(async (taskId: string) => {
     const taskName = scheduledTaskNameForFileBackupTask(taskId);
     await uninstallScheduledTask(taskName);
+    const ctx = buildContext();
+    if (ctx.fileBackupTasksRepo.getById(taskId)) {
+      ctx.fileBackupTasksRepo.setWindowsTaskName(taskId, null);
+    }
     console.log(`Removed Windows Scheduled Task "${taskName}".`);
   });
 
@@ -2164,6 +2169,7 @@ program
               const backupSet = t.backupSetId ? ctx.backupSetsRepo.getById(t.backupSetId) : null;
               return {
                 ...t,
+                kind: 'db' as const,
                 clientName: client.name,
                 transportName: transport?.name ?? null,
                 databaseConnectionName: databaseConnection?.name ?? null,
@@ -2190,7 +2196,7 @@ program
           // are still meaningful for this row, without hiding the row itself
           // (Historial's whole point is showing every attempt, deleted or not).
           const localFileExists = Boolean(run.localPath && existsSync(run.localPath));
-          return { ...run, clientName: client?.name ?? null, taskName: task?.name ?? null, backupSetName: backupSet?.name ?? null, localFileExists };
+          return { ...run, kind: 'db' as const, clientName: client?.name ?? null, taskName: task?.name ?? null, backupSetName: backupSet?.name ?? null, localFileExists };
         });
         sendJson(res, 200, runs);
         return;
@@ -2686,12 +2692,31 @@ program
       if (req.method === 'GET' && pathname === '/file-tasks') {
         const clientId = url.searchParams.get('client');
         const includeInactive = url.searchParams.get('includeInactive') === 'true';
-        let tasks = clientId ? ctx.fileBackupTasksRepo.listByClient(clientId) : [];
-        if (!includeInactive) tasks = tasks.filter((t) => t.isActive);
-        const enriched = tasks.map((t) => ({
-          ...t,
-          backupSetName: t.backupSetId ? (ctx.backupSetsRepo.getById(t.backupSetId)?.name ?? null) : null,
-        }));
+        // With ?client= -> that client's file tasks (as before). Without it ->
+        // every active client's file tasks, for the unified Tareas view.
+        const scoped: { clientId: string; clientName: string }[] = clientId
+          ? (() => {
+              const c = ctx.clientsRepo.getById(clientId);
+              return c ? [{ clientId: c.id, clientName: c.name }] : [{ clientId, clientName: '' }];
+            })()
+          : ctx.clientsRepo.listActive().map((c) => ({ clientId: c.id, clientName: c.name }));
+        const enriched = scoped.flatMap(({ clientId: cid, clientName }) =>
+          ctx.fileBackupTasksRepo
+            .listByClient(cid)
+            .filter((t) => includeInactive || t.isActive)
+            .map((t) => {
+              const transport = t.transportId ? ctx.transportsRepo.getById(t.transportId) : null;
+              const latestRun = ctx.fileBackupRunsRepo.getLatestByTask(t.id);
+              return {
+                ...t,
+                kind: 'file' as const,
+                clientName,
+                transportName: transport?.name ?? null,
+                latestRunStatus: latestRun?.status ?? null,
+                backupSetName: t.backupSetId ? (ctx.backupSetsRepo.getById(t.backupSetId)?.name ?? null) : null,
+              };
+            })
+        );
         sendJson(res, 200, enriched);
         return;
       }
@@ -2836,7 +2861,23 @@ program
           clientId: url.searchParams.get('client') ?? undefined,
           limit: limitParam ? Number(limitParam) : undefined,
         });
-        sendJson(res, 200, runs);
+        const clientNameCache = new Map<string, string | null>();
+        const taskNameCache = new Map<string, string | null>();
+        const enriched = runs.map((run) => {
+          if (!clientNameCache.has(run.clientId)) {
+            clientNameCache.set(run.clientId, ctx.clientsRepo.getById(run.clientId)?.name ?? null);
+          }
+          if (!taskNameCache.has(run.taskId)) {
+            taskNameCache.set(run.taskId, ctx.fileBackupTasksRepo.getById(run.taskId)?.name ?? null);
+          }
+          return {
+            ...run,
+            kind: 'file' as const,
+            clientName: clientNameCache.get(run.clientId) ?? null,
+            taskName: taskNameCache.get(run.taskId) ?? null,
+          };
+        });
+        sendJson(res, 200, enriched);
         return;
       }
 

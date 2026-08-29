@@ -172,6 +172,51 @@ async fn unregister_task_schedule(task_id: String) -> Result<(), String> {
   }
 }
 
+/// Shared implementation for the file-backup scheduler commands — same
+/// one-UAC-prompt, production-only, argv-safe shape as
+/// register_task_schedule above (see its doc comment), differing only in
+/// which engine-cli subcommand is invoked.
+async fn run_elevated_file_task_scheduler(subcommand: &'static str, task_id: String) -> Result<(), String> {
+  if cfg!(debug_assertions) {
+    return Err(format!(
+      "No disponible en modo desarrollo -- corré esto desde una terminal elevada: engine-cli {subcommand} <taskId>"
+    ));
+  }
+
+  let exe_dir = std::env::current_exe()
+    .map_err(|e| format!("No se pudo resolver la ruta de la app: {e}"))?
+    .parent()
+    .map(|p| p.to_path_buf())
+    .ok_or_else(|| "No se pudo resolver la carpeta de instalación.".to_string())?;
+  let engine_cli = exe_dir.join("engine-cli.exe");
+
+  let status = tauri::async_runtime::spawn_blocking(move || {
+    runas::Command::new(&engine_cli).arg(subcommand).arg(&task_id).status()
+  })
+  .await
+  .map_err(|e| format!("Error interno esperando el proceso elevado: {e}"))?
+  .map_err(|e| format!("No se pudo iniciar engine-cli.exe elevado (¿cancelaste el aviso de administrador de Windows?): {e}"))?;
+
+  if status.success() {
+    Ok(())
+  } else {
+    Err(format!(
+      "engine-cli.exe {subcommand} terminó con un error (código {:?}).",
+      status.code()
+    ))
+  }
+}
+
+#[tauri::command]
+async fn register_file_task_schedule(task_id: String) -> Result<(), String> {
+  run_elevated_file_task_scheduler("file-task:scheduler:install", task_id).await
+}
+
+#[tauri::command]
+async fn unregister_file_task_schedule(task_id: String) -> Result<(), String> {
+  run_elevated_file_task_scheduler("file-task:scheduler:uninstall", task_id).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   // Debug (`tauri dev`) never spawns its own sidecar (see the setup() branch
@@ -181,7 +226,13 @@ pub fn run() {
   let (api_port_tx, _api_port_rx) = tokio::sync::watch::channel(if cfg!(debug_assertions) { Some(4287) } else { None });
 
   tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![get_api_port, register_task_schedule, unregister_task_schedule])
+    .invoke_handler(tauri::generate_handler![
+      get_api_port,
+      register_task_schedule,
+      unregister_task_schedule,
+      register_file_task_schedule,
+      unregister_file_task_schedule
+    ])
     // Must be the first plugin registered — it needs to intercept the app
     // launch before anything else runs. A second launch attempt is
     // redirected here instead of opening a second window: focus the

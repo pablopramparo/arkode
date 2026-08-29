@@ -28,3 +28,18 @@ export async function registerTaskSchedule(taskId: string): Promise<void> {
 export async function unregisterTaskSchedule(taskId: string): Promise<void> {
   await invoke('unregister_task_schedule', { taskId });
 }
+
+/**
+ * File-backup mirror of registerTaskSchedule — same one-UAC-prompt,
+ * production-only flow (see lib.rs's register_file_task_schedule), targeting
+ * `engine-cli file-task:scheduler:install` instead. `canRegisterTaskSchedule()`
+ * gates this identically.
+ */
+export async function registerFileTaskSchedule(taskId: string): Promise<void> {
+  await invoke('register_file_task_schedule', { taskId });
+}
+
+/** Removal-side mirror of registerFileTaskSchedule — see unregisterTaskSchedule for the reasoning. */
+export async function unregisterFileTaskSchedule(taskId: string): Promise<void> {
+  await invoke('unregister_file_task_schedule', { taskId });
+}

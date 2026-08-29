@@ -24,6 +24,7 @@ interface FileBackupTaskRow {
   created_at: string;
   updated_at: string;
   backup_set_id: string | null;
+  windows_task_name: string | null;
 }
 
 function parseDaysOfWeek(csv: string | null): number[] | null {
@@ -52,6 +53,7 @@ function toDomain(row: FileBackupTaskRow): FileBackupTask {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     backupSetId: row.backup_set_id,
+    windowsTaskName: row.windows_task_name,
   };
 }
 
@@ -115,6 +117,8 @@ export interface FileBackupTasksRepo {
   /** Every active task with a schedule configured and enabled — what file-task run-due iterates over. */
   listScheduled(): FileBackupTask[];
   setSchedule(taskId: string, input: SetFileBackupScheduleInput): FileBackupTask;
+  /** Records (or clears, with null) the registered Windows Scheduled Task name — mirror of tasksRepo.setWindowsTaskName. */
+  setWindowsTaskName(taskId: string, windowsTaskName: string | null): FileBackupTask;
 }
 
 export function createFileBackupTasksRepo(db: Database, transportsRepo: TransportsRepo): FileBackupTasksRepo {
@@ -158,6 +162,9 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
   );
   const reactivateStmt = db.prepare(
     `UPDATE file_backup_tasks SET is_active = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
+  );
+  const setWindowsTaskNameStmt = db.prepare(
+    `UPDATE file_backup_tasks SET windows_task_name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
   );
 
   return {
@@ -251,6 +258,15 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
 
     listScheduled() {
       return listScheduledStmt.all().map(toDomain);
+    },
+
+    setWindowsTaskName(taskId, windowsTaskName) {
+      const existing = getByIdStmt.get(taskId);
+      if (!existing) throw new Error(`File-backup task ${taskId} not found.`);
+      setWindowsTaskNameStmt.run(windowsTaskName, taskId);
+      const row = getByIdStmt.get(taskId);
+      if (!row) throw new Error(`Failed to read back file_backup_task ${taskId} after setting its Windows task name.`);
+      return toDomain(row);
     },
 
     setSchedule(taskId, input) {

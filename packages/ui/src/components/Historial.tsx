@@ -1,38 +1,50 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { deleteBackupRun, downloadRunUrl, fetchRuns, type RunRow } from '../lib/runsClient';
-import { fetchTasks, type TaskRow } from '../lib/tasksClient';
+import { deleteBackupRun, downloadRunUrl, fetchRuns } from '../lib/runsClient';
+import { fetchTasks } from '../lib/tasksClient';
+import {
+  fetchFileBackupTasks,
+  fetchFileBackupRuns,
+  restoreFileBackupRun,
+  deleteFileBackupRun,
+} from '../lib/fileBackupClient';
+import { mergeRuns, type UnifiedRunRow } from '../lib/unifiedRuns';
 import { formatDateTime, formatDuration, formatSize } from '../lib/format';
 import { StatusChip } from './StatusChip';
 import { IconButton, IconLinkButton } from './IconButton';
-import { DownloadIcon, EyeIcon, TrashIcon } from './icons';
+import { DownloadIcon, EyeIcon, TrashIcon, UndoIcon } from './icons';
 import { ClientLink } from './ClientLink';
 import { BackupSetBadge } from './BackupSetBadge';
+import { KindBadge } from './KindBadge';
 
 const RUN_LIMIT = 200;
 
 export function Historial({ onSelectClient }: { onSelectClient: (clientId: string) => void }) {
-  const [tasks, setTasks] = useState<TaskRow[] | null>(null);
-  const [runs, setRuns] = useState<RunRow[] | null>(null);
+  const [taskOptions, setTaskOptions] = useState<{ id: string; name: string; clientId: string; clientName: string }[] | null>(null);
+  const [rows, setRows] = useState<UnifiedRunRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [selectedTaskId, setSelectedTaskId] = useState('');
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
-  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [busyRunId, setBusyRunId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchTasks({ includeInactive: true })
-      .then(setTasks)
+    Promise.all([fetchTasks({ includeInactive: true }), fetchFileBackupTasks(undefined, { includeInactive: true })])
+      .then(([db, file]) =>
+        setTaskOptions([
+          ...db.map((t) => ({ id: t.id, name: t.name, clientId: t.clientId, clientName: t.clientName })),
+          ...file.map((t) => ({ id: t.id, name: `${t.name} (archivos)`, clientId: t.clientId, clientName: t.clientName })),
+        ])
+      )
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
 
   const refresh = useCallback(async (clientId: string, taskId: string) => {
     try {
-      const rows = await fetchRuns({
-        clientId: clientId || undefined,
-        taskId: taskId || undefined,
-        limit: RUN_LIMIT,
-      });
-      setRuns(rows);
+      const [dbRuns, fileRuns] = await Promise.all([
+        fetchRuns({ clientId: clientId || undefined, taskId: taskId || undefined, limit: RUN_LIMIT }),
+        fetchFileBackupRuns({ clientId: clientId || undefined, taskId: taskId || undefined, limit: RUN_LIMIT }),
+      ]);
+      setRows(mergeRuns(dbRuns, fileRuns));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo conectar con el motor de backups.');
@@ -43,24 +55,55 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
     refresh(selectedClientId, selectedTaskId);
   }, [refresh, selectedClientId, selectedTaskId]);
 
-  async function handleDelete(runId: string) {
+  async function handleDeleteDb(runId: string) {
     if (!window.confirm('¿Eliminar este backup? Esta acción no se puede deshacer.')) return;
-    setDeletingRunId(runId);
+    setBusyRunId(runId);
     try {
       await deleteBackupRun(runId);
       await refresh(selectedClientId, selectedTaskId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setDeletingRunId(null);
+      setBusyRunId(null);
     }
   }
 
-  const clients = tasks
-    ? Array.from(new Map(tasks.map((t) => [t.clientId, t.clientName])).entries()).sort((a, b) => a[1].localeCompare(b[1]))
+  async function handleDeleteFile(runId: string) {
+    if (!window.confirm('¿Eliminar este snapshot? El espacio en disco recién se libera en el próximo prune.')) return;
+    setBusyRunId(runId);
+    try {
+      await deleteFileBackupRun(runId);
+      await refresh(selectedClientId, selectedTaskId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyRunId(null);
+    }
+  }
+
+  async function handleRestoreFile(runId: string) {
+    const target = window.prompt('Carpeta donde restaurar este snapshot completo:');
+    if (!target) return;
+    setBusyRunId(runId);
+    try {
+      const result = await restoreFileBackupRun(runId, target);
+      window.alert(
+        result.warning
+          ? `Restaurado con una advertencia (${result.filesRestored} archivos): ${result.warning}`
+          : `Restaurado: ${result.filesRestored} archivos en ${result.targetDir}`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyRunId(null);
+    }
+  }
+
+  const clients = taskOptions
+    ? Array.from(new Map(taskOptions.map((t) => [t.clientId, t.clientName])).entries()).sort((a, b) => a[1].localeCompare(b[1]))
     : [];
-  const tasksForSelectedClient = tasks
-    ? tasks.filter((t) => !selectedClientId || t.clientId === selectedClientId).sort((a, b) => a.name.localeCompare(b.name))
+  const tasksForSelectedClient = taskOptions
+    ? taskOptions.filter((t) => !selectedClientId || t.clientId === selectedClientId).sort((a, b) => a.name.localeCompare(b.name))
     : [];
 
   const inputStyle: React.CSSProperties = {
@@ -77,7 +120,7 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
         <div>
           <h1 className="text-2xl font-semibold">Historial</h1>
           <p className="text-sm" style={{ color: 'var(--muted)' }}>
-            {runs == null ? 'Cargando…' : `${runs.length} ejecución${runs.length === 1 ? '' : 'es'}${runs.length === RUN_LIMIT ? ' (últimas)' : ''}`}
+            {rows == null ? 'Cargando…' : `${rows.length} ejecución${rows.length === 1 ? '' : 'es'}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -116,11 +159,9 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
         </div>
       )}
 
-      {runs && runs.length === 0 && !error && (
-        <p style={{ color: 'var(--muted)' }}>No hay ejecuciones registradas todavía.</p>
-      )}
+      {rows && rows.length === 0 && !error && <p style={{ color: 'var(--muted)' }}>No hay ejecuciones registradas todavía.</p>}
 
-      {runs && runs.length > 0 && (
+      {rows && rows.length > 0 && (
         <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
           <table className="w-full border-collapse text-sm">
             <thead>
@@ -135,16 +176,17 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
               </tr>
             </thead>
             <tbody>
-              {runs.map((run) => {
+              {rows.map((run) => {
                 const expanded = expandedRunId === run.id;
                 return (
-                  <Fragment key={run.id}>
+                  <Fragment key={`${run.kind}-${run.id}`}>
                     <tr style={{ borderTop: '1px solid var(--separator)' }}>
                       <td className="px-4 py-2.5 font-medium">
                         {run.clientName ? <ClientLink clientId={run.clientId} name={run.clientName} onSelect={onSelectClient} /> : '—'}
                       </td>
                       <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                         {run.taskName ?? '—'}
+                        <KindBadge kind={run.kind} />
                         <BackupSetBadge name={run.backupSetName} />
                       </td>
                       <td className="px-4 py-2.5">
@@ -159,22 +201,39 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
                       </td>
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-1">
-                          {run.localFileExists && (
+                          {run.kind === 'db' && run.localFileExists && (
                             <>
                               <IconLinkButton icon={<DownloadIcon />} label="Descargar backup" href={downloadRunUrl(run.id)} />
                               <IconButton
                                 icon={<TrashIcon />}
                                 label="Eliminar backup"
                                 tone="danger"
-                                disabled={deletingRunId === run.id}
-                                onPress={() => handleDelete(run.id)}
+                                disabled={busyRunId === run.id}
+                                onPress={() => handleDeleteDb(run.id)}
                               />
                             </>
                           )}
-                          {run.localPath && !run.localFileExists && (
+                          {run.kind === 'db' && run.hadLocalPath && !run.localFileExists && (
                             <span className="text-xs" style={{ color: 'var(--muted)' }}>
                               Eliminado
                             </span>
+                          )}
+                          {run.kind === 'file' && run.snapshotId && (
+                            <>
+                              <IconButton
+                                icon={<UndoIcon />}
+                                label="Restaurar snapshot completo"
+                                disabled={busyRunId === run.id}
+                                onPress={() => handleRestoreFile(run.id)}
+                              />
+                              <IconButton
+                                icon={<TrashIcon />}
+                                label="Eliminar snapshot"
+                                tone="danger"
+                                disabled={busyRunId === run.id}
+                                onPress={() => handleDeleteFile(run.id)}
+                              />
+                            </>
                           )}
                           {run.errorMessage && (
                             <IconButton

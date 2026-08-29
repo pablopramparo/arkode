@@ -47,6 +47,18 @@ export interface FileBackupTask {
   /** Pure visual/reporting label, or null if unassigned — see engine-core's BackupSet doc comment. */
   backupSetId: string | null;
   backupSetName: string | null;
+  /** Set by a successful `file-task:scheduler:install`, cleared by `:uninstall`. Non-null ⇒ registered in Windows Task Scheduler. */
+  windowsTaskName: string | null;
+}
+
+/** A FileBackupTask as returned by GET /file-tasks — enriched server-side for the unified Tareas view. */
+export interface FileBackupTaskRow extends FileBackupTask {
+  kind: 'file';
+  clientName: string;
+  /** remote_folder only — the name of the sftp/ftp transport it pulls from. */
+  transportName: string | null;
+  /** The task's latest attempt, whatever it is — null if never run. */
+  latestRunStatus: FileBackupRunStatus | null;
 }
 
 export interface FileBackupRun {
@@ -69,6 +81,10 @@ export interface FileBackupRun {
   durationMs: number | null;
   errorMessage: string | null;
   warnings: string[] | null;
+  /** Enriched by GET /file-runs / GET /file-tasks responses. */
+  kind?: 'file';
+  clientName?: string | null;
+  taskName?: string | null;
 }
 
 async function handleJson<T>(res: Response): Promise<T> {
@@ -109,10 +125,16 @@ export async function runFileBackupMaintenance(repositoryId: string, operation?:
   );
 }
 
-export async function fetchFileBackupTasks(clientId: string, opts: { includeInactive?: boolean } = {}): Promise<FileBackupTask[]> {
-  const query = new URLSearchParams({ client: clientId });
+/** Omit `clientId` for every active client's file tasks (unified Tareas view); pass it to scope to one client. */
+export async function fetchFileBackupTasks(
+  clientId?: string,
+  opts: { includeInactive?: boolean } = {}
+): Promise<FileBackupTaskRow[]> {
+  const query = new URLSearchParams();
+  if (clientId) query.set('client', clientId);
   if (opts.includeInactive) query.set('includeInactive', 'true');
-  return handleJson(await fetch(`${getApiBase()}/file-tasks?${query}`));
+  const qs = query.toString();
+  return handleJson(await fetch(`${getApiBase()}/file-tasks${qs ? `?${qs}` : ''}`));
 }
 
 export interface CreateFileBackupTaskInput {
@@ -129,6 +151,12 @@ export interface CreateFileBackupTaskInput {
   retentionDays?: number | null;
   /** Optional — a pure visual/reporting label grouping this task with others. */
   backupSetId?: string | null;
+  /** Optional inline schedule — applied right after creation, server-side. */
+  scheduleTime?: string | null;
+  scheduleEnabled?: boolean;
+  scheduleFrequency?: 'daily' | 'weekly' | 'monthly';
+  scheduleDaysOfWeek?: number[] | null;
+  scheduleDayOfMonth?: number | null;
 }
 
 export async function createFileBackupTask(input: CreateFileBackupTaskInput): Promise<FileBackupTask> {
@@ -137,6 +165,24 @@ export async function createFileBackupTask(input: CreateFileBackupTaskInput): Pr
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
+    })
+  );
+}
+
+export interface UpdateFileBackupTaskInput {
+  name?: string;
+  retentionCount?: number | null;
+  retentionDays?: number | null;
+  /** Assign/reassign/unassign (pass null) — editable after creation, unlike source/transport. */
+  backupSetId?: string | null;
+}
+
+export async function updateFileBackupTask(id: string, patch: UpdateFileBackupTaskInput): Promise<FileBackupTask> {
+  return handleJson(
+    await fetch(`${getApiBase()}/file-tasks/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
     })
   );
 }

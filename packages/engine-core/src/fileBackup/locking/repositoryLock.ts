@@ -1,6 +1,10 @@
 import type { FileBackupRunsRepo } from '../db/repositories/fileBackupRunsRepo.js';
 import type { FileBackupMaintenanceRunsRepo } from '../db/repositories/fileBackupMaintenanceRunsRepo.js';
-import { isProcessAlive } from '../util/isProcessAlive.js';
+// Domain-neutral OS helper (src/util), not the DB-backup orchestrator's
+// internals — importing it doesn't violate this domain's "don't reach into
+// tested DB-backup code" rule. A bare process.kill(pid,0) is not enough:
+// a recycled PID would keep a crashed run stuck forever (see the helper).
+import { isStaleInProgressRun } from '../../util/processIdentity.js';
 
 export type FileBackupOperationKind = 'backup' | 'forget' | 'prune' | 'check' | 'check_read_data';
 
@@ -24,13 +28,13 @@ export interface RepositoryLockResult {
  */
 export function recoverStaleRepositoryRuns(deps: RepositoryLockDeps, repositoryId: string): void {
   for (const run of deps.fileBackupRunsRepo.listInProgressByRepository(repositoryId)) {
-    if (run.pid !== null && isProcessAlive(run.pid)) continue;
+    if (!isStaleInProgressRun(run)) continue;
     deps.fileBackupRunsRepo.markFinished(run.id, 'Failed', {
       errorMessage: 'Run interrupted: owning process is no longer alive.',
     });
   }
   for (const maintenanceRun of deps.fileBackupMaintenanceRunsRepo.listInProgressByRepository(repositoryId)) {
-    if (maintenanceRun.pid !== null && isProcessAlive(maintenanceRun.pid)) continue;
+    if (!isStaleInProgressRun(maintenanceRun)) continue;
     deps.fileBackupMaintenanceRunsRepo.markFinished(maintenanceRun.id, 'Failed', {
       errorMessage: 'Maintenance run interrupted: owning process is no longer alive.',
     });
@@ -60,14 +64,14 @@ export function checkRepositoryLock(
 ): RepositoryLockResult {
   const inProgressRuns = deps.fileBackupRunsRepo
     .listInProgressByRepository(repositoryId)
-    .filter((run) => run.pid !== null && isProcessAlive(run.pid));
+    .filter((run) => !isStaleInProgressRun(run));
   if (inProgressRuns.length > 0) {
     return { locked: true, heldBy: { kind: 'run', id: inProgressRuns[0].id } };
   }
 
   const inProgressMaintenance = deps.fileBackupMaintenanceRunsRepo
     .listInProgressByRepository(repositoryId)
-    .filter((run) => run.pid !== null && isProcessAlive(run.pid));
+    .filter((run) => !isStaleInProgressRun(run));
   if (inProgressMaintenance.length > 0) {
     return { locked: true, heldBy: { kind: 'maintenance', id: inProgressMaintenance[0].id } };
   }

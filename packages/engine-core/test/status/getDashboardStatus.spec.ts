@@ -50,6 +50,51 @@ function insertRun(
     );
 }
 
+function seedFileTask(ctx: TestContext, sourceKind: 'local_folder' | 'remote_folder' = 'local_folder') {
+  const client = ctx.clientsRepo.create({ name: `client-${randomUUID()}`, localBasePath: 'D:/Backups/f' });
+  const repo = ctx.fileBackupRepositoriesRepo.create({
+    clientId: client.id,
+    repoPath: 'D:\\Backups\\f\\_restic-repo',
+    passwordSecretRef: 'secret:x',
+  });
+  const task = ctx.fileBackupTasksRepo.createLocalFolder({
+    clientId: client.id,
+    repositoryId: repo.id,
+    name: 'file-task',
+    sourcePath: 'D:\\Uploads',
+  });
+  return { client, repo, task };
+}
+
+function insertFileRun(
+  ctx: TestContext,
+  taskId: string,
+  clientId: string,
+  repositoryId: string,
+  status: string,
+  hoursAgo: number,
+  opts: { totalBytesProcessed?: number | null; snapshotId?: string | null; errorMessage?: string | null } = {}
+) {
+  const id = randomUUID();
+  ctx.db
+    .prepare(
+      `INSERT INTO file_backup_runs (id, task_id, client_id, repository_id, status, snapshot_id, total_bytes_processed, started_at, finished_at, error_message, pid)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-' || ? || ' hours'), datetime('now', '-' || ? || ' hours'), ?, 1)`
+    )
+    .run(
+      id,
+      taskId,
+      clientId,
+      repositoryId,
+      status,
+      opts.snapshotId ?? (status === 'Success' ? `snap-${id.slice(0, 8)}` : null),
+      opts.totalBytesProcessed ?? null,
+      hoursAgo,
+      hoursAgo,
+      opts.errorMessage ?? null
+    );
+}
+
 describe('getDashboardStatus', () => {
   it('reports NeverRun for a task with no run history', () => {
     const ctx = createTestContext();
@@ -103,6 +148,45 @@ describe('getDashboardStatus', () => {
     const ctx = createTestContext();
     const { client, task } = seedTask(ctx);
     ctx.tasksRepo.deactivate(task.id);
+
+    expect(getDashboardStatus(ctx)).toHaveLength(0);
+  });
+
+  it('includes file-backup tasks alongside DB tasks, tagged with kind', () => {
+    const ctx = createTestContext();
+    const { task } = seedFileTask(ctx);
+
+    const rows = getDashboardStatus(ctx);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: 'file',
+      task: task.name,
+      strategy: 'local_folder',
+      status: 'NeverRun',
+      sizeBytes: null,
+      checksumSha256: null,
+    });
+  });
+
+  it("surfaces a file task's latest failure while still reporting the last successful snapshot's size/age", () => {
+    const ctx = createTestContext();
+    const { task, client, repo } = seedFileTask(ctx);
+    insertFileRun(ctx, task.id, client.id, repo.id, 'Success', 30, { totalBytesProcessed: 5_000_000 });
+    insertFileRun(ctx, task.id, client.id, repo.id, 'Failed', 1, { errorMessage: 'restic: repository is already locked' });
+
+    const rows = getDashboardStatus(ctx);
+
+    expect(rows[0].status).toBe('Failed');
+    expect(rows[0].sizeBytes).toBe(5_000_000);
+    expect(rows[0].lastGoodBackupAt).not.toBeNull();
+    expect(rows[0].latestErrorMessage).toBe('restic: repository is already locked');
+  });
+
+  it('excludes a deactivated file-backup task', () => {
+    const ctx = createTestContext();
+    const { task } = seedFileTask(ctx);
+    ctx.fileBackupTasksRepo.deactivate(task.id);
 
     expect(getDashboardStatus(ctx)).toHaveLength(0);
   });

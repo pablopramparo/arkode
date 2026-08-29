@@ -18,6 +18,7 @@ import { createRemoteDumpExecutor } from '../strategies/remoteDumpExecutor.js';
 import { createDirectDumpExecutor } from '../strategies/directDumpExecutor.js';
 import type { DumpValidator } from '../validators/types.js';
 import { createGenericValidator } from '../validators/genericValidator.js';
+import { isStaleInProgressRun } from '../util/processIdentity.js';
 import { createPostgresCustomValidator } from '../validators/postgresCustomValidator.js';
 import { createMysqlDumpValidator } from '../validators/mysqlDumpValidator.js';
 import { createRunLogger, type RunLogger } from '../logging/logger.js';
@@ -63,17 +64,6 @@ export interface RunBackupTaskResult {
   skipped: boolean;
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // EPERM means the process exists but we lack permission to signal it —
-    // still alive. Any other error (ESRCH, etc.) means it's gone.
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
 async function hashFile(path: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = createHash('sha256');
@@ -85,13 +75,15 @@ async function hashFile(path: string): Promise<string> {
 }
 
 /**
- * Recovers from a crash mid-run: any Running/Producing/Validating row whose
- * pid is no longer alive is not actually in progress — mark it Failed so it
- * doesn't block the app-level lock below forever.
+ * Recovers from a crash mid-run: any Running/Producing/Validating row that
+ * `isStaleInProgressRun` judges dead (see that helper — a bare
+ * `process.kill(pid, 0)` isn't enough, since a recycled PID would keep a
+ * crashed run stuck forever) is marked Failed so it doesn't block the
+ * app-level lock below.
  */
 function recoverStaleRuns(runsRepo: RunsRepo, taskId: string): void {
   for (const run of runsRepo.listInProgress(taskId)) {
-    if (run.pid !== null && isProcessAlive(run.pid)) continue;
+    if (!isStaleInProgressRun(run)) continue;
     runsRepo.markFinished(run.id, 'Failed', { errorMessage: 'Run interrupted: owning process is no longer alive.' });
   }
 }
@@ -220,7 +212,7 @@ export async function runBackupTask(task: BackupTask, deps: RunBackupTaskDeps): 
   // App-level lock: WAL allows concurrent readers, not concurrent writers,
   // and a second Task-Scheduler/GUI-triggered run of the same task would
   // race the first. Skip rather than double-run.
-  const stillInProgress = deps.runsRepo.listInProgress(task.id).filter((r) => r.pid !== null && isProcessAlive(r.pid));
+  const stillInProgress = deps.runsRepo.listInProgress(task.id).filter((r) => !isStaleInProgressRun(r));
   if (stillInProgress.length > 0) {
     return { run: stillInProgress[0], skipped: true };
   }

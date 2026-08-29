@@ -163,6 +163,18 @@ describe('fileBackupTasksRepo', () => {
     expect(scheduled.scheduleDaysOfWeek).toEqual([1, 3]);
   });
 
+  it('setWindowsTaskName records and clears the registered Scheduled Task name', () => {
+    const task = tasksRepo.createLocalFolder({ clientId, repositoryId, name: 'Uploads', sourcePath: 'D:\\Sites\\acme\\uploads' });
+    expect(task.windowsTaskName).toBeNull();
+
+    const registered = tasksRepo.setWindowsTaskName(task.id, '\\arkode\\' + task.id);
+    expect(registered.windowsTaskName).toBe('\\arkode\\' + task.id);
+    expect(tasksRepo.getById(task.id)?.windowsTaskName).toBe('\\arkode\\' + task.id);
+
+    const cleared = tasksRepo.setWindowsTaskName(task.id, null);
+    expect(cleared.windowsTaskName).toBeNull();
+  });
+
   it('listScheduled only returns active tasks with schedule_enabled and a schedule_time set', () => {
     const scheduled = tasksRepo.createLocalFolder({ clientId, repositoryId, name: 'Scheduled', sourcePath: 'D:\\Sites\\acme\\a' });
     tasksRepo.createLocalFolder({ clientId, repositoryId, name: 'Unscheduled', sourcePath: 'D:\\Sites\\acme\\b' });
