@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
 import { fetchDashboardStatus, runTaskNow, testTaskConnection, type ConnectionTestResult, type DashboardRow } from '../lib/statusClient';
 import { IN_PROGRESS_RUN_STATUSES } from '../lib/tasksClient';
-import { formatAge, formatSize, ageInHours, formatConnectionTestVersions } from '../lib/format';
+import { formatAge, formatSize, ageInHours, formatConnectionTestVersions, formatDateTime } from '../lib/format';
 import { StatusChip } from './StatusChip';
 import { StatCard } from './StatCard';
 import { AlertTriangleIcon, CheckCircleIcon, ClipboardIcon, EyeIcon, PlayIcon, PulseIcon, UsersIcon } from './icons';
@@ -200,14 +200,7 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                           <BackupSetBadge name={row.backupSetName} />
                         </td>
                         <td className="px-4 py-2.5">
-                          {row.lastGoodBackupAt
-                            ? new Date(row.lastGoodBackupAt).toLocaleString('es-AR', {
-                                day: '2-digit',
-                                month: '2-digit',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })
-                            : '—'}
+                          {formatDateTime(row.lastGoodBackupAt)}
                         </td>
                         <td className="px-4 py-2.5">{formatSize(row.sizeBytes)}</td>
                         <td className="px-4 py-2.5">
@@ -312,7 +305,7 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
           </div>
           {lastRefreshedAt && (
             <div className="border-t px-4 py-2 text-xs" style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>
-              Actualizado {lastRefreshedAt.toLocaleTimeString('es-AR')}
+              Actualizado {lastRefreshedAt.toLocaleTimeString('es-AR', { hour12: false })}
             </div>
           )}
         </div>
