@@ -58,6 +58,19 @@ export function createFtpAdapter(config: FtpTransportConfig): FtpAdapter {
         secure: false,
       });
       connected = true;
+      // Same class of gotcha sshAdapter.ts documents for raw ssh2: if the
+      // FTP control socket emits 'error' while no basic-ftp task is pending
+      // (server drops an "idle" control connection mid-sync — common on a
+      // long recursive LIST / many small downloads), Node crashes the whole
+      // process with no catch point. A permanent no-op listener defuses
+      // that; basic-ftp's own operation promises still reject normally, so
+      // the orchestrator still sees a real failure and marks the run Failed.
+      try {
+        const socket = (client as unknown as { ftp?: { socket?: { on?: (ev: string, cb: () => void) => void } } }).ftp?.socket;
+        socket?.on?.('error', () => {});
+      } catch {
+        /* best-effort — never let the guard itself throw */
+      }
     },
 
     async disconnect() {

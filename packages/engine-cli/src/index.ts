@@ -1780,6 +1780,40 @@ program
     const ctx = buildContext();
     const port = Number(opts.port);
 
+    // This process is the app's whole backend — the UI talks to nothing
+    // else. It must never die because one backup run threw where nothing
+    // caught it (the concrete case: a remote FTP server dropping the
+    // control connection mid-sync, which basic-ftp can surface as an
+    // unhandled socket error). Log it, fail any run this process still
+    // "owns" so it can't wedge a lock, and keep serving.
+    function handleBackendFault(kind: string, err: unknown) {
+      const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+      try {
+        console.error(`[serve] ${kind} (kept alive): ${detail}`);
+      } catch {
+        /* ignore */
+      }
+      try {
+        const stamp = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+        ctx.db
+          .prepare(
+            `UPDATE file_backup_runs SET status='Failed', finished_at=${stamp},
+               error_message=COALESCE(error_message, ?) WHERE status IN ('Running','Producing','Validating') AND pid = ?`
+          )
+          .run(`Backend fault (${kind}) — run could not continue.`, process.pid);
+        ctx.db
+          .prepare(
+            `UPDATE backup_runs SET status='Failed', finished_at=${stamp},
+               error_message=COALESCE(error_message, ?) WHERE status IN ('Running','Producing','Validating') AND pid = ?`
+          )
+          .run(`Backend fault (${kind}) — run could not continue.`, process.pid);
+      } catch {
+        /* best-effort */
+      }
+    }
+    process.on('unhandledRejection', (reason) => handleBackendFault('unhandledRejection', reason));
+    process.on('uncaughtException', (err) => handleBackendFault('uncaughtException', err));
+
     function sendJson(res: ServerResponse, status: number, body: unknown) {
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(body));
