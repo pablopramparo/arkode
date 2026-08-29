@@ -108,12 +108,3 @@ const IN_PROGRESS: string[] = ['Running', 'Producing', 'Validating'];
 export function isUnifiedTaskInProgress(row: UnifiedTaskRow): boolean {
   return row.latestRunStatus != null && IN_PROGRESS.includes(row.latestRunStatus);
 }
-
-/**
- * A scheduled, active task that isn't actually registered in Windows Task
- * Scheduler — it will never run on its own. Mirrors Tareas.tsx's original
- * isScheduleNotRegistered, now covering both domains.
- */
-export function isUnifiedScheduleNotRegistered(row: UnifiedTaskRow): boolean {
-  return row.isActive && row.scheduleEnabled && Boolean(row.scheduleTime) && !row.windowsTaskName;
-}

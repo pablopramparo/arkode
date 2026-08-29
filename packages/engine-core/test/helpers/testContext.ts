@@ -14,6 +14,9 @@ import { createSettingsRepo } from '../../src/db/repositories/settingsRepo.js';
 import { createFileBackupRepositoriesRepo } from '../../src/fileBackup/db/repositories/fileBackupRepositoriesRepo.js';
 import { createFileBackupTasksRepo } from '../../src/fileBackup/db/repositories/fileBackupTasksRepo.js';
 import { createFileBackupRunsRepo } from '../../src/fileBackup/db/repositories/fileBackupRunsRepo.js';
+import { createFileBackupMaintenanceRunsRepo } from '../../src/fileBackup/db/repositories/fileBackupMaintenanceRunsRepo.js';
+import { createFileBackupRetentionDeletionsRepo } from '../../src/fileBackup/db/repositories/fileBackupRetentionDeletionsRepo.js';
+import { createFileBackupLogEventsRepo } from '../../src/fileBackup/db/repositories/fileBackupLogEventsRepo.js';
 import type { SecretStore } from '../../src/secrets/types.js';
 
 /** In-memory Map-based SecretStore — never touches the real Windows Credential Manager in tests. */
@@ -50,6 +53,9 @@ export function createTestContext() {
   const fileBackupRepositoriesRepo = createFileBackupRepositoriesRepo(db);
   const fileBackupTasksRepo = createFileBackupTasksRepo(db, transportsRepo);
   const fileBackupRunsRepo = createFileBackupRunsRepo(db);
+  const fileBackupMaintenanceRunsRepo = createFileBackupMaintenanceRunsRepo(db);
+  const fileBackupRetentionDeletionsRepo = createFileBackupRetentionDeletionsRepo(db);
+  const fileBackupLogEventsRepo = createFileBackupLogEventsRepo(db);
 
   return {
     db,
@@ -67,6 +73,9 @@ export function createTestContext() {
     fileBackupRepositoriesRepo,
     fileBackupTasksRepo,
     fileBackupRunsRepo,
+    fileBackupMaintenanceRunsRepo,
+    fileBackupRetentionDeletionsRepo,
+    fileBackupLogEventsRepo,
   };
 }
 

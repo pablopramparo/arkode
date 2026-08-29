@@ -70,6 +70,24 @@ export async function uninstallScheduledTask(taskName: string): Promise<void> {
   await execFileAsync('schtasks.exe', ['/Delete', '/TN', taskName, '/F']);
 }
 
+/**
+ * Every Scheduled Task registered under the `\arkode\` folder (the per-task
+ * `\arkode\<taskId>` entries + `\arkode\file-backup-maintenance`). Used by
+ * `scheduler:cleanup-legacy` to tear down the pre-service scheduling model.
+ * Returns `[]` if schtasks is unavailable or nothing is registered.
+ */
+export async function listArkodeScheduledTaskNames(): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync('schtasks.exe', ['/Query', '/FO', 'LIST']);
+    return stdout
+      .split(/\r?\n/)
+      .map((line) => /^TaskName:\s*(\\arkode\\.+)$/i.exec(line.trim())?.[1])
+      .filter((name): name is string => Boolean(name));
+  } catch {
+    return [];
+  }
+}
+
 /** `net session` only succeeds when the current process is running elevated — no dedicated Node API for this on Windows. */
 async function isRunningElevated(): Promise<boolean> {
   try {

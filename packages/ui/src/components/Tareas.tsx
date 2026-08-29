@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
-import { fetchTasks, IN_PROGRESS_RUN_STATUSES, type TaskRow } from '../lib/tasksClient';
+import { fetchTasks, type TaskRow } from '../lib/tasksClient';
 import { fetchFileBackupTasks } from '../lib/fileBackupClient';
 import { fetchConnections, type ConnectionsData } from '../lib/connectionsClient';
 import { mergeTasks } from '../lib/unifiedTasks';
@@ -10,19 +10,6 @@ import { TaskCreateWizard } from './TaskCreateWizard';
 import { FileTaskCreateModal } from './FileTaskCreateModal';
 import { AddBackupChoiceModal } from './AddBackupChoiceModal';
 import { UnifiedTaskTable } from './UnifiedTaskTable';
-
-/**
- * Whether a DB task's latest attempt is still going. Kept here (still
- * imported by ClienteDetalle for its non-task tabs); the unified table uses
- * isUnifiedTaskInProgress from unifiedTasks.ts.
- */
-export function isTaskInProgress(task: TaskRow): boolean {
-  return task.latestRunStatus != null && (IN_PROGRESS_RUN_STATUSES as string[]).includes(task.latestRunStatus);
-}
-
-export function isScheduleNotRegistered(task: TaskRow): boolean {
-  return task.isActive && task.scheduleEnabled && Boolean(task.scheduleTime) && !task.windowsTaskName;
-}
 
 export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) => void }) {
   const [dbTasks, setDbTasks] = useState<TaskRow[] | null>(null);

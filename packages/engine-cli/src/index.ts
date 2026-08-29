@@ -17,11 +17,17 @@ import {
   importConfig,
   importTaskBundle,
   runDueTasks,
+  runSchedulerTick,
+  SCHEDULER_HEARTBEAT_KEY,
+  schedulerServiceStatus,
+  restartSchedulerService,
+  reinstallSchedulerService,
   scheduledTaskNameForBackupTask,
   scheduledTaskDisplayName,
   installScheduledTask,
   uninstallScheduledTask,
   scheduledTaskStatus,
+  listArkodeScheduledTaskNames,
   getDashboardStatus,
   getSystemInfo,
   detectInstalledDbTools,
@@ -840,6 +846,102 @@ program
     const results = await runDueTasks(tasks, deps, new Date());
     console.log(JSON.stringify(results, null, 2));
     if (results.some((r) => r.error || r.result?.run.status === 'Failed')) process.exitCode = 1;
+  });
+
+program
+  .command('scheduler:tick')
+  .description(
+    'One scheduler cycle: run every currently-due DB-backup task, every due file-backup task, any due repository maintenance, then stamp the heartbeat. This is what the arkode-scheduler Windows service invokes every 60s. Always exits 0 unless the process itself crashes — a Failed backup is not a tick failure.'
+  )
+  .action(async () => {
+    const ctx = buildContext();
+    const result = await runSchedulerTick(
+      {
+        tasksRepo: ctx.tasksRepo,
+        fileBackupTasksRepo: ctx.fileBackupTasksRepo,
+        settingsRepo: ctx.settingsRepo,
+        dbTaskDeps: {
+          clientsRepo: ctx.clientsRepo,
+          transportsRepo: ctx.transportsRepo,
+          databaseConnectionsRepo: ctx.databaseConnectionsRepo,
+          runsRepo: ctx.runsRepo,
+          logEventsRepo: ctx.logEventsRepo,
+          knownHostsRepo: ctx.knownHostsRepo,
+          retentionDeletionsRepo: ctx.retentionDeletionsRepo,
+          settingsRepo: ctx.settingsRepo,
+          secretStore: ctx.secretStore,
+          onUnknownHost: confirmHostInteractively,
+        },
+        fileTaskDeps: { ...buildFileBackupTaskDeps(ctx), fileBackupRunsRepo: ctx.fileBackupRunsRepo },
+        maintenanceDeps: {
+          fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+          fileBackupMaintenanceRunsRepo: ctx.fileBackupMaintenanceRunsRepo,
+          fileBackupRunsRepo: ctx.fileBackupRunsRepo,
+          secretStore: ctx.secretStore,
+        },
+      },
+      new Date()
+    );
+    console.log(JSON.stringify(result));
+  });
+
+program
+  .command('scheduler:cleanup-legacy')
+  .description(
+    'Remove the pre-service per-task Windows Scheduled Tasks (\\arkode\\*) and the global maintenance task, and clear windows_task_name on every task row. Run once by the installer when migrating to the arkode-scheduler service. Idempotent; tolerant of "not found".'
+  )
+  .action(async () => {
+    const ctx = buildContext();
+    const removed: string[] = [];
+    const names = await listArkodeScheduledTaskNames();
+    for (const name of new Set([...names, '\\arkode\\file-backup-maintenance'])) {
+      try {
+        await uninstallScheduledTask(name);
+        removed.push(name);
+      } catch {
+        /* not found / already gone */
+      }
+    }
+    const db = ctx.db.prepare(`UPDATE backup_tasks SET windows_task_name = NULL WHERE windows_task_name IS NOT NULL`).run();
+    const file = ctx.db
+      .prepare(`UPDATE file_backup_tasks SET windows_task_name = NULL WHERE windows_task_name IS NOT NULL`)
+      .run();
+    console.log(JSON.stringify({ removedScheduledTasks: removed, clearedDbRows: db.changes, clearedFileRows: file.changes }));
+  });
+
+program
+  .command('scheduler:service-status')
+  .description('Print { installed, running, state } for the arkode-scheduler Windows service, as JSON. No elevation needed.')
+  .action(async () => {
+    console.log(JSON.stringify(await schedulerServiceStatus()));
+  });
+
+program
+  .command('scheduler:service-restart')
+  .description('Stop then start the arkode-scheduler Windows service. Must be run elevated.')
+  .action(async () => {
+    await restartSchedulerService();
+    console.log(JSON.stringify(await schedulerServiceStatus()));
+  });
+
+program
+  .command('scheduler:service-reinstall')
+  .description('Delete and recreate the arkode-scheduler Windows service from this install. Must be run elevated.')
+  .action(async () => {
+    const installDir = joinPath(process.execPath, '..');
+    await reinstallSchedulerService(installDir);
+    const ctx = buildContext();
+    try {
+      // Also clear any legacy per-task Scheduled Tasks on a reinstall, same as the installer does.
+      for (const name of new Set([...(await listArkodeScheduledTaskNames()), '\\arkode\\file-backup-maintenance'])) {
+        await uninstallScheduledTask(name).catch(() => {});
+      }
+      ctx.db.prepare(`UPDATE backup_tasks SET windows_task_name = NULL WHERE windows_task_name IS NOT NULL`).run();
+      ctx.db.prepare(`UPDATE file_backup_tasks SET windows_task_name = NULL WHERE windows_task_name IS NOT NULL`).run();
+    } catch {
+      /* best-effort cleanup */
+    }
+    console.log(JSON.stringify(await schedulerServiceStatus()));
   });
 
 program
@@ -2361,6 +2463,13 @@ program
 
       if (req.method === 'GET' && pathname === '/system') {
         sendJson(res, 200, getSystemInfo());
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/scheduler-status') {
+        const heartbeatAt = ctx.settingsRepo.get(SCHEDULER_HEARTBEAT_KEY);
+        const heartbeatAgeSeconds = heartbeatAt ? Math.max(0, Math.round((Date.now() - Date.parse(heartbeatAt)) / 1000)) : null;
+        sendJson(res, 200, { heartbeatAt, heartbeatAgeSeconds });
         return;
       }
 

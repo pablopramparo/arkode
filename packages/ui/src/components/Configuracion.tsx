@@ -23,6 +23,7 @@ import {
 import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { Switch } from './Switch';
+import { SchedulerStatusBanner } from './SchedulerStatusBanner';
 import arkodeIsotipo from '../assets/arkode-isotipo.png';
 
 const inputStyle: React.CSSProperties = {
@@ -640,6 +641,18 @@ export function Configuracion() {
               </section>
 
               <section className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+                <h2 className="mb-3 text-sm font-semibold">Servicio de backups</h2>
+                <SchedulerStatusBanner />
+                <p className="text-xs" style={{ color: 'var(--muted)' }}>
+                  Un servicio de Windows (<code>arkode-scheduler</code>) ejecuta los backups programados — de base de
+                  datos y de archivos — con la app cerrada o no, y con o sin sesión iniciada. Lo instala y arranca el
+                  instalador; si alguna vez se detiene, usá <strong>Reiniciar</strong> (o <strong>Reinstalar</strong> si
+                  se rompió). Cambiar el horario de una tarea no requiere nada acá — el servicio lo toma en el próximo
+                  ciclo.
+                </p>
+              </section>
+
+              <section className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
                 <h2 className="mb-3 text-sm font-semibold">Inicio automático</h2>
                 <Switch
                   checked={autostart ?? false}
@@ -648,7 +661,7 @@ export function Configuracion() {
                 />
                 <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
                   Esto solo afecta si el Dashboard se abre solo al prender la PC — los backups programados corren igual
-                  como tarea de Windows, con la app cerrada o no.
+                  (los ejecuta el servicio <code>arkode-scheduler</code>, no depende de esta app).
                 </p>
               </section>
             </>

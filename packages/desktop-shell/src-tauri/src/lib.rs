@@ -217,6 +217,77 @@ async fn unregister_file_task_schedule(task_id: String) -> Result<(), String> {
   run_elevated_file_task_scheduler("file-task:scheduler:uninstall", task_id).await
 }
 
+fn installed_engine_cli() -> Result<std::path::PathBuf, String> {
+  Ok(
+    std::env::current_exe()
+      .map_err(|e| format!("No se pudo resolver la ruta de la app: {e}"))?
+      .parent()
+      .ok_or_else(|| "No se pudo resolver la carpeta de instalación.".to_string())?
+      .join("engine-cli.exe"),
+  )
+}
+
+/// Runs `engine-cli <subcommand>` elevated (one UAC prompt) — for the
+/// arkode-scheduler service control actions (restart / reinstall). Same
+/// production-only, argv-safe shape as run_elevated_file_task_scheduler.
+async fn run_elevated_engine_cli(subcommand: &'static str) -> Result<(), String> {
+  if cfg!(debug_assertions) {
+    return Err(format!(
+      "No disponible en modo desarrollo -- corré esto desde una terminal elevada: engine-cli {subcommand}"
+    ));
+  }
+  let engine_cli = installed_engine_cli()?;
+  let status = tauri::async_runtime::spawn_blocking(move || runas::Command::new(&engine_cli).arg(subcommand).status())
+    .await
+    .map_err(|e| format!("Error interno esperando el proceso elevado: {e}"))?
+    .map_err(|e| format!("No se pudo iniciar engine-cli.exe elevado (¿cancelaste el aviso de administrador de Windows?): {e}"))?;
+  if status.success() {
+    Ok(())
+  } else {
+    Err(format!("engine-cli.exe {subcommand} terminó con un error (código {:?}).", status.code()))
+  }
+}
+
+#[derive(serde::Serialize)]
+struct SchedulerServiceStatus {
+  installed: bool,
+  running: bool,
+}
+
+/// `{ installed, running }` for the arkode-scheduler Windows service — reads
+/// `engine-cli scheduler:service-status` (a plain `sc query`, no elevation).
+/// Dev has no service; return a benign "not installed" so the UI shows its
+/// dev-mode message rather than a scary red banner.
+#[tauri::command]
+async fn scheduler_service_status() -> Result<SchedulerServiceStatus, String> {
+  if cfg!(debug_assertions) {
+    return Ok(SchedulerServiceStatus { installed: false, running: false });
+  }
+  let engine_cli = installed_engine_cli()?;
+  let output = tauri::async_runtime::spawn_blocking(move || {
+    std::process::Command::new(&engine_cli).arg("scheduler:service-status").output()
+  })
+  .await
+  .map_err(|e| format!("Error interno consultando el servicio: {e}"))?
+  .map_err(|e| format!("No se pudo consultar el servicio: {e}"))?;
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  let v: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|e| format!("Respuesta inválida del servicio: {e} ({stdout})"))?;
+  Ok(SchedulerServiceStatus {
+    installed: v.get("installed").and_then(|x| x.as_bool()).unwrap_or(false),
+    running: v.get("running").and_then(|x| x.as_bool()).unwrap_or(false),
+  })
+}
+
+#[tauri::command]
+async fn restart_scheduler_service() -> Result<(), String> {
+  run_elevated_engine_cli("scheduler:service-restart").await
+}
+
+#[tauri::command]
+async fn reinstall_scheduler_service() -> Result<(), String> {
+  run_elevated_engine_cli("scheduler:service-reinstall").await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   // Debug (`tauri dev`) never spawns its own sidecar (see the setup() branch
@@ -231,7 +302,10 @@ pub fn run() {
       register_task_schedule,
       unregister_task_schedule,
       register_file_task_schedule,
-      unregister_file_task_schedule
+      unregister_file_task_schedule,
+      scheduler_service_status,
+      restart_scheduler_service,
+      reinstall_scheduler_service
     ])
     // Must be the first plugin registered — it needs to intercept the app
     // launch before anything else runs. A second launch attempt is

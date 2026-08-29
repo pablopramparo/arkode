@@ -105,6 +105,15 @@ export type { DeleteBackupRunDeps } from './retention/deleteBackupRun.js';
 export { isTaskDue } from './scheduler/isTaskDue.js';
 export { runDueTasks } from './scheduler/runDueTasks.js';
 export type { RunDueResult } from './scheduler/runDueTasks.js';
+export { runSchedulerTick, SCHEDULER_HEARTBEAT_KEY } from './scheduler/runSchedulerTick.js';
+export type { RunSchedulerTickDeps, SchedulerTickResult } from './scheduler/runSchedulerTick.js';
+export {
+  schedulerServiceStatus,
+  restartSchedulerService,
+  reinstallSchedulerService,
+  SCHEDULER_SERVICE_NAME,
+} from './scheduler/windowsService.js';
+export type { WindowsServiceStatus } from './scheduler/windowsService.js';
 export { buildTaskDefinitionXml } from './scheduler/taskDefinitionXml.js';
 export type { TaskDefinitionInput } from './scheduler/taskDefinitionXml.js';
 export {
@@ -113,6 +122,7 @@ export {
   installScheduledTask,
   uninstallScheduledTask,
   scheduledTaskStatus,
+  listArkodeScheduledTaskNames,
 } from './scheduler/windowsTaskScheduler.js';
 export type { InstallScheduledTaskInput, ScheduledTaskStatus } from './scheduler/windowsTaskScheduler.js';
 

@@ -15,23 +15,11 @@ import {
   testFileBackupTaskConnection,
   type FileBackupTaskRow,
 } from '../lib/fileBackupClient';
-import {
-  canRegisterTaskSchedule,
-  registerTaskSchedule,
-  unregisterTaskSchedule,
-  registerFileTaskSchedule,
-  unregisterFileTaskSchedule,
-} from '../lib/schedulerClient';
-import {
-  strategyLabel,
-  isUnifiedTaskInProgress,
-  isUnifiedScheduleNotRegistered,
-  type UnifiedTaskRow,
-} from '../lib/unifiedTasks';
+import { strategyLabel, isUnifiedTaskInProgress, type UnifiedTaskRow } from '../lib/unifiedTasks';
 import { formatSchedule, formatConnectionTestVersions } from '../lib/format';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { IconButton, IconLinkButton } from './IconButton';
-import { EditIcon, PlayIcon, PulseIcon, CheckCircleIcon, DownloadIcon, ClockIcon } from './icons';
+import { EditIcon, PlayIcon, PulseIcon, CheckCircleIcon, DownloadIcon } from './icons';
 import { ClientLink } from './ClientLink';
 import { BackupSetBadge } from './BackupSetBadge';
 import { KindBadge } from './KindBadge';
@@ -51,11 +39,10 @@ function StrategyBadge({ row }: { row: UnifiedTaskRow }) {
 }
 
 interface RowActionState {
-  busy?: 'run' | 'test' | 'compatibility' | 'toggle' | 'scheduler' | 'unscheduler';
+  busy?: 'run' | 'test' | 'compatibility' | 'toggle';
   testResult?: ConnectionTestResult;
   compatibilityResult?: DirectDumpCompatibilityResult;
   actionError?: string;
-  schedulerMessage?: string;
 }
 
 export function UnifiedTaskTable({
@@ -126,28 +113,6 @@ export function UnifiedTaskTable({
     }
   }
 
-  async function handleRegisterScheduler(row: UnifiedTaskRow) {
-    patch(row.id, { busy: 'scheduler', actionError: undefined, schedulerMessage: undefined });
-    try {
-      await (row.kind === 'file' ? registerFileTaskSchedule(row.id) : registerTaskSchedule(row.id));
-      patch(row.id, { busy: undefined, schedulerMessage: 'Programación activada en Windows.' });
-      onChanged();
-    } catch (err) {
-      patch(row.id, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  async function handleUnregisterScheduler(row: UnifiedTaskRow) {
-    patch(row.id, { busy: 'unscheduler', actionError: undefined, schedulerMessage: undefined });
-    try {
-      await (row.kind === 'file' ? unregisterFileTaskSchedule(row.id) : unregisterTaskSchedule(row.id));
-      patch(row.id, { busy: undefined, schedulerMessage: 'Se quitó del Programador de tareas de Windows.' });
-      onChanged();
-    } catch (err) {
-      patch(row.id, { busy: undefined, actionError: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
   const colCount = showClientColumn ? 6 : 5;
 
   return (
@@ -167,10 +132,7 @@ export function UnifiedTaskTable({
           <tbody>
             {rows.map((row) => {
               const state = actionState[row.id];
-              const hasDetail = Boolean(
-                state?.testResult || state?.compatibilityResult || state?.actionError || state?.schedulerMessage
-              );
-              const scheduleProblem = isUnifiedScheduleNotRegistered(row);
+              const hasDetail = Boolean(state?.testResult || state?.compatibilityResult || state?.actionError);
               const inProgress = isUnifiedTaskInProgress(row);
               const canTest = row.kind === 'db' || row.strategy === 'remote_folder';
               return (
@@ -179,8 +141,6 @@ export function UnifiedTaskTable({
                     style={{
                       borderTop: '1px solid var(--separator)',
                       opacity: row.isActive ? 1 : 0.55,
-                      borderLeft: scheduleProblem ? '3px solid var(--danger)' : '3px solid transparent',
-                      backgroundColor: scheduleProblem ? 'color-mix(in oklab, var(--danger) 6%, transparent)' : undefined,
                     }}
                   >
                     {showClientColumn && (
@@ -204,14 +164,8 @@ export function UnifiedTaskTable({
                     <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                       {row.originLabel}
                     </td>
-                    <td
-                      className="px-4 py-2.5"
-                      style={{ color: scheduleProblem ? 'var(--danger)' : 'var(--muted)', fontWeight: scheduleProblem ? 600 : undefined }}
-                    >
+                    <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                       {formatSchedule(row)}
-                      {scheduleProblem && (
-                        <div className="mt-0.5 text-xs font-normal">⚠ No está activa en el Programador de Windows — no va a correr sola.</div>
-                      )}
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
@@ -262,23 +216,6 @@ export function UnifiedTaskTable({
                             )}
                           </>
                         )}
-                        {canRegisterTaskSchedule() && row.scheduleTime && (
-                          <>
-                            <IconButton
-                              icon={<ClockIcon />}
-                              label={state?.busy === 'scheduler' ? 'Activando programación…' : 'Activar programación en Windows (pide permisos)'}
-                              disabled={Boolean(state?.busy)}
-                              onPress={() => handleRegisterScheduler(row)}
-                            />
-                            <IconButton
-                              icon={<ClockIcon />}
-                              tone="danger"
-                              label={state?.busy === 'unscheduler' ? 'Quitando del Programador…' : 'Quitar del Programador de Windows (pide permisos)'}
-                              disabled={Boolean(state?.busy)}
-                              onPress={() => handleUnregisterScheduler(row)}
-                            />
-                          </>
-                        )}
                         <Button
                           size="sm"
                           className="rounded-full px-3"
@@ -295,7 +232,6 @@ export function UnifiedTaskTable({
                     <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
                       <td colSpan={colCount} className="px-4 py-2 text-xs">
                         {state?.actionError && <span style={{ color: 'var(--danger)' }}>Error: {state.actionError}</span>}
-                        {state?.schedulerMessage && <span style={{ color: 'var(--success)' }}>{state.schedulerMessage}</span>}
                         {state?.testResult && !state.testResult.unknownHost && (
                           <span style={{ color: state.testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
                             {state.testResult.ok ? 'Conexión OK' : 'Conexión fallida'}

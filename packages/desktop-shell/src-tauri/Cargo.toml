@@ -1,18 +1,30 @@
 [package]
 name = "app"
-version = "0.2.9"
+version = "0.3.0"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
 rust-version = "1.77.2"
+# Adding the arkode-scheduler [[bin]] below made the crate have two binaries
+# (this + the implicit src/main.rs); cargo/tauri then can't tell which is
+# "the app". src/main.rs is bin `app`.
+default-run = "app"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# The Windows service that runs scheduled backups (src/bin/scheduler.rs).
+# Built separately from `tauri build` via scripts/prepare-scheduler.mjs and
+# bundled as resources/scheduler/arkode-scheduler.exe. See CLAUDE.md's
+# "Scheduler" section.
+[[bin]]
+name = "arkode-scheduler"
+path = "src/bin/scheduler.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
@@ -36,3 +48,8 @@ tokio = { version = "1", features = ["sync", "time"] }
 # so a user can register a task's Windows Scheduled Task from the app itself
 # without the whole app needing to run elevated all the time.
 runas = "1"
+# The arkode-scheduler service binary only (src/bin/scheduler.rs). Thin
+# wrapper over the Windows Service Control Manager; pulls the `windows`
+# crate transitively.
+windows-service = "0.7"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
