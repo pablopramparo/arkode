@@ -93,11 +93,12 @@ export interface SetFileBackupScheduleInput {
  * `sourceKind`/`transportId`/`repositoryId` stay immutable — those reshape
  * the pipeline, so create a new task instead. `backupSetId` is editable
  * (see tasksRepo.ts's UpdateTaskInput). `sourcePath` (local_folder) and
- * `remoteSourcePath` (remote_folder) are editable too — a folder path is
- * just "where to sync from", not pipeline-shaping; changing it makes the
- * next sync re-download everything (the staging diff sees all-new, keyed by
- * taskId not path), which is expected. Only the field matching the task's
- * own `sourceKind` may be set.
+ * `remoteSourcePath` (remote_folder) are editable **only while the task has
+ * no snapshots yet** — repointing after a real backup exists would leave
+ * that task's history a mix of two different folders under one tag (and,
+ * for local_folder, orphan the old snapshots from retention's `--path`
+ * filter). Once snapshots exist, create a new task. Only the field matching
+ * the task's own `sourceKind` may be set.
  */
 export interface UpdateFileBackupTaskInput {
   name?: string;
@@ -143,6 +144,9 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
        (@id, @clientId, @repositoryId, @name, 'remote_folder', @transportId, @remoteSourcePath, @retentionCount, @retentionDays, @backupSetId)`
   );
   const getByIdStmt = db.prepare<[string], FileBackupTaskRow>('SELECT * FROM file_backup_tasks WHERE id = ?');
+  const hasSnapshotStmt = db.prepare<[string], { one: number }>(
+    `SELECT 1 AS one FROM file_backup_runs WHERE task_id = ? AND snapshot_id IS NOT NULL LIMIT 1`
+  );
   const listByClientStmt = db.prepare<[string], FileBackupTaskRow>(
     'SELECT * FROM file_backup_tasks WHERE client_id = ? ORDER BY name'
   );
@@ -231,6 +235,14 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
 
       let sourcePath = current.source_path;
       let remoteSourcePath = current.remote_source_path;
+      const changingSource =
+        (patch.sourcePath !== undefined && patch.sourcePath !== current.source_path) ||
+        (patch.remoteSourcePath !== undefined && patch.remoteSourcePath !== current.remote_source_path);
+      if (changingSource && hasSnapshotStmt.get(id)) {
+        throw new Error(
+          'This task already has snapshots — its source folder is locked in. Create a new task to back up a different folder.'
+        );
+      }
       if (patch.sourcePath !== undefined) {
         if (current.source_kind !== 'local_folder') {
           throw new Error(`sourcePath only applies to a local_folder task; task ${id} is "${current.source_kind}".`);

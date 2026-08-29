@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { randomUUID as randomId } from 'node:crypto';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { runMigrations } from '../../../../src/db/migrate.js';
 import { migrationsSourceDir } from '../../../../src/paths.js';
@@ -15,6 +16,7 @@ function freshDb() {
 }
 
 describe('fileBackupTasksRepo', () => {
+  let db: ReturnType<typeof freshDb>;
   let clientsRepo: ClientsRepo;
   let transportsRepo: TransportsRepo;
   let reposRepo: FileBackupRepositoriesRepo;
@@ -24,8 +26,15 @@ describe('fileBackupTasksRepo', () => {
   let sftpTransportId: string;
   let sshTransportId: string;
 
+  function seedSnapshot(taskId: string) {
+    db.prepare(
+      `INSERT INTO file_backup_runs (id, task_id, client_id, repository_id, status, snapshot_id, started_at, finished_at, pid)
+       VALUES (?, ?, ?, ?, 'Success', 'snap-1', datetime('now'), datetime('now'), 1)`
+    ).run(randomId(), taskId, clientId, repositoryId);
+  }
+
   beforeEach(() => {
-    const db = freshDb();
+    db = freshDb();
     clientsRepo = createClientsRepo(db);
     transportsRepo = createTransportsRepo(db);
     reposRepo = createFileBackupRepositoriesRepo(db);
@@ -137,6 +146,17 @@ describe('fileBackupTasksRepo', () => {
     expect(tasksRepo.update(remote.id, { remoteSourcePath: '/public_html/public/uploads' }).remoteSourcePath).toBe('/public_html/public/uploads');
     expect(() => tasksRepo.update(remote.id, { remoteSourcePath: '  ' })).toThrow(/cannot be empty/);
     expect(() => tasksRepo.update(remote.id, { sourcePath: 'D:\\x' })).toThrow(/only applies to a local_folder/);
+  });
+
+  it('update() locks the source folder once the task has a snapshot', () => {
+    const task = tasksRepo.createRemoteFolder({ clientId, repositoryId, name: 'R', transportId: sftpTransportId, remoteSourcePath: '/old' });
+    tasksRepo.update(task.id, { remoteSourcePath: '/still/editable' }); // fine before any snapshot
+    seedSnapshot(task.id);
+    expect(() => tasksRepo.update(task.id, { remoteSourcePath: '/new/path' })).toThrow(/already has snapshots/);
+    // name/retention still editable with snapshots present
+    expect(tasksRepo.update(task.id, { name: 'Renamed', retentionCount: 7 }).name).toBe('Renamed');
+    // passing the *same* path is a no-op, not a rejection
+    expect(() => tasksRepo.update(task.id, { remoteSourcePath: '/still/editable' })).not.toThrow();
   });
 
   it('deactivate/reactivate round-trip', () => {

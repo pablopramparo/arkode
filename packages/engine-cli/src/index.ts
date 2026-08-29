@@ -2744,6 +2744,7 @@ program
               return {
                 ...t,
                 kind: 'file' as const,
+                hasSnapshots: ctx.fileBackupRunsRepo.getLatestSuccessfulByTask(t.id) != null,
                 clientName,
                 transportName: transport?.name ?? null,
                 latestRunStatus: latestRun?.status ?? null,

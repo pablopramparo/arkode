@@ -59,6 +59,8 @@ export interface FileBackupTaskRow extends FileBackupTask {
   transportName: string | null;
   /** The task's latest attempt, whatever it is — null if never run. */
   latestRunStatus: FileBackupRunStatus | null;
+  /** True once a real snapshot exists — the source folder is then locked in. */
+  hasSnapshots: boolean;
 }
 
 export interface FileBackupRun {

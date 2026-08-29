@@ -4,7 +4,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import type { BackupSet } from 'engine-core';
 import { fetchBackupSets } from '../lib/backupSetsClient';
-import { updateFileBackupTask, setFileBackupTaskSchedule, type FileBackupTask } from '../lib/fileBackupClient';
+import { updateFileBackupTask, setFileBackupTaskSchedule, type FileBackupTaskRow } from '../lib/fileBackupClient';
 import { Modal } from './Modal';
 import { Field, inputStyle } from './TaskCreateWizard';
 import { FileScheduleFields, isFileScheduleValid, type FileScheduleValue } from './FileScheduleFields';
@@ -20,7 +20,7 @@ export function FileTaskEditModal({
   onClose,
   onSaved,
 }: {
-  task: FileBackupTask;
+  task: FileBackupTaskRow;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -88,7 +88,16 @@ export function FileTaskEditModal({
           <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
 
-        {task.sourceKind === 'local_folder' ? (
+        {task.hasSnapshots ? (
+          <Field label={task.sourceKind === 'local_folder' ? 'Carpeta de origen' : 'Carpeta remota de origen'}>
+            <div style={{ ...inputStyle, color: 'var(--muted)' }}>
+              {task.sourceKind === 'local_folder' ? task.sourcePath : task.remoteSourcePath}
+            </div>
+            <p className="text-xs" style={{ color: 'var(--muted)' }}>
+              Ya hay snapshots — la carpeta queda fija. Para respaldar otra carpeta, creá una tarea nueva.
+            </p>
+          </Field>
+        ) : task.sourceKind === 'local_folder' ? (
           <Field label="Carpeta de origen">
             <div className="flex gap-2">
               <input
@@ -121,8 +130,8 @@ export function FileTaskEditModal({
               placeholder="Ej: /public_html/public/uploads"
             />
             <p className="text-xs" style={{ color: 'var(--muted)' }}>
-              Ruta en el servidor tal como la ve el usuario FTP/SFTP (ojo con chroot). Cambiarla hace que la próxima
-              corrida vuelva a bajar todo.
+              Ruta en el servidor tal como la ve el usuario FTP/SFTP (ojo con chroot). Solo editable mientras no haya
+              snapshots.
             </p>
           </Field>
         )}
