@@ -21,14 +21,30 @@ function escapeXml(value: string): string {
     .replace(/'/g, '&apos;');
 }
 
+/** How often the CalendarTrigger re-fires across the day — see the doc comment on buildTaskDefinitionXml for why it polls instead of firing once. */
+export const POLL_INTERVAL = 'PT30M';
+
 /**
- * Builds a Task Scheduler v1.4 XML task definition with two triggers: a
- * daily CalendarTrigger at scheduleTime, and a LogonTrigger (delayed 2
- * minutes) as a catch-up path for a PC that was off at the scheduled time.
- * Redundant same-day double-firing between the two is handled by
- * isTaskDue()/runDueTasks(), not by anything here — this XML only concerns
- * itself with getting the process invoked at the right moments. The
- * LogonTrigger has no `<UserId>` filter, so it fires on *any* user's
+ * Builds a Task Scheduler v1.4 XML task definition.
+ *
+ * The CalendarTrigger is anchored at `scheduleTime` but carries a
+ * `<Repetition>` of every 30 minutes for a full day — so Windows invokes
+ * `engine-cli run-due` roughly every half hour, all day, every day, rather
+ * than once at a fixed time. `isTaskDue()` (which reads the task's *live*
+ * `schedule_time`/frequency/days from the DB on every call) is what decides
+ * whether this particular half-hour tick actually runs anything. This is
+ * deliberate: it means editing a task's time or frequency in arkode takes
+ * effect immediately with **no need to re-register the Windows task** — the
+ * XML no longer encodes the specific time, only "check often". A backup can
+ * start up to ~30 min after its nominal time, which is fine for daily/
+ * weekly/monthly backups. Same "OS trigger just nudges, code gates" split
+ * the weekly/monthly frequencies and the LogonTrigger catch-up already use.
+ *
+ * The LogonTrigger (delayed 2 minutes) stays as a faster catch-up path
+ * after a boot than waiting for the next half-hour tick. Redundant
+ * same-day firing across all of these is handled by isTaskDue()/
+ * runDueTasks() (the "no *scheduled* attempt yet today" guard), not here.
+ * The LogonTrigger has no `<UserId>` filter, so it fires on *any* user's
  * logon — irrelevant to who triggered it, since the task always runs as
  * SYSTEM regardless (see Principal below).
  *
@@ -70,6 +86,11 @@ export function buildTaskDefinitionXml(input: TaskDefinitionInput): string {
     <CalendarTrigger>
       <StartBoundary>${startBoundary}</StartBoundary>
       <Enabled>true</Enabled>
+      <Repetition>
+        <Interval>${POLL_INTERVAL}</Interval>
+        <Duration>P1D</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
       <ScheduleByDay>
         <DaysInterval>1</DaysInterval>
       </ScheduleByDay>

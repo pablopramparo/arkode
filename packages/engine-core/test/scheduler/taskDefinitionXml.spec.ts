@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildTaskDefinitionXml } from '../../src/scheduler/taskDefinitionXml.js';
 
 describe('buildTaskDefinitionXml', () => {
-  it('includes both a CalendarTrigger at the given time and a catch-up LogonTrigger', () => {
+  it('includes a CalendarTrigger anchored at the given time, repeating all day, plus a catch-up LogonTrigger', () => {
     const xml = buildTaskDefinitionXml({
       description: 'test',
       scheduleTime: '03:00',
@@ -12,6 +12,9 @@ describe('buildTaskDefinitionXml', () => {
 
     expect(xml).toContain('<CalendarTrigger>');
     expect(xml).toMatch(/<StartBoundary>\d{4}-\d{2}-\d{2}T03:00:00<\/StartBoundary>/);
+    // Polls every 30 min for a full day so isTaskDue() (which reads the live
+    // DB schedule) decides — editing a task's time needs no re-register.
+    expect(xml).toMatch(/<Repetition>\s*<Interval>PT30M<\/Interval>\s*<Duration>P1D<\/Duration>/);
     expect(xml).toContain('<LogonTrigger>');
     expect(xml).toContain('<Delay>PT2M</Delay>');
   });
