@@ -297,7 +297,7 @@ export function ConnectionFields({
               </Field>
             </>
           )}
-          {values.transportType === 'ssh' && (
+          {values.transportType !== 'ftp' && (
             <button
               type="button"
               className="flex items-center gap-1.5 self-start text-xs"
