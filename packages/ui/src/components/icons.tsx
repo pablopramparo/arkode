@@ -212,11 +212,12 @@ export function KeyIcon({ className }: IconProps) {
   );
 }
 
+/** Counter-clockwise circular arrow — "restore" / "bring back". Used for restoring a snapshot and reactivating a backup set. Feather's rotate-ccw geometry. */
 export function UndoIcon({ className }: IconProps) {
   return (
     <svg className={className} {...base}>
-      <path d="M4.5 9.5H11a6 6 0 1 1-5.2 9" />
-      <path d="M4.5 4.5v5h5" />
+      <polyline points="1 4 1 10 7 10" />
+      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
     </svg>
   );
 }
