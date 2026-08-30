@@ -78,17 +78,33 @@ export async function uninstallScheduledTask(taskName: string): Promise<void> {
  * `\arkode\<taskId>` entries + `\arkode\file-backup-maintenance`). Used by
  * `scheduler:cleanup-legacy` to tear down the pre-service scheduling model.
  * Returns `[]` if schtasks is unavailable or nothing is registered.
+ *
+ * Parses `/FO CSV /NH` (headerless), NOT `/FO LIST` — the LIST format's
+ * field labels are localized (`Nombre de tarea:` on Spanish Windows, not
+ * `TaskName:`), so the old label-anchored regex matched nothing there and
+ * cleanup silently deleted nothing. CSV/NH rows are `"<full task path>",…`
+ * with the path column never localized. Task display names can't contain a
+ * `"` (scheduledTaskDisplayName strips it), so `[^"]+` is a safe field read.
  */
 export async function listArkodeScheduledTaskNames(): Promise<string[]> {
   try {
-    const { stdout } = await execFileAsync('schtasks.exe', ['/Query', '/FO', 'LIST'], HIDDEN);
-    return stdout
-      .split(/\r?\n/)
-      .map((line) => /^TaskName:\s*(\\arkode\\.+)$/i.exec(line.trim())?.[1])
-      .filter((name): name is string => Boolean(name));
+    const { stdout } = await execFileAsync('schtasks.exe', ['/Query', '/FO', 'CSV', '/NH'], HIDDEN);
+    return parseArkodeTaskNamesFromCsv(stdout);
   } catch {
     return [];
   }
+}
+
+/** Pulls the `\arkode\*` task paths out of `schtasks /Query /FO CSV /NH` output. Exported for testing. */
+export function parseArkodeTaskNamesFromCsv(stdout: string): string[] {
+  return [
+    ...new Set(
+      stdout
+        .split(/\r?\n/)
+        .map((line) => /^"(\\arkode\\[^"]+)"/i.exec(line.trim())?.[1])
+        .filter((name): name is string => Boolean(name)),
+    ),
+  ];
 }
 
 /** `net session` only succeeds when the current process is running elevated — no dedicated Node API for this on Windows. */
