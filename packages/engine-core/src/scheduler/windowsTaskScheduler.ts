@@ -8,6 +8,9 @@ import { buildTaskDefinitionXml, type TaskDefinitionInput } from './taskDefiniti
 
 const execFileAsync = promisify(execFile);
 
+/** Every child process here is a CLI helper (schtasks/net) — never let one flash a console window. */
+const HIDDEN = { windowsHide: true } as const;
+
 /** Groups every task this app creates under one visible folder in Task Scheduler's own UI. */
 export function scheduledTaskNameForBackupTask(taskId: string): string {
   return `\\arkode\\${taskId}`;
@@ -60,14 +63,14 @@ export async function installScheduledTask(input: InstallScheduledTaskInput): Pr
   await writeFile(xmlPath, BOM + xml, { encoding: 'utf16le' });
 
   try {
-    await execFileAsync('schtasks.exe', ['/Create', '/TN', input.taskName, '/XML', xmlPath, '/F']);
+    await execFileAsync('schtasks.exe', ['/Create', '/TN', input.taskName, '/XML', xmlPath, '/F'], HIDDEN);
   } finally {
     await unlink(xmlPath).catch(() => {});
   }
 }
 
 export async function uninstallScheduledTask(taskName: string): Promise<void> {
-  await execFileAsync('schtasks.exe', ['/Delete', '/TN', taskName, '/F']);
+  await execFileAsync('schtasks.exe', ['/Delete', '/TN', taskName, '/F'], HIDDEN);
 }
 
 /**
@@ -78,7 +81,7 @@ export async function uninstallScheduledTask(taskName: string): Promise<void> {
  */
 export async function listArkodeScheduledTaskNames(): Promise<string[]> {
   try {
-    const { stdout } = await execFileAsync('schtasks.exe', ['/Query', '/FO', 'LIST']);
+    const { stdout } = await execFileAsync('schtasks.exe', ['/Query', '/FO', 'LIST'], HIDDEN);
     return stdout
       .split(/\r?\n/)
       .map((line) => /^TaskName:\s*(\\arkode\\.+)$/i.exec(line.trim())?.[1])
@@ -91,7 +94,7 @@ export async function listArkodeScheduledTaskNames(): Promise<string[]> {
 /** `net session` only succeeds when the current process is running elevated — no dedicated Node API for this on Windows. */
 async function isRunningElevated(): Promise<boolean> {
   try {
-    await execFileAsync('net', ['session']);
+    await execFileAsync('net', ['session'], HIDDEN);
     return true;
   } catch {
     return false;
@@ -114,7 +117,7 @@ export interface ScheduledTaskStatus {
 
 export async function scheduledTaskStatus(taskName: string): Promise<ScheduledTaskStatus> {
   try {
-    const { stdout } = await execFileAsync('schtasks.exe', ['/Query', '/TN', taskName, '/V', '/FO', 'LIST']);
+    const { stdout } = await execFileAsync('schtasks.exe', ['/Query', '/TN', taskName, '/V', '/FO', 'LIST'], HIDDEN);
     return { exists: true, raw: stdout };
   } catch {
     const elevated = await isRunningElevated();

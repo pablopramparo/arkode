@@ -254,27 +254,41 @@ struct SchedulerServiceStatus {
   running: bool,
 }
 
-/// `{ installed, running }` for the arkode-scheduler Windows service — reads
-/// `engine-cli scheduler:service-status` (a plain `sc query`, no elevation).
-/// Dev has no service; return a benign "not installed" so the UI shows its
-/// dev-mode message rather than a scary red banner.
+/// `{ installed, running }` for the arkode-scheduler Windows service, read
+/// straight from the Service Control Manager via the `windows-service` crate.
+/// No subprocess — nothing can flash a console window here, which matters
+/// because the Dashboard banner polls this every 30 s. Querying service
+/// status needs no elevation. Dev has no service; return a benign "not
+/// installed" so the UI shows its dev-mode message rather than a scary red
+/// banner.
 #[tauri::command]
 async fn scheduler_service_status() -> Result<SchedulerServiceStatus, String> {
   if cfg!(debug_assertions) {
     return Ok(SchedulerServiceStatus { installed: false, running: false });
   }
-  let engine_cli = installed_engine_cli()?;
-  let output = tauri::async_runtime::spawn_blocking(move || {
-    std::process::Command::new(&engine_cli).arg("scheduler:service-status").output()
-  })
-  .await
-  .map_err(|e| format!("Error interno consultando el servicio: {e}"))?
-  .map_err(|e| format!("No se pudo consultar el servicio: {e}"))?;
-  let stdout = String::from_utf8_lossy(&output.stdout);
-  let v: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|e| format!("Respuesta inválida del servicio: {e} ({stdout})"))?;
+  tauri::async_runtime::spawn_blocking(query_scheduler_service_status)
+    .await
+    .map_err(|e| format!("Error interno consultando el servicio: {e}"))?
+}
+
+fn query_scheduler_service_status() -> Result<SchedulerServiceStatus, String> {
+  use windows_service::service::{ServiceAccess, ServiceState};
+  use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+  let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+    .map_err(|e| format!("No se pudo conectar al administrador de servicios: {e}"))?;
+  let service = match manager.open_service("arkode-scheduler", ServiceAccess::QUERY_STATUS) {
+    Ok(s) => s,
+    // Not found (ERROR_SERVICE_DOES_NOT_EXIST) or otherwise unopenable —
+    // treat as "not installed" so the UI offers Reinstalar.
+    Err(_) => return Ok(SchedulerServiceStatus { installed: false, running: false }),
+  };
+  let status = service
+    .query_status()
+    .map_err(|e| format!("No se pudo consultar el estado del servicio: {e}"))?;
   Ok(SchedulerServiceStatus {
-    installed: v.get("installed").and_then(|x| x.as_bool()).unwrap_or(false),
-    running: v.get("running").and_then(|x| x.as_bool()).unwrap_or(false),
+    installed: true,
+    running: status.current_state == ServiceState::Running,
   })
 }
 

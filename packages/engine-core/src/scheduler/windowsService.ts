@@ -23,12 +23,17 @@ export interface WindowsServiceStatus {
  */
 export async function schedulerServiceStatus(): Promise<WindowsServiceStatus> {
   try {
-    const { stdout } = await execFileAsync('powershell', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      `$s = Get-Service '${SCHEDULER_SERVICE_NAME}' -ErrorAction SilentlyContinue; if ($s) { $s.Status } else { 'NOTFOUND' }`,
-    ]);
+    const { stdout } = await execFileAsync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$s = Get-Service '${SCHEDULER_SERVICE_NAME}' -ErrorAction SilentlyContinue; if ($s) { $s.Status } else { 'NOTFOUND' }`,
+      ],
+      // Never let a status read flash a console window (the app polls this).
+      { windowsHide: true },
+    );
     const state = stdout.trim();
     if (state === 'NOTFOUND' || state === '') {
       return { installed: false, running: false, state: null };
@@ -55,9 +60,9 @@ async function waitUntilStopped(timeoutMs = 10_000): Promise<void> {
  * still-stopping service fails). Elevation required — call via `runas`.
  */
 export async function restartSchedulerService(): Promise<void> {
-  await execFileAsync('sc', ['stop', SCHEDULER_SERVICE_NAME]).catch(() => {});
+  await execFileAsync('sc', ['stop', SCHEDULER_SERVICE_NAME], { windowsHide: true }).catch(() => {});
   await waitUntilStopped();
-  await execFileAsync('sc', ['start', SCHEDULER_SERVICE_NAME]);
+  await execFileAsync('sc', ['start', SCHEDULER_SERVICE_NAME], { windowsHide: true });
 }
 
 /**
@@ -68,28 +73,37 @@ export async function restartSchedulerService(): Promise<void> {
  */
 export async function reinstallSchedulerService(installDir: string): Promise<void> {
   const bin = join(installDir, 'resources', 'scheduler', 'arkode-scheduler.exe');
-  await execFileAsync('sc', ['stop', SCHEDULER_SERVICE_NAME]).catch(() => {});
-  await execFileAsync('sc', ['delete', SCHEDULER_SERVICE_NAME]).catch(() => {});
+  const hidden = { windowsHide: true } as const;
+  await execFileAsync('sc', ['stop', SCHEDULER_SERVICE_NAME], hidden).catch(() => {});
+  await execFileAsync('sc', ['delete', SCHEDULER_SERVICE_NAME], hidden).catch(() => {});
   await new Promise((r) => setTimeout(r, 500));
-  await execFileAsync('sc', [
-    'create',
-    SCHEDULER_SERVICE_NAME,
-    'binPath=',
-    bin,
-    'start=',
-    'auto',
-    'obj=',
-    'LocalSystem',
-    'DisplayName=',
-    'arkode backup scheduler',
-  ]);
-  await execFileAsync('sc', [
-    'failure',
-    SCHEDULER_SERVICE_NAME,
-    'reset=',
-    '86400',
-    'actions=',
-    'restart/60000/restart/60000/restart/300000',
-  ]).catch(() => {});
-  await execFileAsync('sc', ['start', SCHEDULER_SERVICE_NAME]);
+  await execFileAsync(
+    'sc',
+    [
+      'create',
+      SCHEDULER_SERVICE_NAME,
+      'binPath=',
+      bin,
+      'start=',
+      'auto',
+      'obj=',
+      'LocalSystem',
+      'DisplayName=',
+      'arkode backup scheduler',
+    ],
+    hidden,
+  );
+  await execFileAsync(
+    'sc',
+    [
+      'failure',
+      SCHEDULER_SERVICE_NAME,
+      'reset=',
+      '86400',
+      'actions=',
+      'restart/60000/restart/60000/restart/300000',
+    ],
+    hidden,
+  ).catch(() => {});
+  await execFileAsync('sc', ['start', SCHEDULER_SERVICE_NAME], hidden);
 }
