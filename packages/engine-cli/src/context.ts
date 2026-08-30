@@ -18,6 +18,8 @@ import {
   createFileBackupRetentionDeletionsRepo,
   createFileBackupMaintenanceRunsRepo,
   createFileBackupLogEventsRepo,
+  createReplicationTargetsRepo,
+  createReplicationRunsRepo,
 } from 'engine-core';
 
 export function buildContext() {
@@ -45,6 +47,10 @@ export function buildContext() {
   const fileBackupMaintenanceRunsRepo = createFileBackupMaintenanceRunsRepo(db);
   const fileBackupLogEventsRepo = createFileBackupLogEventsRepo(db);
 
+  // Off-site replication to Google Drive (rclone) -- opt-in, runs after backups.
+  const replicationTargetsRepo = createReplicationTargetsRepo(db);
+  const replicationRunsRepo = createReplicationRunsRepo(db);
+
   return {
     db,
     clientsRepo,
@@ -64,6 +70,8 @@ export function buildContext() {
     fileBackupRetentionDeletionsRepo,
     fileBackupMaintenanceRunsRepo,
     fileBackupLogEventsRepo,
+    replicationTargetsRepo,
+    replicationRunsRepo,
   };
 }
 

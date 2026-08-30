@@ -222,3 +222,30 @@ export type {
 export { isFileBackupTaskDue } from './fileBackup/scheduler/isFileBackupTaskDue.js';
 export { runFileBackupDueTasks } from './fileBackup/scheduler/runFileBackupDueTasks.js';
 export type { FileBackupRunDueResult } from './fileBackup/scheduler/runFileBackupDueTasks.js';
+
+// --- Off-site replication (rclone -> Google Drive) ----------------------
+// An opt-in copy layer that runs AFTER a backup; it never touches the
+// backup orchestrators or the restic engine. See replication/types.ts and
+// db/migrations/0015_add_replication_targets.sql.
+export * from './replication/types.js';
+export { createReplicationTargetsRepo } from './db/repositories/replicationTargetsRepo.js';
+export type {
+  ReplicationTargetsRepo,
+  CreateReplicationTargetInput,
+  UpdateReplicationTargetInput,
+} from './db/repositories/replicationTargetsRepo.js';
+export { createReplicationRunsRepo } from './db/repositories/replicationRunsRepo.js';
+export type {
+  ReplicationRunsRepo,
+  CreateReplicationRunInput,
+  FinishReplicationRunInput,
+} from './db/repositories/replicationRunsRepo.js';
+export * as rcloneClient from './replication/rcloneClient.js';
+export { extractTokenBlob, resolveRclonePath } from './replication/rcloneClient.js';
+export { buildRcloneConfigIni, rcloneRemoteSection } from './replication/rcloneConfig.js';
+export { replicateTarget } from './replication/replicateTarget.js';
+export type { ReplicateTargetDeps, ReplicateTargetResult, ReplicateTargetOptions } from './replication/replicateTarget.js';
+export { isReplicationDue, listDueReplications } from './replication/replicationDue.js';
+export type { ReplicationDueDeps, IsReplicationDueOptions } from './replication/replicationDue.js';
+export { runDueReplications } from './replication/runDueReplications.js';
+export type { ReplicationRunDueResult } from './replication/runDueReplications.js';

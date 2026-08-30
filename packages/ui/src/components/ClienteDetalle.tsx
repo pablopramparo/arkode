@@ -39,11 +39,12 @@ import { FileTaskCreateModal } from './FileTaskCreateModal';
 import { ConnectionEditModal } from './ConnectionEditModal';
 import { ConnectionCreateModal } from './ConnectionCreateModal';
 import { FileBackupsPanel } from './FileBackupsPanel';
+import { ReplicationPanel } from './ReplicationPanel';
 import { BackupSetsSection } from './BackupSetsSection';
 import { BackupSetBadge } from './BackupSetBadge';
 import type { ConnectionRow } from './Conexiones';
 
-type Tab = 'tareas' | 'conexiones' | 'backups' | 'historial' | 'archivos';
+type Tab = 'tareas' | 'conexiones' | 'backups' | 'historial' | 'archivos' | 'copia-externa';
 
 const BACKUPS_PAGE_SIZE = 20;
 
@@ -62,6 +63,7 @@ function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab
     { id: 'archivos', label: 'Repositorio' },
     { id: 'backups', label: 'Backups' },
     { id: 'historial', label: 'Historial' },
+    { id: 'copia-externa', label: 'Copia externa' },
   ];
   return (
     <div className="flex flex-1 gap-1" style={{ borderColor: 'var(--border)' }}>
@@ -520,6 +522,8 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             ))}
 
           {activeTab === 'archivos' && <FileBackupsPanel clientId={clientId} />}
+
+          {activeTab === 'copia-externa' && <ReplicationPanel clientId={clientId} />}
 
           {activeTab === 'backups' &&
             (backupsRows && backupsRows.length > 0 ? (

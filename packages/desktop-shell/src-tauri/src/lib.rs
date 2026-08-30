@@ -341,6 +341,53 @@ async fn reinstall_scheduler_service() -> Result<(), String> {
   run_elevated_engine_cli("scheduler:service-reinstall").await
 }
 
+/// Runs the vendored `rclone authorize "drive"`, which opens the Google
+/// consent screen in the default browser and blocks until the user
+/// approves, then prints the OAuth token blob. Returns that token JSON
+/// string; the UI POSTs it to the engine's
+/// `/replication-targets/:id/authorize` endpoint. No elevation needed.
+#[tauri::command]
+async fn rclone_authorize_drive(app: tauri::AppHandle) -> Result<String, String> {
+  let rclone = app
+    .path()
+    .resolve("resources/rclone/rclone.exe", tauri::path::BaseDirectory::Resource)
+    .ok()
+    .map(clean_resource_path)
+    .filter(|p| std::path::Path::new(p).exists())
+    .or_else(|| std::env::var("RCLONE_PATH").ok())
+    .unwrap_or_else(|| "rclone".to_string());
+
+  let output = tauri::async_runtime::spawn_blocking(move || {
+    std::process::Command::new(&rclone)
+      .args(["authorize", "drive"])
+      .output()
+  })
+  .await
+  .map_err(|e| format!("no se pudo iniciar rclone: {e}"))?
+  .map_err(|e| format!("no se pudo iniciar rclone: {e}"))?;
+
+  if !output.status.success() {
+    return Err(format!(
+      "rclone authorize terminó con error: {}",
+      String::from_utf8_lossy(&output.stderr).trim()
+    ));
+  }
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  // Pull the {...} blob out (with or without rclone's "--->" paste markers).
+  let between = stdout
+    .split_once("--->")
+    .and_then(|(_, rest)| rest.split_once("<---").map(|(t, _)| t))
+    .unwrap_or(&stdout);
+  for line in between.lines() {
+    let t = line.trim();
+    if t.starts_with('{') && t.contains("\"access_token\"") {
+      return Ok(t.to_string());
+    }
+  }
+  Err("rclone authorize no devolvió un token reconocible.".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   // Debug (`tauri dev`) never spawns its own sidecar (see the setup() branch
@@ -359,6 +406,7 @@ pub fn run() {
       scheduler_service_status,
       restart_scheduler_service,
       reinstall_scheduler_service,
+      rclone_authorize_drive,
       check_install_health
     ])
     // Must be the first plugin registered — it needs to intercept the app
@@ -447,6 +495,19 @@ pub fn run() {
             .unwrap_or_else(|_| panic!("failed to resolve vendored {name} path"))
         };
 
+        // rclone.exe (MIT, single static binary) -- vendored by
+        // prepare-rclone.mjs. Powers off-site replication of backups to
+        // Google Drive; engine-core reads RCLONE_PATH as its default (see
+        // replication/rcloneClient.ts + toolPaths.ts), so this is
+        // belt-and-suspenders like the pg/restic/mariadb entries.
+        let resolve_rclone_tool = |name: &str| {
+          app
+            .path()
+            .resolve(format!("resources/rclone/{name}"), tauri::path::BaseDirectory::Resource)
+            .map(clean_resource_path)
+            .unwrap_or_else(|_| panic!("failed to resolve vendored {name} path"))
+        };
+
         let (mut rx, child) = app
           .shell()
           .sidecar("engine-cli")
@@ -459,6 +520,7 @@ pub fn run() {
             ("RESTIC_PATH", resolve_restic_tool("restic.exe")),
             ("MARIADB_DUMP_PATH", resolve_mariadb_tool("mariadb-dump.exe")),
             ("MYSQL_CLI_PATH", resolve_mariadb_tool("mariadb.exe")),
+            ("RCLONE_PATH", resolve_rclone_tool("rclone.exe")),
           ])
           .spawn()
           .expect("failed to spawn the engine-cli sidecar");

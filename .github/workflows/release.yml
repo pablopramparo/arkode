@@ -89,6 +89,12 @@ jobs:
           path: packages/desktop-shell/.build-cache
           key: mariadb-tools-${{ hashFiles('packages/desktop-shell/scripts/prepare-mariadb-tools.mjs') }}
 
+      - name: Cache vendored rclone binary
+        uses: actions/cache@v4
+        with:
+          path: packages/desktop-shell/.build-cache
+          key: rclone-tool-${{ hashFiles('packages/desktop-shell/scripts/prepare-rclone.mjs') }}
+
       - name: Cache pkg base binaries
         uses: actions/cache@v4
         with:
@@ -106,6 +112,11 @@ jobs:
       # confirmed idempotent (it just reuses this same cache).
       - name: Vendor restic (also needed for the release-gate tests below)
         run: pnpm --filter desktop-shell prepare-restic
+
+      # rclone powers off-site replication to Google Drive. The
+      # beforeBuildCommand re-runs this harmlessly (idempotent, reuses the cache).
+      - name: Vendor rclone
+        run: pnpm --filter desktop-shell prepare-rclone
 
       - name: Run engine-core tests (release gate)
         env:

@@ -39,6 +39,9 @@ const BUNDLED_RELATIVE_PATH: Record<string, string> = {
   'pg_restore.exe': 'resources/pgsql/bin/pg_restore.exe',
   'psql.exe': 'resources/pgsql/bin/psql.exe',
   'restic.exe': 'resources/restic/restic.exe',
+  // rclone — off-site replication of backups to Google Drive. MIT-licensed,
+  // single static binary, vendored like restic. See prepare-rclone.mjs.
+  'rclone.exe': 'resources/rclone/rclone.exe',
   // MariaDB's dumper + client, GPLv2 (see LICENSES/NOTICE.md). Bundled so a
   // direct_dump of a MySQL *or* MariaDB server needs zero configuration —
   // mariadb-dump / mariadb speak the MySQL wire protocol. Oracle's own

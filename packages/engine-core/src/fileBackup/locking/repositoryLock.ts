@@ -6,7 +6,16 @@ import type { FileBackupMaintenanceRunsRepo } from '../db/repositories/fileBacku
 // a recycled PID would keep a crashed run stuck forever (see the helper).
 import { isStaleInProgressRun } from '../../util/processIdentity.js';
 
-export type FileBackupOperationKind = 'backup' | 'forget' | 'prune' | 'check' | 'check_read_data';
+export type FileBackupOperationKind =
+  | 'backup'
+  | 'forget'
+  | 'prune'
+  | 'check'
+  | 'check_read_data'
+  // Off-site replication (rclone sync of the repo folder to Google Drive).
+  // Must be mutually exclusive with anything that writes the repo — a sync
+  // mid-prune could copy a partial state — hence it takes the same lock.
+  | 'replicate';
 
 export interface RepositoryLockDeps {
   fileBackupRunsRepo: FileBackupRunsRepo;

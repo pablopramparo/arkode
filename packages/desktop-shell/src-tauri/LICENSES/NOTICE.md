@@ -40,3 +40,6 @@ codebius.com.
   the PostgreSQL License (permissive, BSD-style).
 - `resources/restic/restic.exe` — restic, licensed under the BSD 2-Clause
   License.
+- `resources/rclone/rclone.exe` — rclone, licensed under the MIT License
+  (`resources/rclone/LICENSE`, copied verbatim from the rclone
+  distribution). Used to replicate backups off-site to Google Drive.

@@ -17,6 +17,8 @@ import { createFileBackupRunsRepo } from '../../src/fileBackup/db/repositories/f
 import { createFileBackupMaintenanceRunsRepo } from '../../src/fileBackup/db/repositories/fileBackupMaintenanceRunsRepo.js';
 import { createFileBackupRetentionDeletionsRepo } from '../../src/fileBackup/db/repositories/fileBackupRetentionDeletionsRepo.js';
 import { createFileBackupLogEventsRepo } from '../../src/fileBackup/db/repositories/fileBackupLogEventsRepo.js';
+import { createReplicationTargetsRepo } from '../../src/db/repositories/replicationTargetsRepo.js';
+import { createReplicationRunsRepo } from '../../src/db/repositories/replicationRunsRepo.js';
 import type { SecretStore } from '../../src/secrets/types.js';
 
 /** In-memory Map-based SecretStore — never touches the real Windows Credential Manager in tests. */
@@ -56,6 +58,8 @@ export function createTestContext() {
   const fileBackupMaintenanceRunsRepo = createFileBackupMaintenanceRunsRepo(db);
   const fileBackupRetentionDeletionsRepo = createFileBackupRetentionDeletionsRepo(db);
   const fileBackupLogEventsRepo = createFileBackupLogEventsRepo(db);
+  const replicationTargetsRepo = createReplicationTargetsRepo(db);
+  const replicationRunsRepo = createReplicationRunsRepo(db);
 
   return {
     db,
@@ -76,6 +80,8 @@ export function createTestContext() {
     fileBackupMaintenanceRunsRepo,
     fileBackupRetentionDeletionsRepo,
     fileBackupLogEventsRepo,
+    replicationTargetsRepo,
+    replicationRunsRepo,
   };
 }
 

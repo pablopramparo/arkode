@@ -8,6 +8,10 @@ import type { RunFileBackupTaskDeps } from '../fileBackup/orchestrator/runFileBa
 import { runDueTasks } from './runDueTasks.js';
 import { runFileBackupDueTasks } from '../fileBackup/scheduler/runFileBackupDueTasks.js';
 import { runFileBackupMaintenance, type RunFileBackupMaintenanceDeps } from '../fileBackup/maintenance/runFileBackupMaintenance.js';
+import type { ReplicationTargetsRepo } from '../db/repositories/replicationTargetsRepo.js';
+import { runDueReplications } from '../replication/runDueReplications.js';
+import type { ReplicateTargetDeps } from '../replication/replicateTarget.js';
+import type { ReplicationDueDeps } from '../replication/replicationDue.js';
 
 /** `app_settings` key the scheduler service stamps every tick — the app reads it to tell "is scheduling actually alive?". */
 export const SCHEDULER_HEARTBEAT_KEY = 'schedulerHeartbeatAt';
@@ -22,6 +26,13 @@ export interface RunSchedulerTickDeps {
   fileTaskDeps: RunFileBackupTaskDeps & { fileBackupRunsRepo: FileBackupRunsRepo };
   /** Assembled exactly as `file-repo:run-maintenance` builds it today. */
   maintenanceDeps: RunFileBackupMaintenanceDeps;
+  /**
+   * Off-site replication (rclone -> Google Drive). Optional: when absent (or
+   * when no targets are configured) the replication phase is a zero-cost
+   * no-op and no existing backup behaviour changes.
+   */
+  replicationTargetsRepo?: ReplicationTargetsRepo;
+  replicationDeps?: ReplicateTargetDeps & ReplicationDueDeps;
 }
 
 interface PhaseSummary {
@@ -35,6 +46,7 @@ export interface SchedulerTickResult {
   db: PhaseSummary;
   file: PhaseSummary;
   maintenance: PhaseSummary;
+  replication: PhaseSummary;
   /** A whole phase threw before its own per-item isolation could catch anything — should be rare. */
   phaseErrors: string[];
 }
@@ -66,6 +78,7 @@ export async function runSchedulerTick(
   let db = EMPTY;
   let file = EMPTY;
   let maintenance = EMPTY;
+  let replication = EMPTY;
 
   try {
     const results = await runDueTasks(deps.tasksRepo.listScheduled(), deps.dbTaskDeps, now);
@@ -100,8 +113,33 @@ export async function runSchedulerTick(
     phaseErrors.push(`maintenance phase: ${msg(err)}`);
   }
 
+  // Off-site replication runs LAST — after this tick's backups and prune,
+  // so it captures the freshest state. No-op when unconfigured.
+  if (deps.replicationTargetsRepo && deps.replicationDeps) {
+    try {
+      const outcomes = await runDueReplications(
+        deps.replicationTargetsRepo.listEnabled(),
+        deps.replicationDeps,
+        now
+      );
+      replication = {
+        ran: outcomes.filter((o) => o.ran).length,
+        failed: outcomes.filter((o) => o.error || o.result?.status === 'Failed').length,
+        errors: outcomes.flatMap((o) =>
+          o.error
+            ? [`${o.clientId}/${o.content}: ${o.error}`]
+            : o.result?.status === 'Failed'
+              ? [`${o.clientId}/${o.content}: ${o.result.message ?? 'replication failed'}`]
+              : []
+        ),
+      };
+    } catch (err) {
+      phaseErrors.push(`replication phase: ${msg(err)}`);
+    }
+  }
+
   // Always — the tick executed regardless of what any phase did.
   deps.settingsRepo.set(SCHEDULER_HEARTBEAT_KEY, now.toISOString());
 
-  return { at: now.toISOString(), db, file, maintenance, phaseErrors };
+  return { at: now.toISOString(), db, file, maintenance, replication, phaseErrors };
 }

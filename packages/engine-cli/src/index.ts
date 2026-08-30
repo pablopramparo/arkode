@@ -47,6 +47,9 @@ import {
   restoreFileBackupFile,
   deleteBackupRun,
   deleteFileBackupRun,
+  replicateTarget,
+  isReplicationDue,
+  rcloneClient,
   hardenExistingKeyStore,
   scheduledTaskNameForBackupTask as scheduledTaskNameForId,
   type DbEngine,
@@ -60,6 +63,10 @@ import {
   type RunFileBackupTaskDeps,
   type FileBackupTask,
   type FileBackupMaintenanceOperation,
+  type ReplicateTargetDeps,
+  type ReplicationDueDeps,
+  type ReplicationContent,
+  type RcloneDriveConfig,
 } from 'engine-core';
 import { buildContext } from './context.js';
 import { confirmHostInteractively } from './confirmHost.js';
@@ -879,6 +886,8 @@ program
           fileBackupRunsRepo: ctx.fileBackupRunsRepo,
           secretStore: ctx.secretStore,
         },
+        replicationTargetsRepo: ctx.replicationTargetsRepo,
+        replicationDeps: buildReplicationDeps(ctx),
       },
       new Date()
     );
@@ -1402,6 +1411,28 @@ function runFileBackupTaskNow(ctx: ReturnType<typeof buildContext>, task: FileBa
   return runFileBackupTask(task, buildFileBackupTaskDeps(ctx));
 }
 
+/** Shared by `replication:*` CLI commands, the serve HTTP endpoints, and the scheduler tick. */
+function buildReplicationDeps(ctx: ReturnType<typeof buildContext>): ReplicateTargetDeps & ReplicationDueDeps {
+  return {
+    replicationTargetsRepo: ctx.replicationTargetsRepo,
+    replicationRunsRepo: ctx.replicationRunsRepo,
+    clientsRepo: ctx.clientsRepo,
+    fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+    fileBackupRunsRepo: ctx.fileBackupRunsRepo,
+    fileBackupMaintenanceRunsRepo: ctx.fileBackupMaintenanceRunsRepo,
+    secretStore: ctx.secretStore,
+    runsRepo: ctx.runsRepo,
+  };
+}
+
+/** SecretStore refs for a replication target (deterministic, so re-authorizing overwrites in place). */
+function replicationConfigSecretRef(clientId: string, content: ReplicationContent): string {
+  return `replication:${clientId}:${content}:rclone-config`;
+}
+function replicationCryptSecretRef(clientId: string, content: ReplicationContent): string {
+  return `replication:${clientId}:${content}:crypt-password`;
+}
+
 function mapMaintenanceOperationFlag(value: string | undefined): FileBackupMaintenanceOperation | 'all' | undefined {
   if (!value) return undefined;
   if (value === 'check-read-data') return 'check_read_data';
@@ -1866,6 +1897,239 @@ program
         secretStore: ctx.secretStore,
       });
       console.log(`Restored to ${dest}`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+// === Off-site replication to Google Drive (rclone) — opt-in, per (client, content). ===
+
+function parseReplicationContent(value: string): ReplicationContent {
+  if (value === 'restic_repo' || value === 'db_dumps') return value;
+  throw new Error(`--content must be "restic_repo" or "db_dumps", got "${value}"`);
+}
+
+/** Loads a target's rclone drive config + (if encrypted) its crypt password from SecretStore. */
+function loadReplicationSecrets(
+  ctx: ReturnType<typeof buildContext>,
+  target: { rcloneConfigSecretRef: string; encryptWithCrypt: boolean; cryptPasswordSecretRef: string | null }
+): { drive: RcloneDriveConfig; cryptPassword?: string } {
+  const raw = ctx.secretStore.get(target.rcloneConfigSecretRef);
+  if (!raw) throw new Error('This target is not authorized yet — run `replication:authorize` first.');
+  const drive = JSON.parse(raw) as RcloneDriveConfig;
+  let cryptPassword: string | undefined;
+  if (target.encryptWithCrypt) {
+    cryptPassword = target.cryptPasswordSecretRef
+      ? ctx.secretStore.get(target.cryptPasswordSecretRef) ?? undefined
+      : undefined;
+    if (!cryptPassword) throw new Error('The encryption password for this target could not be read.');
+  }
+  return { drive, cryptPassword };
+}
+
+program
+  .command('replication:add')
+  .description('Configure an off-site copy of a client\'s backups to Google Drive. Opt-in, one per (client, content). Does NOT authorize a Google account — run replication:authorize next.')
+  .requiredOption('--client <clientId>')
+  .requiredOption('--content <kind>', 'restic_repo | db_dumps')
+  .requiredOption('--remote-path <path>', 'destination folder inside the Drive account, e.g. arkode/Winners/repo')
+  .option('--no-encrypt', 'db_dumps only: sync raw instead of wrapping in an rclone crypt remote (NOT recommended — Google would see plaintext dumps)')
+  .option('--crypt-password <pw>', 'db_dumps only: supply the crypt password instead of generating one')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    try {
+      const content = parseReplicationContent(opts.content);
+      if (!ctx.clientsRepo.getById(opts.client)) throw new Error(`Client ${opts.client} not found.`);
+
+      const encrypt = content === 'db_dumps' && opts.encrypt !== false;
+      let cryptRef: string | null = null;
+      let generated: string | null = null;
+      if (encrypt) {
+        cryptRef = replicationCryptSecretRef(opts.client, content);
+        const pw = opts.cryptPassword ?? randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
+        ctx.secretStore.set(cryptRef, pw);
+        if (!opts.cryptPassword) generated = pw;
+      }
+
+      const target = ctx.replicationTargetsRepo.create({
+        clientId: opts.client,
+        content,
+        remotePath: opts.remotePath,
+        rcloneConfigSecretRef: replicationConfigSecretRef(opts.client, content),
+        encryptWithCrypt: encrypt,
+        cryptPasswordSecretRef: cryptRef,
+      });
+      console.log(JSON.stringify({ target, generatedCryptPassword: generated }, null, 2));
+      if (generated) {
+        console.log(
+          '\n⚠  Save this encryption password somewhere safe OUTSIDE this machine — it is required to read these\n' +
+            '   dumps back from Drive, and it is NOT included in a config export.'
+        );
+      }
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('replication:authorize')
+  .description('Connect a Google account to a replication target via rclone\'s OAuth flow (opens a browser). Overwrites any previous authorization for this target.')
+  .requiredOption('--client <clientId>')
+  .requiredOption('--content <kind>', 'restic_repo | db_dumps')
+  .option('--client-id <id>', 'your own Google OAuth client id (optional — avoids rclone\'s shared-client rate limits)')
+  .option('--client-secret <secret>')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    try {
+      const content = parseReplicationContent(opts.content);
+      const target = ctx.replicationTargetsRepo.getByClientAndContent(opts.client, content);
+      if (!target) throw new Error('No replication target for that client + content. Run `replication:add` first.');
+      console.log('Opening Google sign-in… approve access in the browser, then return here.');
+      const token = await rcloneClient.rcloneAuthorizeDrive({
+        clientId: opts.clientId,
+        clientSecret: opts.clientSecret,
+      });
+      const config: RcloneDriveConfig = { token };
+      if (opts.clientId && opts.clientSecret) {
+        config.clientId = opts.clientId;
+        config.clientSecret = opts.clientSecret;
+      }
+      ctx.secretStore.set(target.rcloneConfigSecretRef, JSON.stringify(config));
+      console.log('Authorized. Run `replication:test` to verify.');
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('replication:paste-token')
+  .description('Store a Google OAuth token obtained by running `rclone authorize "drive"` on another machine (headless-server fallback for replication:authorize).')
+  .requiredOption('--client <clientId>')
+  .requiredOption('--content <kind>', 'restic_repo | db_dumps')
+  .requiredOption('--token <json>', 'the {"access_token":...} blob rclone printed')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    try {
+      const content = parseReplicationContent(opts.content);
+      const target = ctx.replicationTargetsRepo.getByClientAndContent(opts.client, content);
+      if (!target) throw new Error('No replication target for that client + content. Run `replication:add` first.');
+      const token = rcloneClient.extractTokenBlob(opts.token) ?? opts.token.trim();
+      JSON.parse(token); // validate it parses
+      ctx.secretStore.set(target.rcloneConfigSecretRef, JSON.stringify({ token } satisfies RcloneDriveConfig));
+      console.log('Token stored. Run `replication:test` to verify.');
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('replication:list')
+  .description('List replication targets (all, or for one client), with last-run status.')
+  .option('--client <clientId>')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    const targets = opts.client
+      ? ctx.replicationTargetsRepo.listByClient(opts.client)
+      : ctx.replicationTargetsRepo.listEnabled();
+    console.log(
+      JSON.stringify(
+        targets.map((t) => ({
+          ...t,
+          due: isReplicationDue(t, buildReplicationDeps(ctx)),
+        })),
+        null,
+        2
+      )
+    );
+  });
+
+program
+  .command('replication:test <targetId>')
+  .description('Check connectivity + auth for a target (rclone about — shows the account quota). Does not transfer anything.')
+  .action(async (targetId) => {
+    const ctx = buildContext();
+    try {
+      const target = ctx.replicationTargetsRepo.getById(targetId);
+      if (!target) throw new Error(`Replication target ${targetId} not found.`);
+      const secrets = loadReplicationSecrets(ctx, target);
+      const out = await rcloneClient.withRcloneConfig(target, secrets, (configPath, remoteSection) =>
+        rcloneClient.rcloneAbout({ configPath, remoteSection })
+      );
+      console.log(out);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('replication:run <targetId>')
+  .description('Replicate a target to Google Drive now (rclone sync). Same operation the scheduler runs after a successful backup.')
+  .action(async (targetId) => {
+    const ctx = buildContext();
+    const result = await replicateTarget(buildReplicationDeps(ctx), targetId, { trigger: 'manual' });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.status === 'Failed') process.exitCode = 1;
+  });
+
+program
+  .command('replication:enable <targetId>')
+  .description('Re-enable a disabled replication target.')
+  .action(async (targetId) => {
+    const ctx = buildContext();
+    ctx.replicationTargetsRepo.update(targetId, { enabled: true });
+    console.log(JSON.stringify(ctx.replicationTargetsRepo.getById(targetId)));
+  });
+
+program
+  .command('replication:disable <targetId>')
+  .description('Stop replicating a target (keeps its config + history; the remote copy is left as-is).')
+  .action(async (targetId) => {
+    const ctx = buildContext();
+    ctx.replicationTargetsRepo.update(targetId, { enabled: false });
+    console.log(JSON.stringify(ctx.replicationTargetsRepo.getById(targetId)));
+  });
+
+program
+  .command('replication:remove <targetId>')
+  .description('Delete a replication target and its run history (the remote Drive copy is NOT touched).')
+  .action(async (targetId) => {
+    const ctx = buildContext();
+    ctx.replicationTargetsRepo.remove(targetId);
+    console.log(JSON.stringify({ removed: targetId }));
+  });
+
+program
+  .command('replication:runs')
+  .description('Recent replication runs (all, or for one target).')
+  .option('--target <targetId>')
+  .option('--limit <n>', 'default 50')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    const limit = opts.limit ? Number(opts.limit) : 50;
+    console.log(JSON.stringify(ctx.replicationRunsRepo.listRecent({ targetId: opts.target, limit }), null, 2));
+  });
+
+program
+  .command('replication:pull <targetId>')
+  .description('Disaster recovery: download a target\'s remote Drive copy to a local folder. For restic_repo, point `restic -r <dest>` at the result and restore normally.')
+  .requiredOption('--dest <dir>')
+  .action(async (targetId, opts) => {
+    const ctx = buildContext();
+    try {
+      const target = ctx.replicationTargetsRepo.getById(targetId);
+      if (!target) throw new Error(`Replication target ${targetId} not found.`);
+      const secrets = loadReplicationSecrets(ctx, target);
+      const dest = resolvePath(opts.dest);
+      await mkdir(dest, { recursive: true });
+      await rcloneClient.withRcloneConfig(target, secrets, (configPath, remoteSection) =>
+        rcloneClient.rcloneCopyDown({ configPath, remoteSection, remotePath: target.remotePath, destDir: dest })
+      );
+      console.log(`Pulled ${target.content} to ${dest}`);
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       process.exitCode = 1;
@@ -3091,6 +3355,186 @@ program
           sendRepoError(res, err);
           await unlink(tempDest).catch(() => {});
         }
+        return;
+      }
+
+      // === Off-site replication to Google Drive (rclone) ===
+      if (req.method === 'GET' && pathname === '/replication-targets') {
+        const clientFilter = url.searchParams.get('client');
+        const targets = clientFilter
+          ? ctx.replicationTargetsRepo.listByClient(clientFilter)
+          : ctx.replicationTargetsRepo.listEnabled();
+        const repDeps = buildReplicationDeps(ctx);
+        sendJson(
+          res,
+          200,
+          targets.map((t) => ({
+            ...t,
+            clientName: ctx.clientsRepo.getById(t.clientId)?.name ?? null,
+            authorized: Boolean(ctx.secretStore.get(t.rcloneConfigSecretRef)),
+            due: isReplicationDue(t, repDeps),
+          }))
+        );
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/replication-targets') {
+        try {
+          const body = await readJsonBody(req);
+          const content = parseReplicationContent(String(body.content));
+          if (!ctx.clientsRepo.getById(body.clientId)) {
+            sendJson(res, 400, { error: `Client ${body.clientId} not found.` });
+            return;
+          }
+          const encrypt = content === 'db_dumps' && body.encrypt !== false;
+          let cryptRef: string | null = null;
+          let generated: string | null = null;
+          if (encrypt) {
+            cryptRef = replicationCryptSecretRef(body.clientId, content);
+            const pw =
+              typeof body.cryptPassword === 'string' && body.cryptPassword
+                ? body.cryptPassword
+                : randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
+            ctx.secretStore.set(cryptRef, pw);
+            if (!body.cryptPassword) generated = pw;
+          }
+          const target = ctx.replicationTargetsRepo.create({
+            clientId: body.clientId,
+            content,
+            remotePath: String(body.remotePath ?? '').trim(),
+            rcloneConfigSecretRef: replicationConfigSecretRef(body.clientId, content),
+            encryptWithCrypt: encrypt,
+            cryptPasswordSecretRef: cryptRef,
+          });
+          sendJson(res, 201, { ...target, generatedCryptPassword: generated });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const replAuthorizeMatch = req.method === 'POST' && pathname.match(/^\/replication-targets\/([^/]+)\/authorize$/);
+      if (replAuthorizeMatch) {
+        try {
+          const target = ctx.replicationTargetsRepo.getById(replAuthorizeMatch[1]);
+          if (!target) {
+            sendJson(res, 404, { error: 'not found' });
+            return;
+          }
+          const body = await readJsonBody(req);
+          const token = rcloneClient.extractTokenBlob(String(body.token ?? '')) ?? String(body.token ?? '').trim();
+          JSON.parse(token); // validate
+          const config: RcloneDriveConfig = { token };
+          if (body.clientId && body.clientSecret) {
+            config.clientId = String(body.clientId);
+            config.clientSecret = String(body.clientSecret);
+          }
+          ctx.secretStore.set(target.rcloneConfigSecretRef, JSON.stringify(config));
+          sendJson(res, 200, { ok: true });
+        } catch (err) {
+          sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      const replCryptMatch = req.method === 'GET' && pathname.match(/^\/replication-targets\/([^/]+)\/crypt-password$/);
+      if (replCryptMatch) {
+        const target = ctx.replicationTargetsRepo.getById(replCryptMatch[1]);
+        if (!target) {
+          sendJson(res, 404, { error: 'not found' });
+          return;
+        }
+        const pw = target.cryptPasswordSecretRef ? ctx.secretStore.get(target.cryptPasswordSecretRef) : null;
+        sendJson(res, 200, { cryptPassword: pw ?? null });
+        return;
+      }
+
+      const replTestMatch = req.method === 'POST' && pathname.match(/^\/replication-targets\/([^/]+)\/test$/);
+      if (replTestMatch) {
+        try {
+          const target = ctx.replicationTargetsRepo.getById(replTestMatch[1]);
+          if (!target) {
+            sendJson(res, 404, { error: 'not found' });
+            return;
+          }
+          const secrets = loadReplicationSecrets(ctx, target);
+          const out = await rcloneClient.withRcloneConfig(target, secrets, (configPath, remoteSection) =>
+            rcloneClient.rcloneAbout({ configPath, remoteSection })
+          );
+          sendJson(res, 200, { ok: true, detail: out });
+        } catch (err) {
+          sendJson(res, 502, { ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      const replRunMatch = req.method === 'POST' && pathname.match(/^\/replication-targets\/([^/]+)\/run$/);
+      if (replRunMatch) {
+        try {
+          const result = await replicateTarget(buildReplicationDeps(ctx), replRunMatch[1], { trigger: 'manual' });
+          sendJson(res, result.status === 'Failed' ? 502 : 200, result);
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const replPullMatch = req.method === 'POST' && pathname.match(/^\/replication-targets\/([^/]+)\/pull$/);
+      if (replPullMatch) {
+        try {
+          const target = ctx.replicationTargetsRepo.getById(replPullMatch[1]);
+          if (!target) {
+            sendJson(res, 404, { error: 'not found' });
+            return;
+          }
+          const body = await readJsonBody(req);
+          const dest = resolvePath(String(body.dest ?? ''));
+          if (!dest) {
+            sendJson(res, 400, { error: 'A "dest" folder is required.' });
+            return;
+          }
+          await mkdir(dest, { recursive: true });
+          const secrets = loadReplicationSecrets(ctx, target);
+          await rcloneClient.withRcloneConfig(target, secrets, (configPath, remoteSection) =>
+            rcloneClient.rcloneCopyDown({ configPath, remoteSection, remotePath: target.remotePath, destDir: dest })
+          );
+          sendJson(res, 200, { ok: true, dest });
+        } catch (err) {
+          sendJson(res, 502, { ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      const replPatchMatch = req.method === 'PATCH' && pathname.match(/^\/replication-targets\/([^/]+)$/);
+      if (replPatchMatch) {
+        try {
+          const body = await readJsonBody(req);
+          ctx.replicationTargetsRepo.update(replPatchMatch[1], {
+            enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+            remotePath: typeof body.remotePath === 'string' ? body.remotePath : undefined,
+          });
+          sendJson(res, 200, ctx.replicationTargetsRepo.getById(replPatchMatch[1]));
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const replDeleteMatch = req.method === 'POST' && pathname.match(/^\/replication-targets\/([^/]+)\/remove$/);
+      if (replDeleteMatch) {
+        ctx.replicationTargetsRepo.remove(replDeleteMatch[1]);
+        sendJson(res, 200, { removed: replDeleteMatch[1] });
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/replication-runs') {
+        const targetId = url.searchParams.get('target') ?? undefined;
+        const limitParam = url.searchParams.get('limit');
+        sendJson(
+          res,
+          200,
+          ctx.replicationRunsRepo.listRecent({ targetId, limit: limitParam ? Number(limitParam) : 50 })
+        );
         return;
       }
 

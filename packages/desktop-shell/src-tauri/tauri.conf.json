@@ -1,13 +1,13 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "arkode",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "identifier": "com.codebius.arkode",
   "build": {
     "frontendDist": "../../ui/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "pnpm --filter ui dev",
-    "beforeBuildCommand": "pnpm --filter desktop-shell prepare-sidecar && pnpm --filter desktop-shell prepare-pg-tools && pnpm --filter desktop-shell prepare-restic && pnpm --filter desktop-shell prepare-mariadb-tools && pnpm --filter desktop-shell prepare-scheduler && pnpm --filter ui build"
+    "beforeBuildCommand": "pnpm --filter desktop-shell prepare-sidecar && pnpm --filter desktop-shell prepare-pg-tools && pnpm --filter desktop-shell prepare-restic && pnpm --filter desktop-shell prepare-rclone && pnpm --filter desktop-shell prepare-mariadb-tools && pnpm --filter desktop-shell prepare-scheduler && pnpm --filter ui build"
   },
   "app": {
     "windows": [
@@ -45,6 +45,7 @@
     "resources": [
       "resources/pgsql/bin/*",
       "resources/restic/*",
+      "resources/rclone/*",
       "resources/mariadb/*",
       "resources/mariadb/plugin/*",
       "resources/scheduler/*",
