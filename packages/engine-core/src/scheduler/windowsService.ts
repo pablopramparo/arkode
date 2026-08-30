@@ -14,22 +14,29 @@ export interface WindowsServiceStatus {
 }
 
 /**
- * `sc query arkode-scheduler` → { installed, running }. A plain status read
- * needs no elevation, so the app spawns this directly. Exit code 1060 ("The
- * specified service does not exist") ⇒ not installed; any other failure is
- * reported conservatively as not-installed/not-running (the app then offers
- * Reinstalar, which is the right move either way).
+ * `Get-Service` → { installed, running }. A plain status read needs no
+ * elevation, so the app spawns this directly. PowerShell's
+ * ServiceControllerStatus enum ("Running"/"Stopped"/…) is **not localized**
+ * — unlike `sc query`'s field labels, which are (this bit us: a Spanish
+ * Windows prints "ESTADO" not "STATE", so the old `sc query` regex always
+ * reported a running service as stopped). "NOTFOUND" ⇒ not installed.
  */
 export async function schedulerServiceStatus(): Promise<WindowsServiceStatus> {
   try {
-    const { stdout } = await execFileAsync('sc', ['query', SCHEDULER_SERVICE_NAME]);
-    const state = /\bSTATE\b\s*:\s*\d+\s+([A-Z_]+)/.exec(stdout)?.[1] ?? null;
-    return { installed: true, running: state === 'RUNNING', state };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (/\b1060\b/.test(message) || /does not exist/i.test(message)) {
+    const { stdout } = await execFileAsync('powershell', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `$s = Get-Service '${SCHEDULER_SERVICE_NAME}' -ErrorAction SilentlyContinue; if ($s) { $s.Status } else { 'NOTFOUND' }`,
+    ]);
+    const state = stdout.trim();
+    if (state === 'NOTFOUND' || state === '') {
       return { installed: false, running: false, state: null };
     }
+    return { installed: true, running: state === 'Running', state };
+  } catch (err) {
+    // PowerShell itself failed — can't tell; conservative "reinstall" prompt.
+    void err;
     return { installed: false, running: false, state: null };
   }
 }
