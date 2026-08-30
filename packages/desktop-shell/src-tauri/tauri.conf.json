@@ -1,13 +1,13 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "arkode",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "identifier": "com.codebius.arkode",
   "build": {
     "frontendDist": "../../ui/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "pnpm --filter ui dev",
-    "beforeBuildCommand": "pnpm --filter desktop-shell prepare-sidecar && pnpm --filter desktop-shell prepare-scheduler && pnpm --filter desktop-shell prepare-pg-tools && pnpm --filter desktop-shell prepare-restic && pnpm --filter desktop-shell prepare-mariadb-tools && pnpm --filter ui build"
+    "beforeBuildCommand": "pnpm --filter desktop-shell prepare-sidecar && pnpm --filter desktop-shell prepare-pg-tools && pnpm --filter desktop-shell prepare-restic && pnpm --filter desktop-shell prepare-mariadb-tools && pnpm --filter desktop-shell prepare-scheduler && pnpm --filter ui build"
   },
   "app": {
     "windows": [

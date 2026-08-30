@@ -278,6 +278,45 @@ async fn scheduler_service_status() -> Result<SchedulerServiceStatus, String> {
   })
 }
 
+#[derive(serde::Serialize)]
+struct InstallHealth {
+  ok: bool,
+  problems: Vec<String>,
+}
+
+/// Cheap on-startup integrity check for the install directory. A silent
+/// auto-update that hit a locked file can leave the install partial (a
+/// missing sibling exe, no registry entry) with no error surfaced — this
+/// turns that into an obvious, actionable banner instead of a mystery.
+/// Only checks files this app controls the layout of; dev returns ok.
+#[tauri::command]
+fn check_install_health() -> Result<InstallHealth, String> {
+  if cfg!(debug_assertions) {
+    return Ok(InstallHealth { ok: true, problems: vec![] });
+  }
+  let exe_dir = std::env::current_exe()
+    .ok()
+    .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+  let Some(dir) = exe_dir else {
+    return Ok(InstallHealth { ok: true, problems: vec![] });
+  };
+  let mut problems = Vec::new();
+  let want = [
+    ("engine-cli.exe", dir.join("engine-cli.exe")),
+    ("el desinstalador (uninstall.exe)", dir.join("uninstall.exe")),
+    (
+      "el servicio de scheduler (resources\\scheduler\\arkode-scheduler.exe)",
+      dir.join("resources").join("scheduler").join("arkode-scheduler.exe"),
+    ),
+  ];
+  for (label, path) in want {
+    if !path.exists() {
+      problems.push(format!("Falta {label}."));
+    }
+  }
+  Ok(InstallHealth { ok: problems.is_empty(), problems })
+}
+
 #[tauri::command]
 async fn restart_scheduler_service() -> Result<(), String> {
   run_elevated_engine_cli("scheduler:service-restart").await
@@ -305,7 +344,8 @@ pub fn run() {
       unregister_file_task_schedule,
       scheduler_service_status,
       restart_scheduler_service,
-      reinstall_scheduler_service
+      reinstall_scheduler_service,
+      check_install_health
     ])
     // Must be the first plugin registered — it needs to intercept the app
     // launch before anything else runs. A second launch attempt is

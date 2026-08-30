@@ -9,6 +9,50 @@
 ; (perMachine), so `sc` here needs no extra prompt; this is what replaces the
 ; per-task "Registrar en Windows" UAC flow entirely. `scheduler:cleanup-legacy`
 ; tears down any pre-v0.3.0 per-task Scheduled Tasks on the same pass.
+
+; --------------------------------------------------------------------------
+; Waits (up to ~15 s) for a process's image lock to actually be released
+; after a taskkill. The Tauri silent auto-updater overwrites app.exe /
+; engine-cli.exe in place; if one is still locked when NSIS tries to write
+; it, that single file is left un-replaced and the install ends up partial
+; with no dialog (this exact breakage was hit 2026-08-29 — app.exe missing,
+; no registry entry). A just-killed process's .exe stays briefly locked by
+; Windows, so a fixed `Sleep` isn't enough — poll until it's really gone.
+; TAG must be a label-safe token (no dots).
+; --------------------------------------------------------------------------
+!macro WAIT_PROCESS_GONE PROC TAG
+  Push $R0
+  Push $R1
+  StrCpy $R0 0
+  wait_loop_${TAG}:
+    ; findstr's exit code becomes cmd's: "0" = the process line was found
+    ; (still running), anything else = gone.
+    nsExec::Exec 'cmd /c tasklist /NH /FI "IMAGENAME eq ${PROC}" | findstr /I /C:"${PROC}"'
+    Pop $R1
+    StrCmp $R1 "0" 0 wait_done_${TAG}
+    IntOp $R0 $R0 + 1
+    IntCmp $R0 30 wait_done_${TAG}
+    Sleep 500
+    Goto wait_loop_${TAG}
+  wait_done_${TAG}:
+  Pop $R1
+  Pop $R0
+!macroend
+
+; CTX is a label-safe token unique per !insertmacro site (NSIS labels are
+; global, so inserting this in both PREINSTALL and PREUNINSTALL would
+; otherwise redefine the same labels).
+!macro STOP_ARKODE_PROCESSES CTX
+  nsExec::ExecToLog 'sc stop arkode-scheduler'
+  nsExec::ExecToLog 'sc delete arkode-scheduler'
+  nsExec::ExecToLog 'taskkill /F /IM app.exe'
+  nsExec::ExecToLog 'taskkill /F /IM engine-cli.exe'
+  nsExec::ExecToLog 'taskkill /F /IM arkode-scheduler.exe'
+  !insertmacro WAIT_PROCESS_GONE "app.exe" "app_${CTX}"
+  !insertmacro WAIT_PROCESS_GONE "engine-cli.exe" "enginecli_${CTX}"
+  !insertmacro WAIT_PROCESS_GONE "arkode-scheduler.exe" "svc_${CTX}"
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   CreateShortcut "$DESKTOP\arkode.lnk" "$INSTDIR\app.exe"
 
@@ -25,38 +69,15 @@
   Delete "$DESKTOP\arkode.lnk"
 !macroend
 
-; Backstop for a real failure hit while reinstalling on 2026-08-25: the
-; engine-cli.exe sidecar is normally killed by app.exe's own
-; RunEvent::ExitRequested handler when the app closes gracefully, but an
-; orphaned sidecar (left running if that graceful path doesn't fire — e.g. a
-; forceful process kill instead of a normal window close) held its own exe
-; file locked and made file-copy fail outright, mid-install, with a
-; retry/abort/skip dialog. That dialog only appears in an *interactive*
-; install; the real auto-updater always runs silently (/S), where the same
-; lock would fail with no dialog for the user to react to. Force-killing both
-; by name before any files are touched removes the dependency on that
-; graceful shutdown path entirely — safe even when neither process is
-; running, since taskkill's "not found" exit code is simply ignored here.
-;
-; `sc stop` + `sc delete` for the scheduler service comes first for the same
-; reason — a running service holds arkode-scheduler.exe (and, mid-tick,
-; engine-cli.exe) locked. `sc stop` is synchronous enough here; a stray
-; in-progress backup it kills is marked Failed by the next tick's stale-run
-; recovery (isStaleInProgressRun) after the service restarts.
+; Stop everything and *wait for the locks to clear* before any file is
+; touched — removes the "app.exe was locked, update left a hole" failure
+; mode. Safe even when nothing is running (taskkill/sc "not found" are
+; ignored). A stray in-progress backup killed here is marked Failed by the
+; next tick's stale-run recovery (isStaleInProgressRun) after restart.
 !macro NSIS_HOOK_PREINSTALL
-  nsExec::ExecToLog 'sc stop arkode-scheduler'
-  nsExec::ExecToLog 'sc delete arkode-scheduler'
-  Sleep 500
-  nsExec::ExecToLog 'taskkill /F /IM engine-cli.exe'
-  nsExec::ExecToLog 'taskkill /F /IM app.exe'
-  Sleep 500
+  !insertmacro STOP_ARKODE_PROCESSES PRE
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  nsExec::ExecToLog 'sc stop arkode-scheduler'
-  nsExec::ExecToLog 'sc delete arkode-scheduler'
-  Sleep 500
-  nsExec::ExecToLog 'taskkill /F /IM engine-cli.exe'
-  nsExec::ExecToLog 'taskkill /F /IM app.exe'
-  Sleep 500
+  !insertmacro STOP_ARKODE_PROCESSES PREUN
 !macroend

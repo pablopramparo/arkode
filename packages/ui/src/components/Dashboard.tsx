@@ -14,6 +14,7 @@ import { ClientLink } from './ClientLink';
 import { Spinner } from './Spinner';
 import { BackupSetBadge } from './BackupSetBadge';
 import { SchedulerStatusBanner } from './SchedulerStatusBanner';
+import { InstallHealthBanner } from './InstallHealthBanner';
 
 const POLL_INTERVAL_MS = 20_000;
 /** A daily backup task without a fresh file past this age is worth flagging, even if the last *attempt* technically succeeded a while ago. */
@@ -125,6 +126,7 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
         </Button>
       </header>
 
+      <InstallHealthBanner />
       <SchedulerStatusBanner />
 
       {rows && (
