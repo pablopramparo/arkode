@@ -29,7 +29,15 @@ export interface BuildRcloneConfigParams {
  * Builds a complete rclone.conf body: a `[drive]` section always, plus a
  * `[gdrive-crypt]` section wrapping it when `withCrypt`. The crypt section
  * points at `drive:` (bare) so the target's remote_path is supplied at call
- * time and its path components are themselves encrypted.
+ * time.
+ *
+ * Crypt is configured `filename_encryption = off`: folder and file NAMES in
+ * Drive stay readable/identifiable (`arkode/dumps/<task>/<yyyy>/<mm>/…`) and
+ * only the file *contents* are encrypted (rclone appends `.bin` to each).
+ * Deliberate trade-off chosen by the user over fully-opaque names: the
+ * filename reveals db name / date / size, but the backup bytes are still
+ * unreadable without the crypt password. `restic_repo` targets aren't
+ * crypt-wrapped at all (restic self-encrypts).
  */
 export function buildRcloneConfigIni(params: BuildRcloneConfigParams): string {
   const { drive } = params;
@@ -54,8 +62,8 @@ export function buildRcloneConfigIni(params: BuildRcloneConfigParams): string {
     lines.push('type = crypt');
     lines.push(`remote = ${DRIVE_SECTION}:`);
     lines.push(`password = ${params.obscuredCryptPassword}`);
-    lines.push('filename_encryption = standard');
-    lines.push('directory_name_encryption = true');
+    lines.push('filename_encryption = off');
+    lines.push('directory_name_encryption = false');
   }
 
   return lines.join('\n') + '\n';

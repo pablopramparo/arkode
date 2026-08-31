@@ -183,6 +183,9 @@ export async function replicateTarget(
       bytesTransferred: result.bytesTransferred,
       filesTransferred: result.filesTransferred,
       filesDeleted: result.filesDeleted,
+      // Keep the warning text on the run itself, not only on the target's
+      // lastError — otherwise a Warning row in the history gives no clue why.
+      errorMessage: result.warnings.length > 0 ? result.warnings.join('; ') : undefined,
     });
     deps.replicationTargetsRepo.recordResult(
       targetId,

@@ -362,7 +362,9 @@ function ReplicationSlot({
                   <td className="px-3 py-1.5">{r.trigger === 'scheduled' ? 'automática' : 'manual'}</td>
                   <td className="px-3 py-1.5">{r.status}</td>
                   <td className="px-3 py-1.5">
-                    {r.bytesTransferred != null ? `${formatSize(r.bytesTransferred)} · ${r.filesTransferred ?? 0} arch.` : r.errorMessage ?? '—'}
+                    {r.bytesTransferred != null
+                      ? `${formatSize(r.bytesTransferred)} · ${r.filesTransferred ?? 0} arch.${r.errorMessage ? ` · ${r.errorMessage}` : ''}`
+                      : r.errorMessage ?? '—'}
                   </td>
                 </tr>
               ))}

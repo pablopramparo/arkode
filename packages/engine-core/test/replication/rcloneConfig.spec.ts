@@ -34,7 +34,9 @@ describe('buildRcloneConfigIni', () => {
     expect(ini).toContain('type = crypt');
     expect(ini).toContain('remote = drive:');
     expect(ini).toContain('password = OBSCURED123');
-    expect(ini).toContain('filename_encryption = standard');
+    // Readable names in Drive, encrypted contents only (user's choice).
+    expect(ini).toContain('filename_encryption = off');
+    expect(ini).toContain('directory_name_encryption = false');
   });
 
   it('throws if withCrypt but no obscured password given', () => {
