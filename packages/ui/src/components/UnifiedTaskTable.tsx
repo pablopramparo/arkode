@@ -120,7 +120,7 @@ export function UnifiedTaskTable({
       <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
         <table className="w-full border-collapse text-sm">
           <thead>
-            <tr className="text-left" style={{ color: 'var(--muted)' }}>
+            <tr className="text-left whitespace-nowrap" style={{ color: 'var(--muted)' }}>
               {showClientColumn && <th className="px-4 py-2 font-medium">Cliente</th>}
               <th className="px-4 py-2 font-medium">Nombre</th>
               <th className="px-4 py-2 font-medium">Tipo</th>
@@ -148,7 +148,7 @@ export function UnifiedTaskTable({
                         <ClientLink clientId={row.clientId} name={row.clientName} onSelect={onSelectClient ?? (() => {})} />
                       </td>
                     )}
-                    <td className="px-4 py-2.5">
+                    <td className="whitespace-nowrap px-4 py-2.5">
                       {row.name}
                       {!row.isActive && (
                         <span className="ml-2 text-xs font-normal" style={{ color: 'var(--muted)' }}>
@@ -158,17 +158,17 @@ export function UnifiedTaskTable({
                       <KindBadge kind={row.kind} />
                       <BackupSetBadge name={row.backupSetName} />
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td className="whitespace-nowrap px-4 py-2.5">
                       <StrategyBadge row={row} />
                     </td>
-                    <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                    <td className="min-w-44 px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                       {row.originLabel}
                     </td>
-                    <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+                    <td className="whitespace-nowrap px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                       {formatSchedule(row)}
                     </td>
                     <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 whitespace-nowrap">
                         {row.isActive && (
                           <>
                             <Button

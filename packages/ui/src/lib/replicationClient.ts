@@ -1,4 +1,5 @@
 import { isTauri, invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getApiBase } from './apiBase';
 
 export type ReplicationContent = 'restic_repo' | 'db_dumps';
@@ -148,14 +149,26 @@ export async function fetchReplicationRuns(targetId: string, limit = 20): Promis
 }
 
 /**
- * Runs `rclone authorize "drive"` via the Tauri shell (opens the browser).
- * Only works inside the desktop app; the caller must offer a paste-token
- * fallback for the plain-browser / headless case.
+ * Runs `rclone authorize "drive"` via the Tauri shell. Only works inside the
+ * desktop app; the caller must offer a paste-token fallback for the
+ * plain-browser / headless case.
  */
 export function canAuthorizeInApp(): boolean {
   return isTauri();
 }
 
-export async function authorizeDriveInApp(): Promise<string> {
-  return invoke<string>('rclone_authorize_drive');
+/**
+ * @param noOpenBrowser when true, rclone does NOT open a browser — it emits
+ * the consent URL via the `rclone-auth-url` event (subscribe with
+ * {@link onRcloneAuthUrl}) so the user can copy it into any browser on this
+ * PC. Either way the returned promise resolves with the OAuth token once the
+ * user finishes approving.
+ */
+export async function authorizeDriveInApp(opts?: { noOpenBrowser?: boolean }): Promise<string> {
+  return invoke<string>('rclone_authorize_drive', { noOpenBrowser: opts?.noOpenBrowser ?? false });
+}
+
+/** Subscribe to the consent URL emitted during a `noOpenBrowser` authorize. Returns an unlisten fn. */
+export async function onRcloneAuthUrl(cb: (url: string) => void): Promise<() => void> {
+  return listen<string>('rclone-auth-url', (e) => cb(e.payload));
 }

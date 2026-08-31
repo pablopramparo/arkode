@@ -1980,16 +1980,23 @@ program
   .requiredOption('--content <kind>', 'restic_repo | db_dumps')
   .option('--client-id <id>', 'your own Google OAuth client id (optional — avoids rclone\'s shared-client rate limits)')
   .option('--client-secret <secret>')
+  .option('--no-open-browser', 'do not open a browser — just print the consent URL to open manually (must be on this machine)')
   .action(async (opts) => {
     const ctx = buildContext();
     try {
       const content = parseReplicationContent(opts.content);
       const target = ctx.replicationTargetsRepo.getByClientAndContent(opts.client, content);
       if (!target) throw new Error('No replication target for that client + content. Run `replication:add` first.');
-      console.log('Opening Google sign-in… approve access in the browser, then return here.');
+      console.log(
+        opts.openBrowser === false
+          ? 'Starting Google sign-in… open the link below in any browser on this machine, approve access, then return here.'
+          : 'Opening Google sign-in… approve access in the browser, then return here.'
+      );
       const token = await rcloneClient.rcloneAuthorizeDrive({
         clientId: opts.clientId,
         clientSecret: opts.clientSecret,
+        noOpenBrowser: opts.openBrowser === false,
+        onAuthUrl: (url) => console.log(`\n  ${url}\n`),
       });
       const config: RcloneDriveConfig = { token };
       if (opts.clientId && opts.clientSecret) {

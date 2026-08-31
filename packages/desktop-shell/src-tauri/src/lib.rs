@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::Mutex;
-use tauri::{Manager, RunEvent};
+use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -341,13 +341,49 @@ async fn reinstall_scheduler_service() -> Result<(), String> {
   run_elevated_engine_cli("scheduler:service-reinstall").await
 }
 
-/// Runs the vendored `rclone authorize "drive"`, which opens the Google
-/// consent screen in the default browser and blocks until the user
-/// approves, then prints the OAuth token blob. Returns that token JSON
+/// Pulls the OAuth token `{...}` blob out of `rclone authorize` stdout
+/// (with or without rclone's "--->" / "<---" paste markers).
+fn extract_rclone_token(stdout: &str) -> Option<String> {
+  let between = stdout
+    .split_once("--->")
+    .and_then(|(_, rest)| rest.split_once("<---").map(|(t, _)| t))
+    .unwrap_or(stdout);
+  between
+    .lines()
+    .map(str::trim)
+    .find(|t| t.starts_with('{') && t.contains("\"access_token\""))
+    .map(str::to_string)
+}
+
+/// The local callback URL rclone prints (`http://127.0.0.1:53682/auth?state=…`).
+/// rclone emits this on stderr in both modes; with `--auth-no-open-browser`
+/// it does not launch a browser, leaving the user to open it wherever they
+/// like — as long as it's on this same machine (the callback listener is on
+/// 127.0.0.1).
+fn extract_rclone_auth_url(line: &str) -> Option<String> {
+  let start = line.find("http://127.0.0.1:")?;
+  let rest = &line[start..];
+  let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+  Some(rest[..end].to_string())
+}
+
+/// Runs the vendored `rclone authorize "drive"`, which drives Google's OAuth
+/// consent flow and prints the resulting token blob. Returns that token JSON
 /// string; the UI POSTs it to the engine's
 /// `/replication-targets/:id/authorize` endpoint. No elevation needed.
+///
+/// `no_open_browser`:
+///  - `false`/absent — rclone opens the system default browser itself
+///    (unchanged, proven `.output()` path).
+///  - `true` — rclone opens nothing; this streams its stderr, emits the
+///    `rclone-auth-url` event with the local consent URL so the UI can show
+///    a copyable link (open it in any browser on this PC), then finishes the
+///    same way.
 #[tauri::command]
-async fn rclone_authorize_drive(app: tauri::AppHandle) -> Result<String, String> {
+async fn rclone_authorize_drive(
+  app: tauri::AppHandle,
+  no_open_browser: Option<bool>,
+) -> Result<String, String> {
   let rclone = app
     .path()
     .resolve("resources/rclone/rclone.exe", tauri::path::BaseDirectory::Resource)
@@ -357,35 +393,74 @@ async fn rclone_authorize_drive(app: tauri::AppHandle) -> Result<String, String>
     .or_else(|| std::env::var("RCLONE_PATH").ok())
     .unwrap_or_else(|| "rclone".to_string());
 
-  let output = tauri::async_runtime::spawn_blocking(move || {
-    std::process::Command::new(&rclone)
-      .args(["authorize", "drive"])
-      .output()
+  if !no_open_browser.unwrap_or(false) {
+    // Unchanged proven path: rclone opens the browser, we just wait for it.
+    let output = tauri::async_runtime::spawn_blocking(move || {
+      std::process::Command::new(&rclone)
+        .args(["authorize", "drive"])
+        .output()
+    })
+    .await
+    .map_err(|e| format!("no se pudo iniciar rclone: {e}"))?
+    .map_err(|e| format!("no se pudo iniciar rclone: {e}"))?;
+
+    if !output.status.success() {
+      return Err(format!(
+        "rclone authorize terminó con error: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+      ));
+    }
+    return extract_rclone_token(&String::from_utf8_lossy(&output.stdout))
+      .ok_or_else(|| "rclone authorize no devolvió un token reconocible.".to_string());
+  }
+
+  // Copy-the-link path: no browser is opened; stream stderr to surface the
+  // consent URL to the UI, keep reading stdout for the eventual token.
+  let app_evt = app.clone();
+  let (stdout_str, stderr_str, ok) = tauri::async_runtime::spawn_blocking(move || {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(&rclone)
+      .args(["authorize", "drive", "--auth-no-open-browser"])
+      .stdout(Stdio::piped())
+      .stderr(Stdio::piped())
+      .spawn()
+      .map_err(|e| format!("no se pudo iniciar rclone: {e}"))?;
+
+    let stderr = child.stderr.take().expect("piped stderr");
+    let stderr_handle = std::thread::spawn(move || {
+      let mut collected = String::new();
+      let mut emitted = false;
+      for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+        if !emitted {
+          if let Some(url) = extract_rclone_auth_url(&line) {
+            let _ = app_evt.emit("rclone-auth-url", url);
+            emitted = true;
+          }
+        }
+        collected.push_str(&line);
+        collected.push('\n');
+      }
+      collected
+    });
+
+    let mut stdout_str = String::new();
+    if let Some(mut out) = child.stdout.take() {
+      let _ = out.read_to_string(&mut stdout_str);
+    }
+    let status = child.wait().map_err(|e| format!("rclone falló: {e}"))?;
+    let stderr_str = stderr_handle.join().unwrap_or_default();
+    Ok::<_, String>((stdout_str, stderr_str, status.success()))
   })
   .await
-  .map_err(|e| format!("no se pudo iniciar rclone: {e}"))?
-  .map_err(|e| format!("no se pudo iniciar rclone: {e}"))?;
+  .map_err(|e| format!("no se pudo iniciar rclone: {e}"))??;
 
-  if !output.status.success() {
-    return Err(format!(
-      "rclone authorize terminó con error: {}",
-      String::from_utf8_lossy(&output.stderr).trim()
-    ));
+  if !ok {
+    return Err(format!("rclone authorize terminó con error: {}", stderr_str.trim()));
   }
-
-  let stdout = String::from_utf8_lossy(&output.stdout);
-  // Pull the {...} blob out (with or without rclone's "--->" paste markers).
-  let between = stdout
-    .split_once("--->")
-    .and_then(|(_, rest)| rest.split_once("<---").map(|(t, _)| t))
-    .unwrap_or(&stdout);
-  for line in between.lines() {
-    let t = line.trim();
-    if t.starts_with('{') && t.contains("\"access_token\"") {
-      return Ok(t.to_string());
-    }
-  }
-  Err("rclone authorize no devolvió un token reconocible.".to_string())
+  extract_rclone_token(&stdout_str)
+    .ok_or_else(|| "rclone authorize no devolvió un token reconocible.".to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

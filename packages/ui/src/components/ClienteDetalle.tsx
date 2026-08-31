@@ -66,13 +66,13 @@ function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab
     { id: 'copia-externa', label: 'Copia externa' },
   ];
   return (
-    <div className="flex flex-1 gap-1" style={{ borderColor: 'var(--border)' }}>
+    <div className="flex flex-1 gap-1 overflow-x-auto" style={{ borderColor: 'var(--border)' }}>
       {tabs.map((tab) => (
         <button
           key={tab.id}
           type="button"
           onClick={() => onChange(tab.id)}
-          className="px-3 py-2 text-sm font-medium"
+          className="whitespace-nowrap px-3 py-2 text-sm font-medium"
           style={{
             color: active === tab.id ? 'var(--foreground)' : 'var(--muted)',
             borderBottom: active === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
@@ -343,48 +343,50 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
 
           <BackupSetsSection clientId={clientId} />
 
-          <div className="mb-4 flex items-center justify-between border-b" style={{ borderColor: 'var(--border)' }}>
-            <TabBar
-              active={activeTab}
-              onChange={setActiveTab}
-              counts={{ tareas: unifiedTaskRows?.length ?? 0, conexiones: visibleConnectionRows.length, backups: backupsTotal, historial: historialRows?.length ?? 0 }}
-            />
-            <div className="mb-1.5 flex items-center gap-3">
-              {(activeTab === 'tareas' || activeTab === 'conexiones') && (
-                <Switch checked={showInactive} onChange={() => setShowInactive((v) => !v)} label="Mostrar inactivas" />
-              )}
-              {activeTab === 'tareas' && (
-                <>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="rounded-full px-4"
-                    isDisabled={importBusy}
-                    onPress={() => importFileInputRef.current?.click()}
-                  >
-                    {importBusy ? 'Importando…' : 'Importar tarea'}
-                  </Button>
-                  <input
-                    ref={importFileInputRef}
-                    type="file"
-                    accept="application/json"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleImportTaskFile(file);
-                    }}
-                  />
-                  <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setChoosingKind(true)}>
-                    + Agregar backup
-                  </Button>
-                </>
-              )}
-              {activeTab === 'conexiones' && (
-                <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setShowCreateConnection(true)}>
-                  + Nueva conexión
-                </Button>
-              )}
+          <div className="mb-4">
+            <div className="flex border-b" style={{ borderColor: 'var(--border)' }}>
+              <TabBar
+                active={activeTab}
+                onChange={setActiveTab}
+                counts={{ tareas: unifiedTaskRows?.length ?? 0, conexiones: visibleConnectionRows.length, backups: backupsTotal, historial: historialRows?.length ?? 0 }}
+              />
             </div>
+            {(activeTab === 'tareas' || activeTab === 'conexiones') && (
+              <div className="mt-2.5 flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+                <Switch checked={showInactive} onChange={() => setShowInactive((v) => !v)} label="Mostrar inactivas" />
+                {activeTab === 'tareas' && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="rounded-full px-4"
+                      isDisabled={importBusy}
+                      onPress={() => importFileInputRef.current?.click()}
+                    >
+                      {importBusy ? 'Importando…' : 'Importar tarea'}
+                    </Button>
+                    <input
+                      ref={importFileInputRef}
+                      type="file"
+                      accept="application/json"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleImportTaskFile(file);
+                      }}
+                    />
+                    <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setChoosingKind(true)}>
+                      + Agregar backup
+                    </Button>
+                  </>
+                )}
+                {activeTab === 'conexiones' && (
+                  <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setShowCreateConnection(true)}>
+                    + Nueva conexión
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
 
           {activeTab === 'tareas' && importResult && (

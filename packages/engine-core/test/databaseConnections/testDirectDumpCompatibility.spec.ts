@@ -147,6 +147,21 @@ describe('testDirectDumpCompatibility', () => {
     expect(result.toolPath).toBe(pgDumpPath);
   });
 
+  it("mysql: falls back to MARIADB_DUMP_PATH when MYSQLDUMP_PATH is unset (matches what a zero-config MySQL direct_dump actually runs)", async () => {
+    const ctx = createTestContext();
+    const connection = seedMysqlConnection(ctx);
+    const mariaDbDumpPath = await makeRealFile();
+    process.env.MARIADB_DUMP_PATH = mariaDbDumpPath;
+
+    const result = await testDirectDumpCompatibility(connection, ctx.secretStore, ctx.settingsRepo, {
+      testConnectionOverride: fakeOk('9.1.0'),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.toolCompatibility).toBe('default-unverified');
+    expect(result.toolPath).toBe(mariaDbDumpPath);
+  });
+
   it('prefers a registry match over the default env var when both are present', async () => {
     const ctx = createTestContext();
     const connection = seedPostgresConnection(ctx);

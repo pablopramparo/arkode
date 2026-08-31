@@ -214,26 +214,36 @@ export async function rcloneAbout(opts: { configPath: string; remoteSection: str
 }
 
 /**
- * Runs `rclone authorize "drive"`, which opens the Google consent screen in
- * the local browser and blocks until the user approves, then prints the
- * OAuth token blob. Returns that token JSON string (to be stored in
- * SecretStore as part of the target's RcloneDriveConfig).
+ * Runs `rclone authorize "drive"`, which drives the Google consent flow and
+ * blocks until the user approves, then prints the OAuth token blob. Returns
+ * that token JSON string (to be stored in SecretStore as part of the
+ * target's RcloneDriveConfig).
  *
  * `clientId`/`clientSecret`, when supplied, authorize against the
  * operator's own Google OAuth app instead of rclone's shared one.
+ *
+ * `noOpenBrowser` passes `--auth-no-open-browser`: rclone opens nothing and
+ * just prints the local consent URL, for the user to open in whatever
+ * browser they want (on this same machine — the callback listener is on
+ * 127.0.0.1). `onAuthUrl` is called once with that URL as soon as rclone
+ * prints it.
  */
 export async function rcloneAuthorizeDrive(opts?: {
   clientId?: string;
   clientSecret?: string;
   timeoutMs?: number;
+  noOpenBrowser?: boolean;
+  onAuthUrl?: (url: string) => void;
 }): Promise<string> {
   const args = ['authorize', 'drive'];
   if (opts?.clientId && opts?.clientSecret) args.push(opts.clientId, opts.clientSecret);
+  if (opts?.noOpenBrowser) args.push('--auth-no-open-browser');
 
   return new Promise<string>((resolve, reject) => {
     const child = spawn(resolveRclonePath(), args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
+    let urlSeen = false;
     const timer = setTimeout(
       () => {
         child.kill();
@@ -242,7 +252,16 @@ export async function rcloneAuthorizeDrive(opts?: {
       opts?.timeoutMs ?? 5 * 60 * 1000
     );
     child.stdout.on('data', (c: Buffer) => (stdout += c.toString()));
-    child.stderr.on('data', (c: Buffer) => (stderr += c.toString()));
+    child.stderr.on('data', (c: Buffer) => {
+      stderr += c.toString();
+      if (!urlSeen && opts?.onAuthUrl) {
+        const m = /https?:\/\/127\.0\.0\.1:\d+\/auth\?\S+/.exec(stderr);
+        if (m) {
+          urlSeen = true;
+          opts.onAuthUrl(m[0]);
+        }
+      }
+    });
     child.on('error', (err) => {
       clearTimeout(timer);
       reject(err);

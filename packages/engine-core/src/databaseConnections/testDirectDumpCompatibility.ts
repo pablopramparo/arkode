@@ -7,6 +7,8 @@ import { testDatabaseConnection } from './testDatabaseConnection.js';
 import { createPostgresToolRegistry } from './postgresToolRegistry.js';
 import { createMysqlToolRegistry } from './mysqlToolRegistry.js';
 import { createMariaDbToolRegistry } from './mariaDbToolRegistry.js';
+import { resolveToolPath } from '../toolPaths.js';
+import { resolveMariaDbFamilyDump } from './mysqlClientResolution.js';
 
 /**
  * - 'registered'         — an exact-version match was found in the engine's
@@ -46,6 +48,27 @@ const DEFAULT_TOOL_ENV_VAR: Record<DatabaseConnection['engine'], string> = {
   mysql: 'MYSQLDUMP_PATH',
   mariadb: 'MARIADB_DUMP_PATH',
 };
+
+/**
+ * The exact fallback dump-tool resolution the real dump clients use when no
+ * version-keyed registry entry matches — the env var first, then the tool
+ * vendored next to engine-cli.exe (resolveToolPath). MUST stay in sync with
+ * postgresDumpClient.ts / mysqlDumpClient.ts / mariaDbDumpClient.ts, so this
+ * schedule-activation gate never refuses a task that "Ejecutar ahora" would
+ * run fine. For a `mysql` connection this deliberately includes the bundled
+ * `mariadb-dump` (arkode ships MariaDB's tools, not Oracle's) — that's what
+ * a zero-config MySQL direct_dump actually runs.
+ */
+function resolveDefaultDumpToolPath(engine: DatabaseConnection['engine']): string | undefined {
+  switch (engine) {
+    case 'postgres':
+      return resolveToolPath('PG_DUMP_PATH', 'pg_dump.exe');
+    case 'mysql':
+      return resolveToolPath('MYSQLDUMP_PATH', 'mysqldump.exe') ?? resolveToolPath('MARIADB_DUMP_PATH', 'mariadb-dump.exe');
+    case 'mariadb':
+      return resolveMariaDbFamilyDump()?.path;
+  }
+}
 
 /**
  * The pre-flight compatibility gate flagged in CLAUDE.md's "direct_dump tool
@@ -101,7 +124,7 @@ export async function testDirectDumpCompatibility(
   }
 
   if (!toolPath) {
-    const defaultPath = process.env[DEFAULT_TOOL_ENV_VAR[connection.engine]];
+    const defaultPath = resolveDefaultDumpToolPath(connection.engine);
     if (defaultPath) {
       toolPath = defaultPath;
       toolCompatibility = 'default-unverified';
@@ -113,7 +136,7 @@ export async function testDirectDumpCompatibility(
       ok: false,
       connection: connectionResult,
       toolCompatibility: 'missing',
-      message: `No usable ${DEFAULT_TOOL_ENV_VAR[connection.engine]} tool was found on disk for this connection.`,
+      message: `No usable dump tool for ${connection.engine} was found on disk (checked ${DEFAULT_TOOL_ENV_VAR[connection.engine]}, the tool registry, and the bundled tools).`,
     };
   }
 

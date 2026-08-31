@@ -7,6 +7,7 @@ import {
   removeReplicationTarget,
   authorizeReplicationTarget,
   authorizeDriveInApp,
+  onRcloneAuthUrl,
   canAuthorizeInApp,
   testReplicationTarget,
   runReplicationTarget,
@@ -115,6 +116,7 @@ function ReplicationSlot({
   const [message, setMessage] = useState<string | null>(null);
   const [showConfigure, setShowConfigure] = useState(false);
   const [showPasteToken, setShowPasteToken] = useState(false);
+  const [showCopyLinkAuth, setShowCopyLinkAuth] = useState(false);
   const [showCryptPw, setShowCryptPw] = useState(false);
   const [showRestore, setShowRestore] = useState(false);
   const [showNewCryptPw, setShowNewCryptPw] = useState<string | null>(null);
@@ -231,21 +233,31 @@ function ReplicationSlot({
 
       <div className="mt-3 flex flex-wrap gap-2">
         {!target.authorized && canAuthorizeInApp() && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="rounded-full px-3"
-            onPress={() =>
-              act('test', async () => {
-                const token = await authorizeDriveInApp();
-                await authorizeReplicationTarget(target.id, token);
-                setMessage('Cuenta conectada.');
-                await onChange();
-              })
-            }
-          >
-            Autorizar con Google
-          </Button>
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="rounded-full px-3"
+              onPress={() =>
+                act('test', async () => {
+                  const token = await authorizeDriveInApp();
+                  await authorizeReplicationTarget(target.id, token);
+                  setMessage('Cuenta conectada.');
+                  await onChange();
+                })
+              }
+            >
+              Autorizar con Google
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="rounded-full px-3"
+              onPress={() => setShowCopyLinkAuth(true)}
+            >
+              Copiar enlace en su lugar
+            </Button>
+          </>
         )}
         <Button size="sm" variant="ghost" className="rounded-full px-3" onPress={() => setShowPasteToken(true)}>
           {target.authorized ? 'Reconectar (pegar token)' : 'Pegar token'}
@@ -365,6 +377,17 @@ function ReplicationSlot({
           onSubmit={async (token) => {
             await authorizeReplicationTarget(target.id, token);
             setShowPasteToken(false);
+            setMessage('Cuenta conectada.');
+            await onChange();
+          }}
+        />
+      )}
+      {showCopyLinkAuth && (
+        <CopyLinkAuthModal
+          onClose={() => setShowCopyLinkAuth(false)}
+          onAuthorized={async (token) => {
+            await authorizeReplicationTarget(target.id, token);
+            setShowCopyLinkAuth(false);
             setMessage('Cuenta conectada.');
             await onChange();
           }}
@@ -499,6 +522,89 @@ function PasteTokenModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
           }}
         >
           {busy ? 'Guardando…' : 'Guardar'}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+function CopyLinkAuthModal({
+  onClose,
+  onAuthorized,
+}: {
+  onClose: () => void;
+  onAuthorized: (token: string) => Promise<void>;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    onRcloneAuthUrl((u) => {
+      if (alive) setUrl(u);
+    }).then((fn) => {
+      if (alive) unlisten = fn;
+      else fn();
+    });
+    authorizeDriveInApp({ noOpenBrowser: true })
+      .then((token) => {
+        if (alive) void onAuthorized(token);
+      })
+      .catch((e) => {
+        if (alive) setErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [onAuthorized]);
+
+  return (
+    <Modal title="Autorizar con Google — copiar enlace" onClose={onClose}>
+      <p className="mb-3 text-sm" style={{ color: 'var(--muted)' }}>
+        Abrí este enlace en el navegador que quieras <strong>de esta misma PC</strong>, iniciá sesión y aprobá el acceso.
+        Al terminar, la cuenta se conecta sola — no cierres esta ventana.
+      </p>
+      {err ? (
+        <p className="mb-2 text-sm" style={{ color: 'var(--danger)' }}>
+          {err}
+        </p>
+      ) : url ? (
+        <>
+          <div
+            className="mb-2 select-all rounded-md border px-3 py-2 font-mono text-xs break-all"
+            style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface-secondary)' }}
+          >
+            {url}
+          </div>
+          <div className="mb-3 flex items-center gap-3">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="rounded-full px-3"
+              onPress={async () => {
+                await navigator.clipboard.writeText(url);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }}
+            >
+              {copied ? 'Copiado ✓' : 'Copiar enlace'}
+            </Button>
+            <span className="flex items-center gap-2 text-xs" style={{ color: 'var(--muted)' }}>
+              <Spinner /> Esperando la autorización…
+            </span>
+          </div>
+        </>
+      ) : (
+        <p className="mb-3 flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
+          <Spinner /> Generando el enlace…
+        </p>
+      )}
+      <div className="flex justify-end">
+        <Button size="sm" variant="ghost" className="rounded-full px-4" onPress={onClose}>
+          Cancelar
         </Button>
       </div>
     </Modal>
