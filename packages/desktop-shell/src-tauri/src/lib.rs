@@ -355,16 +355,24 @@ fn extract_rclone_token(stdout: &str) -> Option<String> {
     .map(str::to_string)
 }
 
-/// The local callback URL rclone prints (`http://127.0.0.1:53682/auth?state=…`).
+/// The local consent URL rclone prints (`http://127.0.0.1:53682/auth?state=…`).
 /// rclone emits this on stderr in both modes; with `--auth-no-open-browser`
 /// it does not launch a browser, leaving the user to open it wherever they
 /// like — as long as it's on this same machine (the callback listener is on
 /// 127.0.0.1).
+///
+/// rclone ALSO prints an unrelated `"http://127.0.0.1:53682/"` in a "Make
+/// sure your Redirect URL is set to …" notice — the bare root, which serves
+/// the "No code returned" error page. Only the URL carrying the `/auth?`
+/// path is the one to open, and a trailing `"` must be trimmed.
 fn extract_rclone_auth_url(line: &str) -> Option<String> {
   let start = line.find("http://127.0.0.1:")?;
   let rest = &line[start..];
-  let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-  Some(rest[..end].to_string())
+  let end = rest
+    .find(|c: char| c.is_whitespace() || c == '"')
+    .unwrap_or(rest.len());
+  let url = &rest[..end];
+  url.contains("/auth?").then(|| url.to_string())
 }
 
 /// Runs the vendored `rclone authorize "drive"`, which drives Google's OAuth
@@ -419,7 +427,12 @@ async fn rclone_authorize_drive(
   let app_evt = app.clone();
   let (stdout_str, stderr_str, ok) = tauri::async_runtime::spawn_blocking(move || {
     use std::io::{BufRead, BufReader, Read};
+    use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     let mut child = Command::new(&rclone)
       .args(["authorize", "drive", "--auth-no-open-browser"])
@@ -427,6 +440,25 @@ async fn rclone_authorize_drive(
       .stderr(Stdio::piped())
       .spawn()
       .map_err(|e| format!("no se pudo iniciar rclone: {e}"))?;
+
+    // rclone's auth server binds the fixed port 53682 and waits for the
+    // callback indefinitely. If the user abandons the dialog, kill it after
+    // 5 min so it doesn't sit holding that port and wedge the next attempt.
+    let pid = child.id();
+    let done = Arc::new(AtomicBool::new(false));
+    let done_wd = done.clone();
+    std::thread::spawn(move || {
+      for _ in 0..300 {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if done_wd.load(Ordering::Relaxed) {
+          return;
+        }
+      }
+      let _ = Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    });
 
     let stderr = child.stderr.take().expect("piped stderr");
     let stderr_handle = std::thread::spawn(move || {
@@ -450,6 +482,7 @@ async fn rclone_authorize_drive(
       let _ = out.read_to_string(&mut stdout_str);
     }
     let status = child.wait().map_err(|e| format!("rclone falló: {e}"))?;
+    done.store(true, Ordering::Relaxed);
     let stderr_str = stderr_handle.join().unwrap_or_default();
     Ok::<_, String>((stdout_str, stderr_str, status.success()))
   })

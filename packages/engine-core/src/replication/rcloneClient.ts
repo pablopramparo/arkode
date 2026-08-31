@@ -255,7 +255,10 @@ export async function rcloneAuthorizeDrive(opts?: {
     child.stderr.on('data', (c: Buffer) => {
       stderr += c.toString();
       if (!urlSeen && opts?.onAuthUrl) {
-        const m = /https?:\/\/127\.0\.0\.1:\d+\/auth\?\S+/.exec(stderr);
+        // Only the consent URL (carries /auth?state=…). rclone also prints a
+        // bare "http://127.0.0.1:53682/" in a "Redirect URL" notice — exclude
+        // it (no /auth?) and stop before any trailing quote.
+        const m = /https?:\/\/127\.0\.0\.1:\d+\/auth\?[^\s"]+/.exec(stderr);
         if (m) {
           urlSeen = true;
           opts.onAuthUrl(m[0]);
