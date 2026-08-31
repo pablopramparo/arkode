@@ -99,15 +99,25 @@ interface RcloneStatsLine {
   errors?: number;
 }
 
-function parseSyncStats(stderr: string): { stats: RcloneStatsLine; warnings: string[] } {
+/** Exported for unit testing — rclone's JSON-log quirks around stats vs. warning lines. */
+export function parseSyncStats(stderr: string): { stats: RcloneStatsLine; warnings: string[] } {
   let stats: RcloneStatsLine = {};
   const warnings: string[] = [];
   for (const line of stderr.split(/\r?\n/)) {
     if (!line.trim().startsWith('{')) continue;
     try {
       const obj = JSON.parse(line) as { stats?: RcloneStatsLine; level?: string; msg?: string };
-      if (obj.stats) stats = obj.stats;
-      if (obj.level === 'warning' && obj.msg) warnings.push(obj.msg);
+      // A stats line — NOT a warning, even though rclone tags it
+      // `level:"warning"` in JSON log when --stats-log-level is NOTICE
+      // (accounting/stats.go). Without this guard every sync's progress
+      // dump was collected as a "warning" and every run came back Warning.
+      if (obj.stats) {
+        stats = obj.stats;
+        continue;
+      }
+      if (obj.level === 'warning' && obj.msg && !/\bnot found - using defaults\b/.test(obj.msg)) {
+        warnings.push(obj.msg);
+      }
     } catch {
       /* not a JSON log line */
     }
