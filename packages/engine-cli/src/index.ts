@@ -559,20 +559,34 @@ program
 
 program
   .command('task:update')
-  .description("Update a task's name/retention (not its strategy/transport/database-connection/db-engine — create a new task to change any of those). Only the flags you pass are changed.")
+  .description(
+    "Update a task's name/retention/backup-set. The remote command, output-path template, remote path and file pattern can also be changed, but only while the task has no real backup yet (no Success/Warning run with a file). Strategy/transport/database-connection/db-engine are never editable — create a new task. Only the flags you pass are changed."
+  )
   .argument('<taskId>')
   .option('--name <name>')
   .option('--retention-count <n>')
   .option('--retention-days <n>')
   .option('--backup-set <backupSetId>', 'assign/reassign this task to a backup set')
   .option('--clear-backup-set', 'unassign this task from its backup set', false)
+  .option('--remote-path <path>', 'fetch_existing: directory on the remote host to look in')
+  .option('--remote-file-pattern <glob>', 'fetch_existing: filename glob (pass "" to clear)')
+  .option('--remote-command <cmd>', 'remote_dump (host exec mode): the dump command to run on the remote host')
+  .option('--remote-output-path-template <tpl>', 'remote_dump: where the dump lands on the remote host (supports {date:...})')
+  .option('--remote-cleanup', 'remote_dump: delete the remote dump file after a successful download')
+  .option('--remote-keep', 'remote_dump: keep the remote dump file after download (opposite of --remote-cleanup)')
   .action((taskId: string, opts) => {
     const ctx = buildContext();
+    const remoteCleanup = opts.remoteCleanup ? true : opts.remoteKeep ? false : undefined;
     const task = ctx.tasksRepo.update(taskId, {
       name: opts.name,
       retentionCount: opts.retentionCount != null ? Number(opts.retentionCount) : undefined,
       retentionDays: opts.retentionDays != null ? Number(opts.retentionDays) : undefined,
       backupSetId: opts.clearBackupSet ? null : opts.backupSet,
+      remotePath: opts.remotePath,
+      remoteFilePattern: opts.remoteFilePattern,
+      remoteCommand: opts.remoteCommand,
+      remoteOutputPathTemplate: opts.remoteOutputPathTemplate,
+      remoteCleanup,
     });
     console.log(JSON.stringify(task, null, 2));
   });
@@ -2574,6 +2588,9 @@ program
               // UX nicety on top of that already-safe guarantee.
               const latestRun = ctx.runsRepo.getLatestByTask(t.id);
               const backupSet = t.backupSetId ? ctx.backupSetsRepo.getById(t.backupSetId) : null;
+              // Whether the task's remote-* pipeline fields are still editable
+              // (see UpdateTaskInput's doc comment) — a real backup locks them.
+              const hasRealBackups = ctx.runsRepo.listBackups({ taskId: t.id, limit: 1 }).total > 0;
               return {
                 ...t,
                 kind: 'db' as const,
@@ -2582,6 +2599,7 @@ program
                 databaseConnectionName: databaseConnection?.name ?? null,
                 latestRunStatus: latestRun?.status ?? null,
                 backupSetName: backupSet?.name ?? null,
+                hasRealBackups,
               };
             })
         );

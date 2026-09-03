@@ -12,6 +12,8 @@ export interface TaskRow extends BackupTask {
   latestRunStatus: BackupRunStatus | null;
   /** Pure visual/reporting label, or null if unassigned — see engine-core's BackupSet doc comment. */
   backupSetName: string | null;
+  /** True once a Success/Warning run left a file on disk — at which point the remote-* pipeline fields (command, output-path template, remote path/pattern) can no longer be edited. */
+  hasRealBackups: boolean;
 }
 
 export interface TaskInput {
@@ -73,6 +75,17 @@ export interface TaskUpdateInput {
   retentionDays?: number | null;
   /** Assign/reassign/unassign (pass null) — unlike strategy/transport/etc., this is editable after creation. */
   backupSetId?: string | null;
+  /**
+   * Remote-* pipeline detail fields. The server rejects any of these once
+   * the task has a real backup (TaskRow.hasRealBackups). fetch_existing:
+   * remotePath/remoteFilePattern. remote_dump: remoteCommand (host exec
+   * mode only), remoteOutputPathTemplate, remoteCleanup.
+   */
+  remotePath?: string | null;
+  remoteFilePattern?: string | null;
+  remoteCommand?: string | null;
+  remoteOutputPathTemplate?: string | null;
+  remoteCleanup?: boolean;
 }
 
 async function handleJson<T>(res: Response): Promise<T> {

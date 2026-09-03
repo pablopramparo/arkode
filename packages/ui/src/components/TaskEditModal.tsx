@@ -17,6 +17,15 @@ function taskToFormValues(task: TaskRow): FormValues {
     transportId: task.transportId ?? '',
     databaseConnectionId: task.databaseConnectionId ?? '',
     dbEngine: task.dbEngine,
+    remotePath: task.remotePath ?? '',
+    remoteFilePattern: task.remoteFilePattern ?? '',
+    remoteCommand: task.remoteCommand ?? '',
+    remoteOutputPathTemplate: task.remoteOutputPathTemplate ?? '',
+    remoteCleanup: task.remoteCleanup,
+    remoteDumpExecMode: task.remoteDumpExecMode,
+    dockerContainer: task.dockerContainer ?? '',
+    remoteDumpDatabase: task.remoteDumpDatabase ?? '',
+    remoteDumpDbUser: task.remoteDumpDbUser ?? '',
     retentionCount: task.retentionCount != null ? String(task.retentionCount) : '',
     retentionDays: task.retentionDays != null ? String(task.retentionDays) : '',
     scheduleTime: task.scheduleTime ?? '',
@@ -28,6 +37,22 @@ function taskToFormValues(task: TaskRow): FormValues {
   };
 }
 
+/**
+ * Whether the remote-* pipeline fields shown for this task are all filled
+ * in acceptably — only meaningful while they're editable (no real backup
+ * yet); returns true otherwise so it never blocks a name/schedule-only save.
+ */
+function isPipelineValid(task: TaskRow, values: FormValues): boolean {
+  if (task.hasRealBackups) return true;
+  if (task.strategy === 'fetch_existing') return Boolean(values.remotePath.trim());
+  if (task.strategy === 'remote_dump') {
+    if (!values.remoteOutputPathTemplate.trim()) return false;
+    if (task.remoteDumpExecMode === 'host') return Boolean(values.remoteCommand.trim());
+    return true;
+  }
+  return true;
+}
+
 /** Same "shown, not editable" visual as TaskCreateWizard's fixedClientId display — a muted, input-shaped div instead of a real input. */
 function ReadOnlyField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -37,31 +62,75 @@ function ReadOnlyField({ label, children }: { label: string; children: React.Rea
   );
 }
 
+function LockedPipelineNote() {
+  return (
+    <p className="text-xs" style={{ color: 'var(--muted)' }}>
+      La tarea ya tiene backups reales, así que su configuración de origen (comando, ruta) no se puede modificar. Creá una
+      tarea nueva para cambiarla.
+    </p>
+  );
+}
+
 /**
- * The pipeline fields (remoteCommand, dockerContainer, etc.) are
- * deliberately immutable after creation — same reasoning as strategy/
- * transport, see UpdateTaskInput's own doc comment — but that's a reason
- * not to let them be *edited* here, not a reason to hide them entirely.
- * Read directly off `task` (not `values`/FormValues, which only carries
- * the fields this modal actually edits) since there's nothing to route
- * through form state for a read-only display.
+ * The remote-* pipeline fields. Editable while the task has no real backup
+ * yet (task.hasRealBackups === false) — the fix for "created it with the
+ * wrong command, now I'm stuck"; the server enforces the same gate. Once a
+ * real backup exists they fall back to the previous read-only display.
+ * Docker-mode structured fields (container/db/user/password) stay read-only
+ * always — changing those is out of scope, create a new task.
  */
-function ImmutableTaskDetails({ task }: { task: TaskRow }) {
+function PipelineFields({
+  task,
+  values,
+  onChange,
+}: {
+  task: TaskRow;
+  values: FormValues;
+  onChange: (patch: Partial<FormValues>) => void;
+}) {
+  const editable = !task.hasRealBackups;
+
   if (task.strategy === 'fetch_existing') {
     return (
       <>
-        <ReadOnlyField label="Ruta remota">{task.remotePath}</ReadOnlyField>
-        {task.remoteFilePattern && <ReadOnlyField label="Patrón de archivo">{task.remoteFilePattern}</ReadOnlyField>}
+        {editable ? (
+          <>
+            <Field label="Ruta remota *">
+              <input
+                style={inputStyle}
+                placeholder="Ej: /backups"
+                value={values.remotePath}
+                onChange={(e) => onChange({ remotePath: e.target.value })}
+              />
+            </Field>
+            <Field label="Patrón de archivo">
+              <input
+                style={inputStyle}
+                placeholder="Ej: *.sql.gz (opcional)"
+                value={values.remoteFilePattern}
+                onChange={(e) => onChange({ remoteFilePattern: e.target.value })}
+              />
+            </Field>
+          </>
+        ) : (
+          <>
+            <ReadOnlyField label="Ruta remota">{task.remotePath}</ReadOnlyField>
+            {task.remoteFilePattern && <ReadOnlyField label="Patrón de archivo">{task.remoteFilePattern}</ReadOnlyField>}
+            <LockedPipelineNote />
+          </>
+        )}
       </>
     );
   }
+
   if (task.strategy === 'remote_dump') {
+    const isDocker = task.remoteDumpExecMode === 'docker';
     return (
       <>
         <ReadOnlyField label="Modo de ejecución">
-          {task.remoteDumpExecMode === 'docker' ? 'Dentro de un contenedor Docker' : 'Directo en el host'}
+          {isDocker ? 'Dentro de un contenedor Docker' : 'Directo en el host'}
         </ReadOnlyField>
-        {task.remoteDumpExecMode === 'docker' ? (
+        {isDocker ? (
           <>
             <ReadOnlyField label="Contenedor">{task.dockerContainer}</ReadOnlyField>
             <div className="grid grid-cols-2 gap-3">
@@ -72,14 +141,58 @@ function ImmutableTaskDetails({ task }: { task: TaskRow }) {
               {task.remoteDumpDbPasswordSecretRef ? 'Configurada' : 'No configurada'}
             </ReadOnlyField>
           </>
+        ) : editable ? (
+          <Field label="Comando remoto *">
+            <input
+              style={inputStyle}
+              placeholder="Ej: mysqldump --single-transaction --quick --no-tablespaces web > {outputPath}"
+              value={values.remoteCommand}
+              onChange={(e) => onChange({ remoteCommand: e.target.value })}
+            />
+            <p className="mt-1 text-[11px]" style={{ color: 'var(--muted)' }}>
+              Usá <code>{'{outputPath}'}</code> donde va la ruta del dump — arkode lo reemplaza por la ruta que resuelve
+              de la plantilla. No uses <code>$(date ...)</code> para el nombre.
+            </p>
+          </Field>
         ) : (
           <ReadOnlyField label="Comando remoto">{task.remoteCommand}</ReadOnlyField>
         )}
-        <ReadOnlyField label="Plantilla de ruta de salida">{task.remoteOutputPathTemplate}</ReadOnlyField>
-        <ReadOnlyField label="Eliminar archivo remoto">{task.remoteCleanup ? 'Sí' : 'No'}</ReadOnlyField>
+        {editable ? (
+          <>
+            <Field label="Plantilla de ruta de salida *">
+              <input
+                style={inputStyle}
+                placeholder="Ej: /tmp/backups/db_{date:YYYYMMDD_HHmm}.dump"
+                value={values.remoteOutputPathTemplate}
+                onChange={(e) => onChange({ remoteOutputPathTemplate: e.target.value })}
+              />
+            </Field>
+            <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
+              <input
+                type="checkbox"
+                checked={values.remoteCleanup}
+                onChange={(e) => onChange({ remoteCleanup: e.target.checked })}
+              />
+              Eliminar el archivo remoto tras una descarga exitosa
+            </label>
+            {isDocker && (
+              <p className="text-xs" style={{ color: 'var(--muted)' }}>
+                Los campos de Docker (contenedor, base de datos, usuario) no se editan acá — creá una tarea nueva si
+                cambiaron.
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+            <ReadOnlyField label="Plantilla de ruta de salida">{task.remoteOutputPathTemplate}</ReadOnlyField>
+            <ReadOnlyField label="Eliminar archivo remoto">{task.remoteCleanup ? 'Sí' : 'No'}</ReadOnlyField>
+            <LockedPipelineNote />
+          </>
+        )}
       </>
     );
   }
+
   return null;
 }
 
@@ -98,7 +211,7 @@ function EditFields({ task, values, onChange }: { task: TaskRow; values: FormVal
       <Field label="Nombre *">
         <input style={inputStyle} value={values.name} onChange={(e) => onChange({ name: e.target.value })} />
       </Field>
-      <ImmutableTaskDetails task={task} />
+      <PipelineFields task={task} values={values} onChange={onChange} />
       <div className="grid grid-cols-2 gap-3">
         <Field label="Retención (N backups)">
           <input
@@ -151,6 +264,25 @@ export function TaskEditModal({ task, onClose, onSaved }: { task: TaskRow; onClo
   const [schedulerBusy, setSchedulerBusy] = useState(false);
   const [schedulerError, setSchedulerError] = useState<string | null>(null);
 
+  // The remote-* pipeline fields are only sent when they're actually
+  // editable (no real backup yet) and relevant to this task's strategy —
+  // the server would reject them otherwise, and there's no point round-
+  // tripping unchanged read-only values.
+  function pipelinePatch() {
+    if (task.hasRealBackups) return {};
+    if (task.strategy === 'fetch_existing') {
+      return { remotePath: form.remotePath.trim(), remoteFilePattern: form.remoteFilePattern.trim() || null };
+    }
+    if (task.strategy === 'remote_dump') {
+      return {
+        remoteCommand: task.remoteDumpExecMode === 'host' ? form.remoteCommand.trim() : undefined,
+        remoteOutputPathTemplate: form.remoteOutputPathTemplate.trim(),
+        remoteCleanup: form.remoteCleanup,
+      };
+    }
+    return {};
+  }
+
   async function handleSave(force = false) {
     setBusy(true);
     setError(null);
@@ -160,6 +292,7 @@ export function TaskEditModal({ task, onClose, onSaved }: { task: TaskRow; onClo
         retentionCount: form.retentionCount.trim() ? Number(form.retentionCount) : null,
         retentionDays: form.retentionDays.trim() ? Number(form.retentionDays) : null,
         backupSetId: form.backupSetId || null,
+        ...pipelinePatch(),
       });
       await setTaskSchedule(task.id, {
         scheduleTime: form.scheduleTime.trim() || null,
@@ -251,7 +384,7 @@ export function TaskEditModal({ task, onClose, onSaved }: { task: TaskRow; onClo
           size="sm"
           className="rounded-full px-4"
           style={primaryPillStyle}
-          isDisabled={busy || !form.name.trim() || !isScheduleValid(form)}
+          isDisabled={busy || !form.name.trim() || !isScheduleValid(form) || !isPipelineValid(task, form)}
           onPress={() => handleSave()}
         >
           {busy ? 'Guardando…' : 'Guardar'}

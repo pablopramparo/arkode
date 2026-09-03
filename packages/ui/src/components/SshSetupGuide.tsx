@@ -157,11 +157,22 @@ export function SshSetupGuide({ onClose }: { onClose: () => void }) {
               </Step>
 
               <Step n={8} where="remote-user" title="Probar el dump a mano">
-                <CodeBlock>{`mysqldump NOMBRE_BASE > ~/test_dump.sql\ntail -3 ~/test_dump.sql`}</CodeBlock>
+                <CodeBlock>{`mysqldump --single-transaction --quick --no-tablespaces NOMBRE_BASE > ~/test_dump.sql\ntail -3 ~/test_dump.sql`}</CodeBlock>
                 <Check>
                   Tiene que aparecer una línea <Code>-- Dump completed on ...</Code> al final — confirma que el dump no
                   quedó cortado.
                 </Check>
+                <Why>
+                  <strong style={{ color: 'inherit' }}>
+                    <Code>--no-tablespaces</Code>:
+                  </strong>{' '}
+                  en MySQL 8.x un usuario de backup sin el privilegio global <Code>PROCESS</Code> hace fallar{' '}
+                  <Code>mysqldump</Code> con <em>"you need (at least one of) the PROCESS privilege(s)"</em>. Casi ningún
+                  backup necesita volcar tablespaces, así que se saltean.{' '}
+                  <Code>--single-transaction --quick</Code> hacen el dump consistente sin bloquear las tablas y sin
+                  cargarlo entero en memoria. Para Postgres nada de esto aplica — <Code>pg_dump -Fc NOMBRE_BASE</Code>{' '}
+                  alcanza.
+                </Why>
                 <CodeBlock>{`rm ~/test_dump.sql\nexit`}</CodeBlock>
               </Step>
 
@@ -177,7 +188,7 @@ export function SshSetupGuide({ onClose }: { onClose: () => void }) {
                     <FieldRow label="Ruta de clave privada">C:\Users\vos\.ssh\arkode_cliente_key — sin .pub</FieldRow>
                     <FieldRow label="Passphrase">vacío, salvo que le hayas puesto una en el paso 1</FieldRow>
                     <FieldRow label="Comando remoto">
-                      mysqldump NOMBRE_BASE {'>'} /home/arkode-backup/dump_$(date +%Y%m%d_%H%M).sql
+                      mysqldump --single-transaction --quick --no-tablespaces NOMBRE_BASE {'>'} {'{outputPath}'}
                     </FieldRow>
                     <FieldRow label="Plantilla de ruta de salida">
                       /home/arkode-backup/dump_{'{date:YYYYMMDD_HHmm}'}.sql
@@ -185,6 +196,23 @@ export function SshSetupGuide({ onClose }: { onClose: () => void }) {
                     <FieldRow label="Eliminar archivo remoto">tildado — si no, se van acumulando en el servidor</FieldRow>
                   </tbody>
                 </table>
+                <Why>
+                  <strong style={{ color: 'inherit' }}>
+                    Por qué <Code>{'{outputPath}'}</Code> y no <Code>$(date ...)</Code> en el comando:
+                  </strong>{' '}
+                  arkode resuelve la <em>plantilla de ruta de salida</em> una sola vez (contra el reloj del servidor) y
+                  reemplaza <Code>{'{outputPath}'}</Code> por esa ruta exacta, ya entrecomillada. Así el comando escribe
+                  justo donde arkode después busca el archivo. Si en cambio el comando arma el nombre por su cuenta con{' '}
+                  <Code>$(date ...)</Code>, los dos nombres pueden no coincidir —desfasaje de reloj entre las máquinas, un
+                  dump que cruza el cambio de minuto, u otro formato de fecha— y la descarga falla con{' '}
+                  <Code>No such file</Code>.
+                </Why>
+                <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
+                  Alternativa más simple: usá una ruta fija sin fecha. Comando{' '}
+                  <Code>mysqldump --single-transaction --quick --no-tablespaces NOMBRE_BASE &gt; /home/arkode-backup/web.sql</Code>,
+                  plantilla <Code>/home/arkode-backup/web.sql</Code>, con "Eliminar archivo remoto" tildado — cada corrida
+                  pisa el archivo anterior y arkode ya se lo llevó.
+                </p>
                 <p className="mt-3 text-xs" style={{ color: 'var(--muted)' }}>
                   Después creás la tarea con estrategia <strong style={{ color: 'inherit' }}>SSH remoto</strong> sobre
                   esta conexión, y probás "Probar conexión" antes de la primera corrida real.
@@ -294,11 +322,24 @@ export function SshSetupGuide({ onClose }: { onClose: () => void }) {
               <Code>authorized_keys</Code> (paso 5) — SSH ignora la clave si los permisos son más abiertos que eso.
             </FaqItem>
             {method === 'ssh' ? (
-              <FaqItem q={'"command not found" al correr mysqldump'}>
-                Probá <Code>which mysqldump</Code>. Si no aparece nada, el motor de base de datos no tiene sus
-                herramientas de cliente instaladas en el servidor — hay que instalarlas ahí (paquete{' '}
-                <Code>mysql-client</Code> o <Code>mariadb-client</Code> según la distro).
-              </FaqItem>
+              <>
+                <FaqItem q={'"command not found" al correr mysqldump'}>
+                  Probá <Code>which mysqldump</Code>. Si no aparece nada, el motor de base de datos no tiene sus
+                  herramientas de cliente instaladas en el servidor — hay que instalarlas ahí (paquete{' '}
+                  <Code>mysql-client</Code> o <Code>mariadb-client</Code> según la distro).
+                </FaqItem>
+                <FaqItem q={'"No such file" al ejecutar la tarea (la conexión SSH sí funciona)'}>
+                  El comando remoto está armando el nombre del archivo por su cuenta —casi siempre con{' '}
+                  <Code>$(date ...)</Code>— y ese nombre no coincide con el que arkode calcula desde la plantilla de ruta
+                  de salida. Poné <Code>{'{outputPath}'}</Code> en el comando, en lugar de repetir la ruta o la fecha:
+                  arkode lo reemplaza por la ruta exacta que resolvió (paso 9). O usá una ruta fija sin fecha en ambos
+                  campos.
+                </FaqItem>
+                <FaqItem q={'mysqldump: "you need (at least one of) the PROCESS privilege(s)"'}>
+                  MySQL 8.x y un usuario de backup sin <Code>PROCESS</Code> global. Agregá <Code>--no-tablespaces</Code>{' '}
+                  al comando <Code>mysqldump</Code> — no hace falta volcar tablespaces para un backup lógico normal.
+                </FaqItem>
+              </>
             ) : (
               <>
                 <FaqItem q={'"container ... is not in the allowlist"'}>

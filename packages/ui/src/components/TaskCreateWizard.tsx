@@ -364,10 +364,14 @@ function RemoteDumpFields({ values, onChange, onShowSshGuide }: { values: FormVa
         <Field label="Comando remoto *">
           <input
             style={inputStyle}
-            placeholder="Comando que genera el dump en el host remoto"
+            placeholder="Ej: mysqldump --single-transaction --quick --no-tablespaces web > {outputPath}"
             value={values.remoteCommand}
             onChange={(e) => onChange({ remoteCommand: e.target.value })}
           />
+          <p className="mt-1 text-[11px]" style={{ color: 'var(--muted)' }}>
+            Usá <code>{'{outputPath}'}</code> donde va la ruta del dump — arkode lo reemplaza por la ruta que resuelve de
+            la plantilla de abajo (una sola fuente de verdad). No uses <code>$(date ...)</code> para el nombre.
+          </p>
         </Field>
       ) : (
         <>

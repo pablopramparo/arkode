@@ -4,7 +4,7 @@ import type { SecretStore } from '../secrets/types.js';
 import type { KnownHostsRepo } from '../db/repositories/knownHostsRepo.js';
 import { createSshAdapterFromTransport } from '../transports/sshAdapter.js';
 import type { SshAdapter } from '../transports/types.js';
-import { resolveOutputPathTemplate } from '../transports/outputPathTemplate.js';
+import { resolveOutputPathTemplate, applyRemoteCommandOutputPath } from '../transports/outputPathTemplate.js';
 import { shellQuote } from '../transports/shellQuote.js';
 import type { BackupStrategyContext, BackupStrategyExecutor, ProducedDump } from './types.js';
 
@@ -131,7 +131,14 @@ export function createRemoteDumpExecutor(
         // negligible next to a real dump's multi-minute duration.
         await ensureRemoteDirectoryExists(adapter, expectedRemotePath);
 
-        const command = dockerMode ? buildDockerDumpCommand(ctx.task, expectedRemotePath) : ctx.task.remoteCommand!;
+        // Host mode: substitute {outputPath} in the user's command with the
+        // exact path arkode resolved above, so there's one resolution, not
+        // two independent ones that can drift apart (see
+        // applyRemoteCommandOutputPath's doc comment). No placeholder ->
+        // command passes through untouched.
+        const command = dockerMode
+          ? buildDockerDumpCommand(ctx.task, expectedRemotePath)
+          : applyRemoteCommandOutputPath(ctx.task.remoteCommand!, expectedRemotePath);
         // The password (when configured) travels only over this exec
         // channel's stdin, never as part of `command`'s own text — see
         // SshAdapter.runCommand's own doc comment for why that's the one

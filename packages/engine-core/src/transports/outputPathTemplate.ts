@@ -1,3 +1,5 @@
+import { shellQuote } from './shellQuote.js';
+
 /**
  * Resolves the `{date:FORMAT}` token in a remote_output_path_template, e.g.
  * "/tmp/backups/winners_{date:YYYYMMDD_HHmm}.dump". Deliberately minimal —
@@ -9,6 +11,25 @@
  */
 export function resolveOutputPathTemplate(template: string, now: Date = new Date()): string {
   return template.replace(/\{date:([^}]+)\}/g, (_match, format: string) => formatDate(format, now));
+}
+
+/**
+ * Substitutes the `{outputPath}` placeholder in a host-mode remote_dump
+ * command with the exact remote path arkode already resolved from
+ * `remoteOutputPathTemplate` (shell-quoted, so a path with spaces/metachars
+ * is safe as one argument).
+ *
+ * This is the single-source-of-truth mechanism: with `{outputPath}` in the
+ * command, arkode resolves the date token *once* and both writes to and
+ * looks for that exact path. Without it, a command that re-derives the name
+ * with its own `$(date ...)` can disagree with what arkode expects — clock
+ * drift between the two machines, a dump that crosses a minute boundary
+ * mid-run, or simply a different strftime spelling — and the download then
+ * fails with a bare "No such file". A command with no placeholder is
+ * returned unchanged, so pre-existing tasks are unaffected.
+ */
+export function applyRemoteCommandOutputPath(command: string, resolvedRemotePath: string): string {
+  return command.replace(/\{outputPath\}/g, shellQuote(resolvedRemotePath));
 }
 
 function pad(value: number, length = 2): string {

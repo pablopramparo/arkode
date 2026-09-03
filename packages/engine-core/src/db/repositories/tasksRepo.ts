@@ -141,13 +141,38 @@ export interface SetScheduleInput {
  * new task to change any of them. `backupSetId` is the one exception to
  * that immutability rule: unlike those, which task belongs to isn't a
  * pipeline-determining decision — pass `null` to explicitly un-assign.
+ *
+ * The remote-* pipeline detail fields (moved onto the task by migration
+ * 0008) are a second, narrower exception: editable ONLY while the task has
+ * no real backup yet — no `Success`/`Warning` run with a file on disk.
+ * `update()` throws if any of them is present in the patch once a real
+ * backup exists. They're the fix for "I created the task with the wrong
+ * command and now I'm stuck." Which fields apply depends on the task's
+ * (immutable) strategy: `fetch_existing` owns `remotePath`/
+ * `remoteFilePattern`; `remote_dump` owns `remoteCommand` (host exec mode
+ * only), `remoteOutputPathTemplate` and `remoteCleanup`; `direct_dump` has
+ * none (passing any is rejected). Docker-mode structured fields
+ * (dockerContainer/etc.) and secrets are deliberately still immutable here.
  */
 export interface UpdateTaskInput {
   name?: string;
   retentionCount?: number | null;
   retentionDays?: number | null;
   backupSetId?: string | null;
+  remotePath?: string | null;
+  remoteFilePattern?: string | null;
+  remoteCommand?: string | null;
+  remoteOutputPathTemplate?: string | null;
+  remoteCleanup?: boolean;
 }
+
+const PIPELINE_PATCH_KEYS = [
+  'remotePath',
+  'remoteFilePattern',
+  'remoteCommand',
+  'remoteOutputPathTemplate',
+  'remoteCleanup',
+] as const satisfies readonly (keyof UpdateTaskInput)[];
 
 const SCHEDULE_TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -207,8 +232,19 @@ export function createTasksRepo(
   const updateStmt = db.prepare(
     `UPDATE backup_tasks
      SET name = @name, retention_count = @retentionCount, retention_days = @retentionDays, backup_set_id = @backupSetId,
+         remote_path = @remotePath, remote_file_pattern = @remoteFilePattern,
+         remote_command = @remoteCommand, remote_output_path_template = @remoteOutputPathTemplate,
+         remote_cleanup = @remoteCleanup,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = @id`
+  );
+  // Mirrors runsRepo's `listBackups` WHERE clause — "a real backup" is a
+  // Success/Warning run that actually left a file on disk (a no-op or a
+  // Failed attempt is not one, so a task whose only runs failed can still
+  // have its remote command fixed — that's the whole point).
+  const hasRealBackupStmt = db.prepare<[string], { total: number }>(
+    `SELECT COUNT(*) AS total FROM backup_runs
+     WHERE task_id = ? AND status IN ('Success','Warning') AND local_path IS NOT NULL`
   );
   const setWindowsTaskNameStmt = db.prepare(
     `UPDATE backup_tasks SET windows_task_name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
@@ -335,12 +371,67 @@ export function createTasksRepo(
     update(id, patch) {
       const current = getByIdStmt.get(id);
       if (!current) throw new Error(`Task ${id} not found.`);
+
+      const touchesPipeline = PIPELINE_PATCH_KEYS.some((k) => patch[k] !== undefined);
+
+      // Resolve the effective remote-* values (patch value if given, else
+      // current). Trim strings; an emptied optional field becomes NULL.
+      const resolveText = (patched: string | null | undefined, currentValue: string | null): string | null => {
+        if (patched === undefined) return currentValue;
+        const trimmed = (patched ?? '').trim();
+        return trimmed === '' ? null : trimmed;
+      };
+      const remotePath = resolveText(patch.remotePath, current.remote_path);
+      const remoteFilePattern = resolveText(patch.remoteFilePattern, current.remote_file_pattern);
+      const remoteCommand = resolveText(patch.remoteCommand, current.remote_command);
+      const remoteOutputPathTemplate = resolveText(patch.remoteOutputPathTemplate, current.remote_output_path_template);
+      const remoteCleanup = patch.remoteCleanup !== undefined ? (patch.remoteCleanup ? 1 : 0) : current.remote_cleanup;
+
+      if (touchesPipeline) {
+        const strategy = current.strategy as BackupTask['strategy'];
+        if (strategy === 'direct_dump') {
+          throw new Error('direct_dump tasks have no remote command / path fields to edit.');
+        }
+        if (hasRealBackupStmt.get(id)!.total > 0) {
+          throw new Error(
+            "This task already has real backups, so its remote command / output-path template / remote path can't be changed anymore. Create a new task instead."
+          );
+        }
+        if (strategy === 'fetch_existing') {
+          if (patch.remoteCommand !== undefined || patch.remoteOutputPathTemplate !== undefined) {
+            throw new Error('fetch_existing tasks have no remote command / output-path template.');
+          }
+          if (!remotePath) throw new Error('fetch_existing tasks require a remote path.');
+        } else {
+          // remote_dump
+          if (patch.remotePath !== undefined || patch.remoteFilePattern !== undefined) {
+            throw new Error('remote_dump tasks have no remote path / file pattern.');
+          }
+          if (!remoteOutputPathTemplate) {
+            throw new Error('remote_dump tasks require a remote output path template.');
+          }
+          const execMode = current.remote_dump_exec_mode as RemoteDumpExecMode;
+          if (execMode === 'host') {
+            if (!remoteCommand) {
+              throw new Error('remote_dump tasks with execMode "host" require a remote command.');
+            }
+          } else if (patch.remoteCommand != null && patch.remoteCommand.trim() !== '') {
+            throw new Error("remote_dump tasks with execMode \"docker\" build their own command — remoteCommand can't be set.");
+          }
+        }
+      }
+
       updateStmt.run({
         id,
         name: patch.name ?? current.name,
         retentionCount: patch.retentionCount !== undefined ? patch.retentionCount : current.retention_count,
         retentionDays: patch.retentionDays !== undefined ? patch.retentionDays : current.retention_days,
         backupSetId: patch.backupSetId !== undefined ? patch.backupSetId : current.backup_set_id,
+        remotePath,
+        remoteFilePattern,
+        remoteCommand,
+        remoteOutputPathTemplate,
+        remoteCleanup,
       });
       const row = getByIdStmt.get(id);
       if (!row) throw new Error(`Failed to read back updated task ${id}`);

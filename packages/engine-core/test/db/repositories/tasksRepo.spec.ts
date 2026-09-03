@@ -348,6 +348,167 @@ describe('tasksRepo update/deactivate/reactivate', () => {
   });
 });
 
+describe('tasksRepo.update remote-* pipeline fields (only while no real backup exists)', () => {
+  function seedSshTransport(ctx: ReturnType<typeof createTestContext>, clientId: string) {
+    return ctx.transportsRepo.createSsh({ clientId, name: 'ssh', host: 'h', username: 'u', privateKeyPath: 'k' });
+  }
+
+  function seedRemoteDumpTask(ctx: ReturnType<typeof createTestContext>) {
+    const client = seedClient(ctx);
+    const transport = seedSshTransport(ctx, client.id);
+    const task = ctx.tasksRepo.createRemoteDump({
+      clientId: client.id,
+      transportId: transport.id,
+      name: 'task',
+      dbEngine: 'mysql',
+      remoteCommand: 'mysqldump wrong > /tmp/wrong.sql',
+      remoteOutputPathTemplate: '/tmp/wrong.sql',
+    });
+    return { client, transport, task };
+  }
+
+  /** Record a Success run with a file on disk — makes hasRealBackup true. */
+  function seedRealBackup(ctx: ReturnType<typeof createTestContext>, task: { id: string; clientId: string; strategy: string; transportId: string | null }) {
+    const run = ctx.runsRepo.create({
+      taskId: task.id,
+      clientId: task.clientId,
+      strategy: task.strategy as 'remote_dump',
+      transportId: task.transportId,
+      databaseConnectionId: null,
+      pid: 1,
+    });
+    ctx.runsRepo.markValidating(run.id, {
+      fileName: 'dump.sql',
+      sizeBytes: 10,
+      checksumSha256: 'abc',
+      localPath: 'D:/Backups/Winners/dump.sql',
+    });
+    ctx.runsRepo.markFinished(run.id, 'Success');
+  }
+
+  it('edits remoteCommand + remoteOutputPathTemplate on a remote_dump task that has no real backup', () => {
+    const ctx = createTestContext();
+    const { task } = seedRemoteDumpTask(ctx);
+
+    const updated = ctx.tasksRepo.update(task.id, {
+      remoteCommand: 'mysqldump --single-transaction web > /home/arkode-backup/web.sql',
+      remoteOutputPathTemplate: '/home/arkode-backup/web.sql',
+      remoteCleanup: true,
+    });
+
+    expect(updated.remoteCommand).toBe('mysqldump --single-transaction web > /home/arkode-backup/web.sql');
+    expect(updated.remoteOutputPathTemplate).toBe('/home/arkode-backup/web.sql');
+    expect(updated.remoteCleanup).toBe(true);
+  });
+
+  it('a Failed run does NOT lock the pipeline fields — only a real (Success/Warning + file) backup does', () => {
+    const ctx = createTestContext();
+    const { task } = seedRemoteDumpTask(ctx);
+    const run = ctx.runsRepo.create({
+      taskId: task.id,
+      clientId: task.clientId,
+      strategy: 'remote_dump',
+      transportId: task.transportId,
+      databaseConnectionId: null,
+      pid: 1,
+    });
+    ctx.runsRepo.markFinished(run.id, 'Failed', { errorMessage: 'No such file' });
+
+    const updated = ctx.tasksRepo.update(task.id, { remoteCommand: 'mysqldump web > /home/arkode-backup/web.sql' });
+    expect(updated.remoteCommand).toBe('mysqldump web > /home/arkode-backup/web.sql');
+  });
+
+  it('refuses to edit the pipeline fields once the task has a real backup', () => {
+    const ctx = createTestContext();
+    const { task } = seedRemoteDumpTask(ctx);
+    seedRealBackup(ctx, task);
+
+    expect(() => ctx.tasksRepo.update(task.id, { remoteCommand: 'anything' })).toThrow(/already has real backups/i);
+  });
+
+  it('still allows a name/retention edit after a real backup exists (pipeline fields untouched)', () => {
+    const ctx = createTestContext();
+    const { task } = seedRemoteDumpTask(ctx);
+    seedRealBackup(ctx, task);
+
+    const updated = ctx.tasksRepo.update(task.id, { name: 'renamed', retentionCount: 3 });
+    expect(updated.name).toBe('renamed');
+    expect(updated.retentionCount).toBe(3);
+    expect(updated.remoteCommand).toBe('mysqldump wrong > /tmp/wrong.sql'); // unchanged
+  });
+
+  it('rejects clearing a remote_dump task\'s required output path template', () => {
+    const ctx = createTestContext();
+    const { task } = seedRemoteDumpTask(ctx);
+
+    expect(() => ctx.tasksRepo.update(task.id, { remoteOutputPathTemplate: '   ' })).toThrow(/require a remote output path template/i);
+  });
+
+  it('rejects clearing a host-mode remote_dump task\'s required command', () => {
+    const ctx = createTestContext();
+    const { task } = seedRemoteDumpTask(ctx);
+
+    expect(() => ctx.tasksRepo.update(task.id, { remoteCommand: '' })).toThrow(/execMode "host" require a remote command/i);
+  });
+
+  it('rejects fetch_existing-only fields on a remote_dump task', () => {
+    const ctx = createTestContext();
+    const { task } = seedRemoteDumpTask(ctx);
+
+    expect(() => ctx.tasksRepo.update(task.id, { remotePath: '/x' })).toThrow(/no remote path/i);
+  });
+
+  it('edits a fetch_existing task\'s remotePath / remoteFilePattern, and normalises an emptied pattern to null', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+    const transport = ctx.transportsRepo.createSftp({ clientId: client.id, name: 'sftp', host: 'h', username: 'u', privateKeyPath: 'k' });
+    const task = ctx.tasksRepo.createFetchExisting({
+      clientId: client.id,
+      transportId: transport.id,
+      name: 'task',
+      dbEngine: 'unknown',
+      remotePath: '/old',
+      remoteFilePattern: '*.old',
+    });
+
+    const updated = ctx.tasksRepo.update(task.id, { remotePath: '/backups/new', remoteFilePattern: '  ' });
+    expect(updated.remotePath).toBe('/backups/new');
+    expect(updated.remoteFilePattern).toBeNull();
+  });
+
+  it('rejects clearing a fetch_existing task\'s required remote path', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+    const transport = ctx.transportsRepo.createSftp({ clientId: client.id, name: 'sftp', host: 'h', username: 'u', privateKeyPath: 'k' });
+    const task = ctx.tasksRepo.createFetchExisting({
+      clientId: client.id,
+      transportId: transport.id,
+      name: 'task',
+      dbEngine: 'unknown',
+      remotePath: '/backups',
+    });
+
+    expect(() => ctx.tasksRepo.update(task.id, { remotePath: '' })).toThrow(/require a remote path/i);
+  });
+
+  it('rejects any pipeline field on a direct_dump task', () => {
+    const ctx = createTestContext();
+    const client = seedClient(ctx);
+    const connection = ctx.databaseConnectionsRepo.create({
+      clientId: client.id,
+      name: 'pg',
+      engine: 'postgres',
+      host: 'h',
+      port: 5432,
+      databaseName: 'db',
+      username: 'u',
+    });
+    const task = ctx.tasksRepo.createDirectDump({ clientId: client.id, databaseConnectionId: connection.id, name: 'task', dbEngine: 'postgres' });
+
+    expect(() => ctx.tasksRepo.update(task.id, { remoteCommand: 'x' })).toThrow(/no remote command/i);
+  });
+});
+
 describe('tasksRepo.setSchedule frequency', () => {
   function seedTask(ctx: ReturnType<typeof createTestContext>) {
     const client = seedClient(ctx);
