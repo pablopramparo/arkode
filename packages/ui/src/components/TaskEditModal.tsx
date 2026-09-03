@@ -3,7 +3,6 @@ import { Button } from '@heroui/react';
 import type { BackupSet } from 'engine-core';
 import { setTaskSchedule, updateTask, ScheduleCompatibilityError, type TaskRow } from '../lib/tasksClient';
 import { fetchBackupSets } from '../lib/backupSetsClient';
-import { canRegisterTaskSchedule, registerTaskSchedule } from '../lib/schedulerClient';
 import { Modal } from './Modal';
 import { primaryPillStyle, dangerPillStyle } from '../lib/pillStyles';
 import { EMPTY_FORM, Field, ScheduleFields, inputStyle, isScheduleValid, type FormValues } from './TaskCreateWizard';
@@ -256,13 +255,6 @@ export function TaskEditModal({ task, onClose, onSaved }: { task: TaskRow; onClo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [compatibilityBlock, setCompatibilityBlock] = useState<ScheduleCompatibilityError | null>(null);
-  // See TaskCreateWizard's own identical pattern — registering with Windows
-  // Task Scheduler is a separate, elevated step from saving the schedule
-  // fields, so an edit that leaves a schedule enabled offers it too, not
-  // just creation (e.g. someone enabling a schedule that was off before).
-  const [schedulerOffer, setSchedulerOffer] = useState(false);
-  const [schedulerBusy, setSchedulerBusy] = useState(false);
-  const [schedulerError, setSchedulerError] = useState<string | null>(null);
 
   // The remote-* pipeline fields are only sent when they're actually
   // editable (no real backup yet) and relevant to this task's strategy —
@@ -304,11 +296,10 @@ export function TaskEditModal({ task, onClose, onSaved }: { task: TaskRow; onClo
       });
       setCompatibilityBlock(null);
       await onSaved();
-      if (canRegisterTaskSchedule() && form.scheduleTime.trim() && form.scheduleEnabled) {
-        setSchedulerOffer(true);
-      } else {
-        onClose();
-      }
+      // No per-task Windows Scheduled Task step: since v0.3.0 the
+      // arkode-scheduler Windows Service polls the DB and runs due tasks —
+      // a saved schedule is live on its next tick, nothing to "register".
+      onClose();
     } catch (err) {
       if (err instanceof ScheduleCompatibilityError) {
         setCompatibilityBlock(err);
@@ -318,43 +309,6 @@ export function TaskEditModal({ task, onClose, onSaved }: { task: TaskRow; onClo
     } finally {
       setBusy(false);
     }
-  }
-
-  async function handleRegisterScheduler() {
-    setSchedulerBusy(true);
-    setSchedulerError(null);
-    try {
-      await registerTaskSchedule(task.id);
-      onClose();
-    } catch (err) {
-      setSchedulerError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSchedulerBusy(false);
-    }
-  }
-
-  if (schedulerOffer) {
-    return (
-      <Modal title={`Editar "${task.name}"`} onClose={onClose}>
-        <p className="text-sm">
-          El horario se guardó, pero eso solo actualiza la configuración — activarlo en el Programador de tareas de
-          Windows es un paso aparte (necesita permisos de administrador).
-        </p>
-        {schedulerError && (
-          <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
-            {schedulerError}
-          </p>
-        )}
-        <div className="mt-4 flex justify-end gap-2">
-          <Button size="sm" variant="ghost" className="rounded-full px-4" isDisabled={schedulerBusy} onPress={onClose}>
-            Ahora no
-          </Button>
-          <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} isDisabled={schedulerBusy} onPress={handleRegisterScheduler}>
-            {schedulerBusy ? 'Activando…' : 'Activar programación (pide permisos)'}
-          </Button>
-        </div>
-      </Modal>
-    );
   }
 
   return (
