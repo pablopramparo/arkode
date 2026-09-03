@@ -135,4 +135,13 @@ describe('fileBackupRunsRepo', () => {
     expect(runsRepo.listRecent({ clientId }).length).toBe(2);
     expect(runsRepo.listRecent({ taskId: 'nonexistent' })).toEqual([]);
   });
+  it("updateProgress round-trips a JSON blob and clearing it with null leaves status untouched", () => {
+    const run = runsRepo.create({ taskId, clientId, repositoryId, pid: process.pid });
+    runsRepo.updateProgress(run.id, { phase: "archiving", label: "Copiando al repositorio…", fraction: 0.5, current: 5, total: 10, unit: "bytes", updatedAt: "2026-09-03T00:00:00.000Z" });
+    expect(runsRepo.getById(run.id)?.progress).toEqual({ phase: "archiving", label: "Copiando al repositorio…", fraction: 0.5, current: 5, total: 10, unit: "bytes", updatedAt: "2026-09-03T00:00:00.000Z" });
+    runsRepo.updateProgress(run.id, null);
+    expect(runsRepo.getById(run.id)?.progress).toBeNull();
+    expect(runsRepo.getById(run.id)?.status).toBe("Running");
+  });
+
 });

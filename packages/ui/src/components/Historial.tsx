@@ -9,6 +9,8 @@ import {
 } from '../lib/fileBackupClient';
 import { mergeRuns, type UnifiedRunRow } from '../lib/unifiedRuns';
 import { formatDateTime, formatDuration, formatSize } from '../lib/format';
+import { isLiveProgress } from '../lib/progress';
+import { ProgressBar } from './ProgressBar';
 import { StatusChip } from './StatusChip';
 import { IconButton, IconLinkButton } from './IconButton';
 import { DownloadIcon, EyeIcon, TrashIcon, UndoIcon } from './icons';
@@ -54,6 +56,15 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
   useEffect(() => {
     refresh(selectedClientId, selectedTaskId);
   }, [refresh, selectedClientId, selectedTaskId]);
+
+  // While any visible run is actively reporting progress, poll fast so the
+  // bar advances; otherwise don't poll at all (Historial is normally static).
+  const hasLiveRun = (rows ?? []).some((r) => isLiveProgress(r.status, r.progress));
+  useEffect(() => {
+    if (!hasLiveRun) return;
+    const id = setInterval(() => refresh(selectedClientId, selectedTaskId), 3000);
+    return () => clearInterval(id);
+  }, [hasLiveRun, refresh, selectedClientId, selectedTaskId]);
 
   async function handleDeleteDb(runId: string) {
     if (!window.confirm('¿Eliminar este backup? Esta acción no se puede deshacer.')) return;
@@ -245,6 +256,13 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
                         </div>
                       </td>
                     </tr>
+                    {isLiveProgress(run.status, run.progress) && (
+                      <tr>
+                        <td colSpan={7} className="px-4 pb-2">
+                          <ProgressBar progress={run.progress} />
+                        </td>
+                      </tr>
+                    )}
                     {expanded && run.errorMessage && (
                       <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
                         <td colSpan={7} className="px-4 py-2 text-xs" style={{ color: 'var(--danger)', fontFamily: 'monospace' }}>

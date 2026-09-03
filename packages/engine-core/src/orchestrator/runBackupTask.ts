@@ -23,6 +23,7 @@ import { createPostgresCustomValidator } from '../validators/postgresCustomValid
 import { createMysqlDumpValidator } from '../validators/mysqlDumpValidator.js';
 import { createRunLogger, type RunLogger } from '../logging/logger.js';
 import { applyRetention, resolveRetentionPolicy } from '../retention/applyRetention.js';
+import { makeProgressReporter, type ProgressSink } from '../progress/runProgress.js';
 
 /** Roughly a day — a .part file older than this with no live owner is almost certainly orphaned. */
 const ORPHANED_PART_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -49,6 +50,13 @@ export interface RunBackupTaskDeps {
    * never makes that day's scheduled run get skipped.
    */
   runTrigger?: RunTrigger;
+  /**
+   * Receives live progress updates while the run executes (see RunProgress).
+   * Called as `onProgress(run.id, progress)` so a batch caller (runDueTasks)
+   * can forward one sink to many runs. Optional — omitting it makes every
+   * `reportProgress` call in the pipeline a no-op, exactly today's behaviour.
+   */
+  onProgress?: ProgressSink;
   /**
    * Overrides how the strategy executor is resolved. Production code never
    * sets this — it exists so tests can inject a fake BackupStrategyExecutor
@@ -231,6 +239,7 @@ export async function runBackupTask(task: BackupTask, deps: RunBackupTaskDeps): 
   });
 
   const logger = createRunLogger(run.id, deps.logEventsRepo);
+  const reportProgress = makeProgressReporter(run.id, deps.onProgress);
   logger.log('info', 'connect', `Starting ${task.strategy} run for task "${task.name}" (client "${client.name}").`);
 
   const targetDir = resolveTargetDir(client, task);
@@ -244,9 +253,10 @@ export async function runBackupTask(task: BackupTask, deps: RunBackupTaskDeps): 
   try {
     deps.runsRepo.markProducing(run.id);
     logger.log('info', 'produce', `Producing dump via ${task.strategy}.`);
+    reportProgress({ phase: 'connecting', fraction: null });
 
     const executor = deps.resolveExecutorOverride ? deps.resolveExecutorOverride(task, deps) : resolveExecutor(task, deps);
-    const produced = await executor.produce({ task, client, targetDir });
+    const produced = await executor.produce({ task, client, targetDir, reportProgress });
 
     logger.log('info', 'download', `Produced ${produced.fileName} (${produced.sizeBytes} bytes) at ${produced.localTempPath}.`);
 
@@ -256,6 +266,7 @@ export async function runBackupTask(task: BackupTask, deps: RunBackupTaskDeps): 
 
     // Checksum responsibility split: use the strategy's streamed hash if it
     // provided one; otherwise hash the temp file once here as a fallback.
+    if (!produced.checksumSha256) reportProgress({ phase: 'finalizing', fraction: null, label: 'Calculando checksum…' });
     const checksumSha256 = produced.checksumSha256 ?? (await hashFile(produced.localTempPath));
 
     const finalPath = produced.localTempPath.endsWith('.part')
@@ -272,6 +283,7 @@ export async function runBackupTask(task: BackupTask, deps: RunBackupTaskDeps): 
       localPath: finalPath,
     });
     logger.log('info', 'validate', `Validating ${finalPath}.`);
+    reportProgress({ phase: 'validating', fraction: null });
 
     const validators = pickValidators(task.dbEngine);
     const results = await Promise.all(validators.map((v) => v.validate(finalPath)));

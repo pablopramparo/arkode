@@ -158,4 +158,27 @@ describe('syncRemoteFolder', () => {
       expect(result.filesAdded).toBe(1);
     });
   });
+
+  it('reports progress with the right file/byte totals, ending at 100%', async () => {
+    await withTempDir(async (root) => {
+      const staging = join(root, 'staging');
+      const now = new Date('2026-01-01T00:00:00.000Z');
+      const tree: RemoteTreeEntry[] = [
+        { relativePath: 'a.txt', size: 3, modifiedAt: now },
+        { relativePath: 'b.txt', size: 5, modifiedAt: now },
+      ];
+      const contents = new Map([
+        ['/remote/a.txt', 'aaa'],
+        ['/remote/b.txt', 'bbbbb'],
+      ]);
+      const updates: { filesDone: number; filesTotal: number; bytesDone: number; bytesTotal: number }[] = [];
+
+      await syncRemoteFolder(fakeAdapter(tree, contents), '/remote', staging, { onProgress: (p) => updates.push(p) });
+
+      expect(updates.length).toBeGreaterThan(0);
+      expect(updates.every((u) => u.filesTotal === 2 && u.bytesTotal === 8)).toBe(true);
+      const last = updates[updates.length - 1];
+      expect(last).toMatchObject({ filesDone: 2, bytesDone: 8 });
+    });
+  });
 });

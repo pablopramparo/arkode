@@ -1,6 +1,7 @@
 import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { FileBackupRun, FileBackupRunStatus } from '../../types.js';
+import type { RunProgress } from '../../../types.js';
 
 interface FileBackupRunRow {
   id: string;
@@ -28,6 +29,16 @@ interface FileBackupRunRow {
   log_file_path: string | null;
   pid: number | null;
   created_at: string;
+  progress: string | null;
+}
+
+function parseProgress(raw: string | null): RunProgress | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as RunProgress;
+  } catch {
+    return null;
+  }
 }
 
 function toDomain(row: FileBackupRunRow): FileBackupRun {
@@ -57,6 +68,7 @@ function toDomain(row: FileBackupRunRow): FileBackupRun {
     logFilePath: row.log_file_path,
     pid: row.pid,
     createdAt: row.created_at,
+    progress: parseProgress(row.progress),
   };
 }
 
@@ -85,6 +97,8 @@ export interface RecordBackupSummaryInput {
 export interface FileBackupRunsRepo {
   create(input: CreateFileBackupRunInput): FileBackupRun;
   markProducing(runId: string): void;
+  /** Writes the live-progress blob (or clears it with null). Best-effort, does not touch status/timestamps — see RunProgress. */
+  updateProgress(runId: string, progress: RunProgress | null): void;
   /** Moves to Validating and records every metric restic reported for this backup. */
   recordBackupSummary(runId: string, summary: RecordBackupSummaryInput): void;
   markFinished(runId: string, status: 'Success' | 'Warning' | 'Failed', opts?: { errorMessage?: string; errorStack?: string }): void;
@@ -105,6 +119,7 @@ export function createFileBackupRunsRepo(db: Database): FileBackupRunsRepo {
   const getStmt = db.prepare<[string], FileBackupRunRow>('SELECT * FROM file_backup_runs WHERE id = ?');
   const setStatusStmt = db.prepare('UPDATE file_backup_runs SET status = ? WHERE id = ?');
   const markProducingStmt = db.prepare(`UPDATE file_backup_runs SET status = 'Producing' WHERE id = ?`);
+  const updateProgressStmt = db.prepare('UPDATE file_backup_runs SET progress = ? WHERE id = ?');
   const recordSummaryStmt = db.prepare(
     `UPDATE file_backup_runs
      SET status = 'Validating',
@@ -151,6 +166,10 @@ export function createFileBackupRunsRepo(db: Database): FileBackupRunsRepo {
       const row = getStmt.get(id);
       if (!row) throw new Error(`Failed to read back created file_backup_run ${id}`);
       return toDomain(row);
+    },
+
+    updateProgress(runId, progress) {
+      updateProgressStmt.run(progress ? JSON.stringify(progress) : null, runId);
     },
 
     markProducing(runId) {

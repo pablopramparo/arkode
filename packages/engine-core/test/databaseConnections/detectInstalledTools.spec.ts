@@ -63,7 +63,11 @@ describe('detectInstalledDbTools', () => {
       // Empty files, so --version can't run — version/majorMinor are null, not a throw.
       expect(planted.every((t) => t.version === null && t.majorMinor === null)).toBe(true);
     });
-  });
+    // detectInstalledDbTools also scans the real machine (Program Files /
+    // WAMP / XAMPP / Laragon) and runs --version on whatever it finds — that
+    // can blow past vitest's 5s default on a loaded CI runner. This test
+    // isn't slow by design, so a generous ceiling rather than optimising it.
+  }, 30_000);
 
   it('dedupes a bin dir passed as an extra root twice', async () => {
     await withTempDir(async (dir) => {
@@ -73,5 +77,5 @@ describe('detectInstalledDbTools', () => {
       const tools = await detectInstalledDbTools({ extraRoots: [binDir, binDir] });
       expect(tools.filter((t) => t.path.startsWith(binDir) && t.kind === 'psql')).toHaveLength(1);
     });
-  });
+  }, 30_000);
 });

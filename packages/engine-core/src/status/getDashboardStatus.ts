@@ -4,7 +4,7 @@ import type { RunsRepo } from '../db/repositories/runsRepo.js';
 import type { BackupSetsRepo } from '../db/repositories/backupSetsRepo.js';
 import type { FileBackupTasksRepo } from '../fileBackup/db/repositories/fileBackupTasksRepo.js';
 import type { FileBackupRunsRepo } from '../fileBackup/db/repositories/fileBackupRunsRepo.js';
-import type { BackupRunStatus, BackupStrategyKind } from '../types.js';
+import type { BackupRunStatus, BackupStrategyKind, RunProgress } from '../types.js';
 import type { FileBackupSourceKind } from '../fileBackup/types.js';
 
 export interface DashboardRow {
@@ -40,6 +40,8 @@ export interface DashboardRow {
   latestAttemptAt: string | null;
   /** The latest attempt's error message, if it failed — null otherwise (including for a never-run task). */
   latestErrorMessage: string | null;
+  /** Live progress of the latest run, if it's still in progress (and fresh — see RunProgress). Null otherwise. */
+  progress: RunProgress | null;
   /** Pure visual/reporting label, or null if unassigned — see BackupSet's own doc comment. */
   backupSetName: string | null;
 }
@@ -51,6 +53,13 @@ export interface GetDashboardStatusDeps {
   backupSetsRepo: BackupSetsRepo;
   fileBackupTasksRepo: FileBackupTasksRepo;
   fileBackupRunsRepo: FileBackupRunsRepo;
+}
+
+const IN_PROGRESS: ReadonlySet<string> = new Set(['Running', 'Producing', 'Validating']);
+
+/** Only expose progress for a run that's actually still going — a finished run can leave a stale blob behind. */
+function liveProgress(run: { status: string; progress: RunProgress | null } | null): RunProgress | null {
+  return run && IN_PROGRESS.has(run.status) ? run.progress : null;
 }
 
 export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[] {
@@ -75,6 +84,7 @@ export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[]
           lastGoodBackupAt: latestGoodRun?.downloadedAt ?? null,
           latestAttemptAt: latestRun?.finishedAt ?? null,
           latestErrorMessage: latestRun?.errorMessage ?? null,
+          progress: liveProgress(latestRun),
           backupSetName: backupSet?.name ?? null,
         };
       });
@@ -99,6 +109,7 @@ export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[]
           lastGoodBackupAt: latestGoodRun?.finishedAt ?? null,
           latestAttemptAt: latestRun?.finishedAt ?? null,
           latestErrorMessage: latestRun?.errorMessage ?? null,
+          progress: liveProgress(latestRun),
           backupSetName: backupSet?.name ?? null,
         };
       });

@@ -1,6 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import type { BackupRun, BackupRunStatus, RunTrigger } from '../../types.js';
+import type { BackupRun, BackupRunStatus, RunProgress, RunTrigger } from '../../types.js';
 
 interface BackupRunRow {
   id: string;
@@ -26,6 +26,16 @@ interface BackupRunRow {
   log_file_path: string | null;
   pid: number | null;
   created_at: string;
+  progress: string | null;
+}
+
+function parseProgress(raw: string | null): RunProgress | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as RunProgress;
+  } catch {
+    return null;
+  }
 }
 
 function toDomain(row: BackupRunRow): BackupRun {
@@ -53,6 +63,7 @@ function toDomain(row: BackupRunRow): BackupRun {
     logFilePath: row.log_file_path,
     pid: row.pid,
     createdAt: row.created_at,
+    progress: parseProgress(row.progress),
   };
 }
 
@@ -75,6 +86,8 @@ export interface SuccessfulFileSignature {
 export interface RunsRepo {
   create(input: CreateRunInput): BackupRun;
   markProducing(runId: string): void;
+  /** Writes the live-progress blob (or clears it with null). Best-effort, does not touch status/timestamps — see RunProgress. */
+  updateProgress(runId: string, progress: RunProgress | null): void;
   markValidating(runId: string, produced: { fileName: string; sizeBytes: number; sourceModifiedAt?: Date; checksumSha256: string; localPath: string }): void;
   markFinished(runId: string, status: 'Success' | 'Warning' | 'Failed', opts?: { errorMessage?: string; errorStack?: string }): void;
   getById(runId: string): BackupRun | null;
@@ -132,6 +145,7 @@ export function createRunsRepo(db: Database): RunsRepo {
   );
   const setStatusStmt = db.prepare('UPDATE backup_runs SET status = ? WHERE id = ?');
   const markProducingStmt = db.prepare(`UPDATE backup_runs SET status = 'Producing' WHERE id = ?`);
+  const updateProgressStmt = db.prepare('UPDATE backup_runs SET progress = ? WHERE id = ?');
   const markValidatingStmt = db.prepare(
     `UPDATE backup_runs
      SET status = 'Validating',
@@ -210,6 +224,10 @@ export function createRunsRepo(db: Database): RunsRepo {
 
     markProducing(runId) {
       markProducingStmt.run(runId);
+    },
+
+    updateProgress(runId, progress) {
+      updateProgressStmt.run(progress ? JSON.stringify(progress) : null, runId);
     },
 
     markValidating(runId, produced) {

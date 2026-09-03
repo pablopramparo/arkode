@@ -157,6 +157,43 @@ export interface BackupTask {
 /** How a run was initiated. 'scheduled' only when invoked by `run-due` off a Windows Scheduled Task; everything else ("Ejecutar ahora", task:run) is 'manual'. */
 export type RunTrigger = 'manual' | 'scheduled';
 
+/**
+ * Live progress of an in-progress run, written to `backup_runs.progress` /
+ * `file_backup_runs.progress` as JSON while the run executes and polled by
+ * the UI. It's the only IPC channel that works for both origins of a run:
+ * a manual "Ejecutar ahora" (executes inside the `serve` process) and a
+ * scheduled run (executes in the arkode-scheduler service process) — the
+ * DB is the one thing both can write and the UI can read.
+ *
+ * Best-effort and self-expiring: a consumer must ignore it unless the run's
+ * own `status` is still in-progress AND `updatedAt` is recent (~30 s) — a
+ * finished/crashed run can leave a stale blob behind, and nothing clears it.
+ */
+export type RunProgressPhase =
+  | 'connecting'
+  | 'remote_dump' // a mysqldump/pg_dump running on the remote host — no % available
+  | 'downloading' // transferring the dump/file over sftp/ftp/ssh — byte %
+  | 'dumping' // a local pg_dump/mysqldump writing to disk — byte count, no total
+  | 'syncing' // remote_folder → local staging mirror — file/byte %
+  | 'archiving' // restic backup — restic's own percent_done + ETA
+  | 'validating'
+  | 'finalizing'; // checksum, retention
+
+export interface RunProgress {
+  phase: RunProgressPhase;
+  /** Spanish, shown by the UI verbatim. */
+  label: string;
+  /** 0..1 when known; null for the indeterminate phases (remote_dump, dumping, connecting). */
+  fraction: number | null;
+  /** Optional counters for a richer label, e.g. "45 / 312 archivos" or a byte figure. */
+  current?: number;
+  total?: number;
+  unit?: 'bytes' | 'files';
+  etaSeconds?: number;
+  /** ISO 8601. Consumers treat progress older than ~30 s on an in-progress run as stale. */
+  updatedAt: string;
+}
+
 export interface BackupRun {
   id: string;
   taskId: string;
@@ -182,6 +219,8 @@ export interface BackupRun {
   logFilePath: string | null;
   pid: number | null;
   createdAt: string;
+  /** Live progress while in-progress; null otherwise (and possibly stale — see RunProgress). */
+  progress: RunProgress | null;
 }
 
 export interface RetentionDeletion {

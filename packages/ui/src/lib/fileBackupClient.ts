@@ -1,4 +1,4 @@
-import type { ConnectionTestResult } from 'engine-core';
+import type { ConnectionTestResult, RunProgress } from 'engine-core';
 import { getApiBase } from './apiBase';
 import type { FetchLogsOptions, LogsResult } from './logsClient';
 
@@ -83,6 +83,8 @@ export interface FileBackupRun {
   durationMs: number | null;
   errorMessage: string | null;
   warnings: string[] | null;
+  /** Live progress while in-progress (and fresh — see RunProgress); null otherwise. */
+  progress: RunProgress | null;
   /** Enriched by GET /file-runs / GET /file-tasks responses. */
   kind?: 'file';
   clientName?: string | null;

@@ -1,4 +1,4 @@
-import type { ScheduleFrequency } from '../types.js';
+import type { ScheduleFrequency, RunProgress } from '../types.js';
 
 export type FileBackupSourceKind = 'local_folder' | 'remote_folder';
 
@@ -75,6 +75,8 @@ export interface FileBackupRun {
   logFilePath: string | null;
   pid: number | null;
   createdAt: string;
+  /** Live progress while in-progress; null otherwise (and possibly stale — see RunProgress). */
+  progress: RunProgress | null;
 }
 
 export interface FileBackupRetentionDeletion {

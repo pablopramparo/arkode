@@ -1,4 +1,4 @@
-import type { BackupRunStatus } from 'engine-core';
+import type { BackupRunStatus, RunProgress } from 'engine-core';
 import type { RunRow } from './runsClient';
 import type { FileBackupRun } from './fileBackupClient';
 
@@ -26,6 +26,8 @@ export interface UnifiedRunRow {
   hadLocalPath: boolean;
   /** File only — the restic snapshot id (restore/delete meaningful when set). */
   snapshotId: string | null;
+  /** Live progress while the run is still going (and fresh — see RunProgress); null otherwise. */
+  progress: RunProgress | null;
 }
 
 export function toUnifiedDbRun(r: RunRow): UnifiedRunRow {
@@ -44,6 +46,7 @@ export function toUnifiedDbRun(r: RunRow): UnifiedRunRow {
     localFileExists: Boolean(r.localFileExists),
     hadLocalPath: Boolean(r.localPath),
     snapshotId: null,
+    progress: r.progress,
   };
 }
 
@@ -63,6 +66,7 @@ export function toUnifiedFileRun(r: FileBackupRun): UnifiedRunRow {
     localFileExists: false,
     hadLocalPath: false,
     snapshotId: r.snapshotId,
+    progress: r.progress ?? null,
   };
 }
 

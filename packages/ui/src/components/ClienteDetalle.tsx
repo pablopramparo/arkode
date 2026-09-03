@@ -26,6 +26,8 @@ import {
 import { deleteBackupRun, downloadRunUrl, fetchBackups, fetchRuns, type RunRow } from '../lib/runsClient';
 import type { ConnectionTestResult, DirectDumpCompatibilityResult } from 'engine-core';
 import { StatusChip } from './StatusChip';
+import { ProgressBar } from './ProgressBar';
+import { isLiveProgress } from '../lib/progress';
 import { Switch } from './Switch';
 import { IconButton, IconLinkButton } from './IconButton';
 import { DownloadIcon, EditIcon, EyeIcon, FolderIcon, PulseIcon, TrashIcon, UndoIcon } from './icons';
@@ -236,6 +238,15 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const hasLiveRun =
+    (runs ?? []).some((r) => isLiveProgress(r.status, r.progress)) ||
+    (fileRuns ?? []).some((r) => isLiveProgress(r.status, r.progress));
+  useEffect(() => {
+    if (!hasLiveRun) return;
+    const id = setInterval(refresh, 3000);
+    return () => clearInterval(id);
+  }, [hasLiveRun, refresh]);
 
   async function handleTestConnection(id: string, kind: 'transport' | 'database', trustHost?: boolean) {
     patchAction(id, { busy: 'test', actionError: undefined, testResult: undefined });
@@ -706,6 +717,13 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                               </div>
                             </td>
                           </tr>
+                          {isLiveProgress(run.status, run.progress) && (
+                            <tr>
+                              <td colSpan={6} className="px-4 pb-2">
+                                <ProgressBar progress={run.progress} />
+                              </td>
+                            </tr>
+                          )}
                           {expanded && run.errorMessage && (
                             <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
                               <td colSpan={6} className="px-4 py-2 text-xs" style={{ color: 'var(--danger)', fontFamily: 'monospace' }}>

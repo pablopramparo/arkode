@@ -20,6 +20,8 @@ import {
   createFileBackupLogEventsRepo,
   createReplicationTargetsRepo,
   createReplicationRunsRepo,
+  throttleProgressSink,
+  type ProgressSink,
 } from 'engine-core';
 
 export function buildContext() {
@@ -51,6 +53,15 @@ export function buildContext() {
   const replicationTargetsRepo = createReplicationTargetsRepo(db);
   const replicationRunsRepo = createReplicationRunsRepo(db);
 
+  // Live-progress sinks: the orchestrators call onProgress(runId, progress)
+  // repeatedly during a run; these throttle the writes (~1/s or on a real
+  // change) and persist them to the run row, where the UI polls them. One
+  // per process is enough — the throttle keeps per-run state internally.
+  const dbProgressSink: ProgressSink = throttleProgressSink((runId, progress) => runsRepo.updateProgress(runId, progress));
+  const fileProgressSink: ProgressSink = throttleProgressSink((runId, progress) =>
+    fileBackupRunsRepo.updateProgress(runId, progress)
+  );
+
   return {
     db,
     clientsRepo,
@@ -72,6 +83,8 @@ export function buildContext() {
     fileBackupLogEventsRepo,
     replicationTargetsRepo,
     replicationRunsRepo,
+    dbProgressSink,
+    fileProgressSink,
   };
 }
 

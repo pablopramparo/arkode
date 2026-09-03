@@ -216,3 +216,60 @@ describe('runsRepo.listRecent', () => {
     expect(rows.length).toBeLessThanOrEqual(200);
   });
 });
+
+describe('runsRepo.updateProgress', () => {
+  function makeRun(ctx: TestContext) {
+    const { task, client } = seedTask(ctx);
+    return ctx.runsRepo.create({
+      taskId: task.id,
+      clientId: client.id,
+      strategy: 'fetch_existing',
+      transportId: null,
+      databaseConnectionId: null,
+      pid: process.pid,
+    });
+  }
+
+  it('round-trips a progress blob through the JSON column', () => {
+    const ctx = createTestContext();
+    const run = makeRun(ctx);
+
+    ctx.runsRepo.updateProgress(run.id, {
+      phase: 'downloading',
+      label: 'Descargando…',
+      fraction: 0.42,
+      current: 420,
+      total: 1000,
+      unit: 'bytes',
+      updatedAt: '2026-09-03T12:00:00.000Z',
+    });
+
+    const read = ctx.runsRepo.getById(run.id);
+    expect(read?.progress).toEqual({
+      phase: 'downloading',
+      label: 'Descargando…',
+      fraction: 0.42,
+      current: 420,
+      total: 1000,
+      unit: 'bytes',
+      updatedAt: '2026-09-03T12:00:00.000Z',
+    });
+  });
+
+  it('clears the blob when passed null, and leaves status untouched', () => {
+    const ctx = createTestContext();
+    const run = makeRun(ctx);
+    ctx.runsRepo.updateProgress(run.id, { phase: 'connecting', label: 'x', fraction: null, updatedAt: 'now' });
+
+    ctx.runsRepo.updateProgress(run.id, null);
+
+    const read = ctx.runsRepo.getById(run.id);
+    expect(read?.progress).toBeNull();
+    expect(read?.status).toBe('Running'); // create() sets Running — updateProgress never touches it
+  });
+
+  it('a fresh run has null progress', () => {
+    const ctx = createTestContext();
+    expect(makeRun(ctx).progress).toBeNull();
+  });
+});

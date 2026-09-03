@@ -11,7 +11,11 @@ import type { RemoteFile, RemoteTreeEntry, DownloadResult } from '../../transpor
  */
 export interface SyncRemoteFolderAdapter {
   listRemoteTree(remoteDir: string): Promise<RemoteTreeEntry[]>;
-  downloadFile(remote: RemoteFile, localTempPath: string): Promise<DownloadResult>;
+  downloadFile(
+    remote: RemoteFile,
+    localTempPath: string,
+    opts?: { onProgress?: (transferred: number, total: number) => void }
+  ): Promise<DownloadResult>;
 }
 
 export interface SyncRemoteFolderResult {
@@ -19,6 +23,19 @@ export interface SyncRemoteFolderResult {
   filesChanged: number;
   filesDeleted: number;
   bytesTransferred: number;
+}
+
+export interface SyncProgress {
+  /** Files transferred so far / total files this sync needs to transfer (new + changed). */
+  filesDone: number;
+  filesTotal: number;
+  /** Bytes transferred so far / total bytes to transfer — the sum of the to-transfer files' remote sizes. */
+  bytesDone: number;
+  bytesTotal: number;
+}
+
+export interface SyncRemoteFolderOptions {
+  onProgress?: (progress: SyncProgress) => void;
 }
 
 interface LocalEntry {
@@ -95,7 +112,8 @@ async function cleanupOrphanedPartFiles(dir: string): Promise<void> {
 export async function syncRemoteFolder(
   adapter: SyncRemoteFolderAdapter,
   remoteRootDir: string,
-  localStagingDir: string
+  localStagingDir: string,
+  opts: SyncRemoteFolderOptions = {}
 ): Promise<SyncRemoteFolderResult> {
   await mkdir(localStagingDir, { recursive: true });
   await cleanupOrphanedPartFiles(localStagingDir);
@@ -105,16 +123,23 @@ export async function syncRemoteFolder(
   const remotePaths = new Set(remoteEntries.map((e) => e.relativePath));
   const baseRemoteDir = remoteRootDir.replace(/\/$/, '');
 
+  // Everything that needs transferring, resolved up front so progress has a
+  // real denominator (files + bytes) before the first download starts.
+  const toTransfer = remoteEntries.filter((remote) => {
+    const local = localEntries.get(remote.relativePath);
+    const remoteMtimeSeconds = Math.floor(remote.modifiedAt.getTime() / 1000);
+    return !(local != null && local.size === remote.size && local.mtimeSeconds === remoteMtimeSeconds);
+  });
+  const bytesTotal = toTransfer.reduce((sum, e) => sum + e.size, 0);
+
   let filesAdded = 0;
   let filesChanged = 0;
   let bytesTransferred = 0;
+  const report = () => opts.onProgress?.({ filesDone: filesAdded + filesChanged, filesTotal: toTransfer.length, bytesDone: bytesTransferred, bytesTotal });
+  report();
 
-  for (const remote of remoteEntries) {
+  for (const remote of toTransfer) {
     const local = localEntries.get(remote.relativePath);
-    const remoteMtimeSeconds = Math.floor(remote.modifiedAt.getTime() / 1000);
-    const unchanged = local != null && local.size === remote.size && local.mtimeSeconds === remoteMtimeSeconds;
-    if (unchanged) continue;
-
     const localPath = join(localStagingDir, ...remote.relativePath.split('/'));
     await mkdir(dirname(localPath), { recursive: true });
     const tempPath = `${localPath}.part`;
@@ -125,16 +150,25 @@ export async function syncRemoteFolder(
       modifiedAt: remote.modifiedAt,
     };
 
-    const result = await adapter.downloadFile(remoteFile, tempPath);
+    const bytesBeforeThisFile = bytesTransferred;
+    const result = await adapter.downloadFile(remoteFile, tempPath, {
+      onProgress: (transferred) => {
+        bytesTransferred = bytesBeforeThisFile + transferred;
+        report();
+      },
+    });
     await rename(tempPath, localPath);
     // Set *after* the rename, on the final path — without this, the next
     // run's diff has nothing meaningful to compare against (every local
     // mtime would just read "whenever we last downloaded it").
     await utimes(localPath, remote.modifiedAt, remote.modifiedAt);
 
-    bytesTransferred += result.bytesTransferred;
+    // Authoritative end-of-file value (the onProgress callback above may not
+    // fire a final time, or at all on a zero-byte file).
+    bytesTransferred = bytesBeforeThisFile + result.bytesTransferred;
     if (local) filesChanged++;
     else filesAdded++;
+    report();
   }
 
   let filesDeleted = 0;

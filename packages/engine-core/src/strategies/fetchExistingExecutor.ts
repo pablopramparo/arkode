@@ -56,7 +56,16 @@ export function createFetchExistingExecutor(
 
         const remote = candidates[0];
         const localTempPath = join(ctx.targetDir, `${remote.fileName}.part`);
-        const result = await adapter.downloadFile(remote, localTempPath);
+        const result = await adapter.downloadFile(remote, localTempPath, {
+          onProgress: (transferred, total) =>
+            ctx.reportProgress({
+              phase: 'downloading',
+              fraction: total > 0 ? transferred / total : null,
+              current: transferred,
+              total: total > 0 ? total : undefined,
+              unit: 'bytes',
+            }),
+        });
 
         return {
           localTempPath,

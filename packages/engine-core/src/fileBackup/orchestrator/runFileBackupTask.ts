@@ -18,6 +18,7 @@ import { checkRepositoryLock, recoverStaleRepositoryRuns } from '../locking/repo
 import { syncRemoteFolder } from '../remoteSync/syncRemoteFolder.js';
 import * as resticClient from '../restic/resticClient.js';
 import { applyFileBackupRetention, resolveFileBackupRetentionPolicy } from '../retention/applyFileBackupRetention.js';
+import { makeProgressReporter, type ProgressSink, type ReportProgress } from '../../progress/runProgress.js';
 
 export interface RunFileBackupTaskDeps {
   clientsRepo: ClientsRepo;
@@ -31,6 +32,8 @@ export interface RunFileBackupTaskDeps {
   secretStore: SecretStore;
   /** An unattended run (run-due, serve) has no interactive terminal, so omitting this correctly (and intentionally) rejects any host that isn't already known — same principle as the DB-backup domain's run-due. */
   onUnknownHost?: (presented: { keyType: string; fingerprintSha256: string }) => Promise<boolean>;
+  /** Receives live progress as `onProgress(run.id, progress)` — see RunProgress. Optional; omitting it makes every reportProgress call a no-op. */
+  onProgress?: ProgressSink;
 }
 
 export interface RunFileBackupTaskResult {
@@ -96,7 +99,8 @@ async function syncRemoteSourceIfNeeded(
   task: FileBackupTask,
   stagingDir: string,
   deps: RunFileBackupTaskDeps,
-  logger: FileBackupRunLogger
+  logger: FileBackupRunLogger,
+  reportProgress: ReportProgress
 ): Promise<void> {
   if (task.sourceKind !== 'remote_folder') return;
   if (!task.transportId || !task.remoteSourcePath) {
@@ -112,9 +116,20 @@ async function syncRemoteSourceIfNeeded(
       : createSftpAdapterFromTransport(transport, deps.secretStore, deps.knownHostsRepo, deps.onUnknownHost);
 
   logger.log('info', 'connect', `Connecting to ${transport.host} to sync remote folder "${task.remoteSourcePath}".`);
+  reportProgress({ phase: 'connecting', fraction: null });
   await adapter.connect();
   try {
-    const syncResult = await syncRemoteFolder(adapter, task.remoteSourcePath, stagingDir);
+    const syncResult = await syncRemoteFolder(adapter, task.remoteSourcePath, stagingDir, {
+      onProgress: (p) =>
+        reportProgress({
+          phase: 'syncing',
+          fraction: p.bytesTotal > 0 ? p.bytesDone / p.bytesTotal : p.filesTotal > 0 ? p.filesDone / p.filesTotal : null,
+          current: p.filesDone,
+          total: p.filesTotal,
+          unit: 'files',
+          label: `Sincronizando archivos… (${p.filesDone}/${p.filesTotal})`,
+        }),
+    });
     logger.log(
       'info',
       'connect',
@@ -176,13 +191,15 @@ export async function runFileBackupTask(task: FileBackupTask, deps: RunFileBacku
   });
 
   const logger = createFileBackupRunLogger(run.id, deps.fileBackupLogEventsRepo);
+  const reportProgress = makeProgressReporter(run.id, deps.onProgress);
   logger.log('info', 'connect', `Starting ${task.sourceKind} file-backup run for task "${task.name}" (client "${client.name}").`);
 
   try {
     deps.fileBackupRunsRepo.markProducing(run.id);
+    reportProgress({ phase: 'connecting', fraction: null });
 
     if (task.sourceKind === 'remote_folder') {
-      await syncRemoteSourceIfNeeded(task, sourcePath, deps, logger);
+      await syncRemoteSourceIfNeeded(task, sourcePath, deps, logger, reportProgress);
     } else if (!(await pathExistsAsDirectory(sourcePath))) {
       throw new Error(`Source folder "${sourcePath}" does not exist or is not a directory.`);
     }
@@ -193,7 +210,19 @@ export async function runFileBackupTask(task: FileBackupTask, deps: RunFileBacku
     }
 
     logger.log('info', 'produce', `Running restic backup of "${sourcePath}".`);
-    const summary = await resticClient.runBackup(repository.repoPath, password, sourcePath, { tag: task.id });
+    reportProgress({ phase: 'archiving', fraction: null });
+    const summary = await resticClient.runBackup(repository.repoPath, password, sourcePath, {
+      tag: task.id,
+      onStatus: (s) =>
+        reportProgress({
+          phase: 'archiving',
+          fraction: s.percentDone ?? null,
+          current: s.bytesDone,
+          total: s.totalBytes,
+          unit: 'bytes',
+          etaSeconds: s.secondsRemaining,
+        }),
+    });
     logger.log(
       'info',
       'produce',
@@ -212,6 +241,7 @@ export async function runFileBackupTask(task: FileBackupTask, deps: RunFileBacku
     }
 
     logger.log('info', 'validate', `Validating snapshot ${summary.snapshotId}.`);
+    reportProgress({ phase: 'validating', fraction: null });
 
     const warnings = [...summary.warnings];
     if (summary.totalFilesProcessed === 0) {

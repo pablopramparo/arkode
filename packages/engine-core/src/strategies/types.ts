@@ -1,4 +1,5 @@
 import type { BackupStrategyKind, BackupTask, Client } from '../types.js';
+import type { ReportProgress } from '../progress/runProgress.js';
 
 export interface ProducedDump {
   /** A not-yet-validated local file; the orchestrator owns renaming it off `.part`. */
@@ -21,6 +22,8 @@ export interface BackupStrategyContext {
   client: Client;
   /** Directory that will hold the final validated file, e.g. Backups/{client}/{db}/{YYYY}/{MM}. Already created. */
   targetDir: string;
+  /** Report live progress for the UI. A no-op when the caller wired no sink — executors call it unconditionally. */
+  reportProgress: ReportProgress;
 }
 
 /**

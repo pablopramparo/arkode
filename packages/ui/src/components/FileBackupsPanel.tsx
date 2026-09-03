@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
 import { isTauri } from '@tauri-apps/api/core';
 import { openPath } from '@tauri-apps/plugin-opener';
@@ -22,6 +22,8 @@ import { KeyIcon, UndoIcon, DownloadIcon, FolderIcon, TrashIcon } from './icons'
 import { formatDateTime, formatSize } from '../lib/format';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { Spinner } from './Spinner';
+import { ProgressBar } from './ProgressBar';
+import { isLiveProgress } from '../lib/progress';
 
 /**
  * The per-client "Repositorio" tab — everything specific to the client's
@@ -103,6 +105,13 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const hasLiveRun = runs.some((r) => isLiveProgress(r.status, r.progress));
+  useEffect(() => {
+    if (!hasLiveRun) return;
+    const id = setInterval(refresh, 3000);
+    return () => clearInterval(id);
+  }, [hasLiveRun, refresh]);
 
   async function handleCreateRepo() {
     setCreatingRepo(true);
@@ -255,7 +264,8 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
               </thead>
               <tbody>
                 {runs.map((run) => (
-                  <tr key={run.id} style={{ borderTop: '1px solid var(--separator)' }}>
+                  <Fragment key={run.id}>
+                  <tr style={{ borderTop: '1px solid var(--separator)' }}>
                     <td className="px-4 py-2.5">{formatDateTime(run.startedAt)}</td>
                     <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
                       {run.taskName ?? '—'}
@@ -306,6 +316,14 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
                       )}
                     </td>
                   </tr>
+                  {isLiveProgress(run.status, run.progress) && (
+                    <tr>
+                      <td colSpan={5} className="px-4 pb-2">
+                        <ProgressBar progress={run.progress} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

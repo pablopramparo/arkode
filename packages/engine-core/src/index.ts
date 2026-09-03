@@ -135,6 +135,9 @@ export type { SystemInfo, ToolPathStatus } from './status/getSystemInfo.js';
 export { runBackupTask } from './orchestrator/runBackupTask.js';
 export type { RunBackupTaskDeps, RunBackupTaskResult } from './orchestrator/runBackupTask.js';
 
+export { makeProgressReporter, throttleProgressSink } from './progress/runProgress.js';
+export type { ProgressSink, ReportProgress, ProgressUpdate } from './progress/runProgress.js';
+
 export * from './config/types.js';
 export { exportConfig, exportTask } from './config/exportConfig.js';
 export type { ExportConfigDeps } from './config/exportConfig.js';

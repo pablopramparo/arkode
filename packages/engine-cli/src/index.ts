@@ -780,6 +780,7 @@ function runTaskNow(ctx: ReturnType<typeof buildContext>, task: NonNullable<Retu
     secretStore: ctx.secretStore,
     settingsRepo: ctx.settingsRepo,
     onUnknownHost: confirmHostInteractively,
+    onProgress: ctx.dbProgressSink,
   });
 }
 
@@ -862,6 +863,7 @@ program
       // (and intentionally) rejects any host that isn't already known —
       // never silently trusting a new host just because nobody's watching.
       onUnknownHost: confirmHostInteractively,
+      onProgress: ctx.dbProgressSink,
     };
 
     const results = await runDueTasks(tasks, deps, new Date());
@@ -892,6 +894,7 @@ program
           settingsRepo: ctx.settingsRepo,
           secretStore: ctx.secretStore,
           onUnknownHost: confirmHostInteractively,
+          onProgress: ctx.dbProgressSink,
         },
         fileTaskDeps: { ...buildFileBackupTaskDeps(ctx), fileBackupRunsRepo: ctx.fileBackupRunsRepo },
         maintenanceDeps: {
@@ -1418,6 +1421,7 @@ function buildFileBackupTaskDeps(ctx: ReturnType<typeof buildContext>): RunFileB
     // when there's no real interactive terminal to confirm in (run-due,
     // serve), not a caller-specific branch here.
     onUnknownHost: confirmHostInteractively,
+    onProgress: ctx.fileProgressSink,
   };
 }
 

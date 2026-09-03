@@ -7,6 +7,8 @@ import { KindBadge } from './KindBadge';
 import { formatAge, formatSize, ageInHours, formatConnectionTestVersions, formatDateTime } from '../lib/format';
 import { StatusChip } from './StatusChip';
 import { StatCard } from './StatCard';
+import { ProgressBar } from './ProgressBar';
+import { isLiveProgress } from '../lib/progress';
 import { AlertTriangleIcon, CheckCircleIcon, ClipboardIcon, EyeIcon, PlayIcon, PulseIcon, UsersIcon } from './icons';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { IconButton } from './IconButton';
@@ -70,6 +72,14 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
     const interval = setInterval(refresh, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  // Poll faster while a run is actively reporting progress so the bar moves.
+  const hasLiveRun = (rows ?? []).some((r) => isLiveProgress(r.status, r.progress));
+  useEffect(() => {
+    if (!hasLiveRun) return;
+    const id = setInterval(refresh, 3000);
+    return () => clearInterval(id);
+  }, [hasLiveRun, refresh]);
 
   function patchAction(taskId: string, patch: RowActionState) {
     setActionState((prev) => ({ ...prev, [taskId]: { ...prev[taskId], ...patch } }));
@@ -262,6 +272,13 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                           </div>
                         </td>
                       </tr>
+                      {isLiveProgress(row.status, row.progress) && (
+                        <tr>
+                          <td colSpan={7} className="px-4 pb-2">
+                            <ProgressBar progress={row.progress} />
+                          </td>
+                        </tr>
+                      )}
                       {hasDetail && (
                         <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
                           <td colSpan={7} className="px-4 py-2 text-xs">

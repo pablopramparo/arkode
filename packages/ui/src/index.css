@@ -66,3 +66,19 @@ button:not(:disabled) {
 *::-webkit-scrollbar-thumb:hover {
   background-color: var(--accent);
 }
+
+/* Indeterminate progress bar — a segment sliding across the track, used by
+ * ProgressBar when a phase reports no percentage (remote dump, local dump,
+ * connecting). */
+@keyframes arkode-indeterminate {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+.arkode-indeterminate-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  border-radius: 9999px;
+  animation: arkode-indeterminate 1.3s ease-in-out infinite;
+}

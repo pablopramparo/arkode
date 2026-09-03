@@ -139,6 +139,11 @@ export function createRemoteDumpExecutor(
         const command = dockerMode
           ? buildDockerDumpCommand(ctx.task, expectedRemotePath)
           : applyRemoteCommandOutputPath(ctx.task.remoteCommand!, expectedRemotePath);
+
+        // The remote mysqldump/pg_dump gives no progress of its own — surface
+        // it as an indeterminate phase so the UI shows "Generando dump en el
+        // servidor…" instead of a frozen bar for what can be several minutes.
+        ctx.reportProgress({ phase: 'remote_dump', fraction: null });
         // The password (when configured) travels only over this exec
         // channel's stdin, never as part of `command`'s own text — see
         // SshAdapter.runCommand's own doc comment for why that's the one
@@ -158,7 +163,16 @@ export function createRemoteDumpExecutor(
         const remoteFile = await adapter.locateProducedFile(expectedRemotePath);
 
         const localTempPath = join(ctx.targetDir, `${remoteFile.fileName}.part`);
-        const result = await adapter.downloadFile(remoteFile, localTempPath);
+        const result = await adapter.downloadFile(remoteFile, localTempPath, {
+          onProgress: (transferred, total) =>
+            ctx.reportProgress({
+              phase: 'downloading',
+              fraction: total > 0 ? transferred / total : null,
+              current: transferred,
+              total: total > 0 ? total : undefined,
+              unit: 'bytes',
+            }),
+        });
 
         if (result.bytesTransferred <= 0) {
           throw new Error(`Downloaded file "${remoteFile.fileName}" is empty (0 bytes).`);

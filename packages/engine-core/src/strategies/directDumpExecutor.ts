@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { stat } from 'node:fs/promises';
 import type { DatabaseConnection } from '../types.js';
 import type { SecretStore } from '../secrets/types.js';
 import type { SettingsRepo } from '../db/repositories/settingsRepo.js';
@@ -86,7 +87,22 @@ export function createDirectDumpExecutor(
           : undefined,
       };
 
-      const result = await dumpClient.dump(config, localTempPath);
+      // pg_dump/mysqldump report no progress of their own and write straight
+      // to disk — poll the growing temp file so the UI shows "Generando
+      // dump… (N MB)" and an elapsed time instead of a frozen bar.
+      ctx.reportProgress({ phase: 'dumping', fraction: null, current: 0, unit: 'bytes' });
+      const pollTimer = setInterval(() => {
+        stat(localTempPath).then(
+          (s) => ctx.reportProgress({ phase: 'dumping', fraction: null, current: s.size, unit: 'bytes' }),
+          () => {}
+        );
+      }, 1000);
+      let result;
+      try {
+        result = await dumpClient.dump(config, localTempPath);
+      } finally {
+        clearInterval(pollTimer);
+      }
 
       if (result.sizeBytes <= 0) {
         throw new Error(`Produced dump "${fileName}" is empty (0 bytes).`);

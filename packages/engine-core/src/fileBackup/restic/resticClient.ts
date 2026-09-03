@@ -52,14 +52,8 @@ async function execRestic(args: string[], password: string): Promise<{ stdout: s
   return execFileAsync(resticPath, args, { env: buildEnv(password), maxBuffer: 64 * 1024 * 1024 });
 }
 
-/**
- * Scans stdout for restic's own `{"message_type":"exit_error",...}` line
- * (present even on failure, since restic still writes JSON to stdout before
- * exiting nonzero) for a clean human message; falls back to the raw
- * child_process error otherwise.
- */
-function resticErrorMessage(err: unknown, command: string): string {
-  const stdout = (err as ExecErrorWithOutput)?.stdout ?? '';
+/** restic still writes a `{"message_type":"exit_error",...}` JSON line to stdout before exiting nonzero — pull the clean human message out of it if present. */
+function exitErrorFromStdout(stdout: string): string | null {
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -70,8 +64,70 @@ function resticErrorMessage(err: unknown, command: string): string {
       // not a JSON line — ignore
     }
   }
+  return null;
+}
+
+/**
+ * Scans stdout for restic's own `exit_error` line for a clean human message;
+ * falls back to the raw child_process error otherwise.
+ */
+function resticErrorMessage(err: unknown, command: string): string {
+  const fromStdout = exitErrorFromStdout((err as ExecErrorWithOutput)?.stdout ?? '');
+  if (fromStdout) return fromStdout;
   const message = err instanceof Error ? err.message : String(err);
   return `restic ${command} failed: ${message}`;
+}
+
+export interface ResticBackupStatus {
+  /** 0..1 */
+  percentDone?: number;
+  totalFiles?: number;
+  filesDone?: number;
+  totalBytes?: number;
+  bytesDone?: number;
+  secondsRemaining?: number;
+}
+
+/**
+ * Spawns restic (rather than execRestic's buffer-and-wait) so `backup
+ * --json`'s intermediate `message_type:"status"` lines can be surfaced as
+ * live progress. Still collects the full stdout/stderr for the final
+ * summary/exit-error parse. onStdoutLine is called per newline-delimited
+ * stdout line (already trimmed of the trailing newline, never empty).
+ */
+function spawnResticCollecting(
+  args: string[],
+  password: string,
+  onStdoutLine: (line: string) => void
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const resticPath = resolveResticPath();
+  return new Promise((resolve, reject) => {
+    const child = spawn(resticPath, args, { env: buildEnv(password) });
+    let stdout = '';
+    let stderr = '';
+    let buffer = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk;
+      buffer += chunk;
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (line) onStdoutLine(line);
+      }
+    });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      const tail = buffer.trim();
+      if (tail) onStdoutLine(tail);
+      resolve({ code, stdout, stderr });
+    });
+  });
 }
 
 function parseJsonLines(stdout: string): unknown[] {
@@ -131,44 +187,69 @@ export async function runBackup(
   repoPath: string,
   password: string,
   sourcePath: string,
-  opts: { tag: string }
+  opts: { tag: string; onStatus?: (status: ResticBackupStatus) => void }
 ): Promise<ResticBackupSummary> {
   const args = ['-r', repoPath, 'backup', sourcePath, '--json', '--host', RESTIC_HOST, '--tag', opts.tag];
-  let stdout: string;
-  try {
-    ({ stdout } = await execRestic(args, password));
-  } catch (err) {
-    throw new Error(resticErrorMessage(err, 'backup'));
-  }
 
   const warnings: string[] = [];
   let summary: Record<string, unknown> | null = null;
-  for (const line of parseJsonLines(stdout)) {
-    const obj = line as Record<string, unknown>;
+
+  const handleLine = (line: string): void => {
+    let obj: Record<string, unknown>;
+    try {
+      obj = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      return; // restic interleaves the odd non-JSON progress line — skip it
+    }
     if (obj.message_type === 'summary') {
       summary = obj;
+    } else if (obj.message_type === 'status') {
+      opts.onStatus?.({
+        percentDone: obj.percent_done as number | undefined,
+        totalFiles: obj.total_files as number | undefined,
+        filesDone: obj.files_done as number | undefined,
+        totalBytes: obj.total_bytes as number | undefined,
+        bytesDone: obj.bytes_done as number | undefined,
+        secondsRemaining: obj.seconds_remaining as number | undefined,
+      });
     } else if (obj.message_type === 'error') {
       const item = obj.item ? ` (${obj.item as string})` : '';
       const errorMessage = (obj.error as { message?: string } | undefined)?.message ?? 'unknown error';
       warnings.push(`${(obj.during as string | undefined) ?? 'backup'}${item}: ${errorMessage}`);
     }
+  };
+
+  let result: { code: number | null; stdout: string; stderr: string };
+  try {
+    result = await spawnResticCollecting(args, password, handleLine);
+  } catch (err) {
+    throw new Error(resticErrorMessage(err, 'backup'));
   }
-  if (!summary) {
+  if (result.code !== 0) {
+    const fromStdout = exitErrorFromStdout(result.stdout);
+    throw new Error(
+      fromStdout ?? `restic backup failed (exit code ${result.code})${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}`
+    );
+  }
+  // Cast defeats CFA narrowing `summary` to `never` — it's only ever
+  // assigned inside the handleLine closure, which TS can't see.
+  const summaryObj = summary as Record<string, unknown> | null;
+  if (!summaryObj) {
     throw new Error('restic backup completed without reporting a summary line — treating as failed.');
   }
 
   return {
-    snapshotId: summary.snapshot_id as string,
-    filesNew: summary.files_new as number,
-    filesChanged: summary.files_changed as number,
-    filesUnmodified: summary.files_unmodified as number,
-    dirsNew: summary.dirs_new as number,
-    dirsChanged: summary.dirs_changed as number,
-    totalFilesProcessed: summary.total_files_processed as number,
-    totalBytesProcessed: summary.total_bytes_processed as number,
-    dataAdded: summary.data_added as number,
-    dataAddedPacked: summary.data_added_packed as number,
-    durationMs: Math.round(((summary.total_duration as number | undefined) ?? 0) * 1000),
+    snapshotId: summaryObj.snapshot_id as string,
+    filesNew: summaryObj.files_new as number,
+    filesChanged: summaryObj.files_changed as number,
+    filesUnmodified: summaryObj.files_unmodified as number,
+    dirsNew: summaryObj.dirs_new as number,
+    dirsChanged: summaryObj.dirs_changed as number,
+    totalFilesProcessed: summaryObj.total_files_processed as number,
+    totalBytesProcessed: summaryObj.total_bytes_processed as number,
+    dataAdded: summaryObj.data_added as number,
+    dataAddedPacked: summaryObj.data_added_packed as number,
+    durationMs: Math.round(((summaryObj.total_duration as number | undefined) ?? 0) * 1000),
     warnings,
   };
 }
