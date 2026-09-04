@@ -414,7 +414,8 @@ export async function forgetSnapshot(repoPath: string, password: string, snapsho
   }
 }
 
-async function directorySizeBytes(dir: string): Promise<number> {
+/** Real on-disk size of a directory tree (sum of file sizes). For a restic repo this is its deduplicated footprint. */
+export async function directorySizeBytes(dir: string): Promise<number> {
   let total = 0;
   let entries;
   try {

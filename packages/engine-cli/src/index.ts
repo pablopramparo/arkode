@@ -3140,6 +3140,29 @@ program
         return;
       }
 
+      // Deduplicated on-disk footprint of the repo + its real snapshot count
+      // (authoritative, from restic — not a DB row count, since retention
+      // forgets snapshots but leaves the run rows).
+      const repoSizeMatch = req.method === 'GET' && pathname.match(/^\/file-repos\/([^/]+)\/size$/);
+      if (repoSizeMatch) {
+        try {
+          const repo = ctx.fileBackupRepositoriesRepo.getById(repoSizeMatch[1]);
+          if (!repo) {
+            sendJson(res, 404, { error: `File-backup repository ${repoSizeMatch[1]} not found.` });
+            return;
+          }
+          const password = ctx.secretStore.get(repo.passwordSecretRef);
+          const [diskBytes, snapshots] = await Promise.all([
+            resticClient.directorySizeBytes(repo.repoPath),
+            password ? resticClient.listSnapshots(repo.repoPath, password) : Promise.resolve([]),
+          ]);
+          sendJson(res, 200, { diskBytes, snapshotCount: snapshots.length });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
       const maintenanceMatch = req.method === 'POST' && pathname.match(/^\/file-repos\/([^/]+)\/run-maintenance$/);
       if (maintenanceMatch) {
         try {

@@ -119,6 +119,11 @@ export async function exportFileBackupRepositoryKey(repositoryId: string): Promi
   return recoveryKey;
 }
 
+/** Deduplicated on-disk size of the repo folder + its real snapshot count (from restic). */
+export async function fetchFileBackupRepoSize(repositoryId: string): Promise<{ diskBytes: number; snapshotCount: number }> {
+  return handleJson(await fetch(`${getApiBase()}/file-repos/${repositoryId}/size`));
+}
+
 export async function runFileBackupMaintenance(repositoryId: string, operation?: 'prune' | 'check' | 'check-read-data' | 'all'): Promise<unknown> {
   return handleJson(
     await fetch(`${getApiBase()}/file-repos/${repositoryId}/run-maintenance`, {

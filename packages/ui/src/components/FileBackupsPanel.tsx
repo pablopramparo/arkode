@@ -6,6 +6,7 @@ import {
   fetchFileBackupRepository,
   createFileBackupRepository,
   exportFileBackupRepositoryKey,
+  fetchFileBackupRepoSize,
   runFileBackupMaintenance,
   fetchFileBackupRuns,
   restoreFileBackupRun,
@@ -80,6 +81,8 @@ function RecoveryKeyModal({ recoveryKey, onClose }: { recoveryKey: string; onClo
 export function FileBackupsPanel({ clientId }: { clientId: string }) {
   const [repository, setRepository] = useState<FileBackupRepository | null | undefined>(undefined);
   const [runs, setRuns] = useState<FileBackupRun[]>([]);
+  const [repoSize, setRepoSize] = useState<{ diskBytes: number; snapshotCount: number } | null>(null);
+  const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [creatingRepo, setCreatingRepo] = useState(false);
   const [showRecoveryKey, setShowRecoveryKey] = useState<string | null>(null);
@@ -94,7 +97,9 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
       const repo = await fetchFileBackupRepository(clientId);
       setRepository(repo);
       if (repo) {
-        setRuns(await fetchFileBackupRuns({ clientId, limit: 30 }));
+        setRuns(await fetchFileBackupRuns({ clientId, limit: 200 }));
+        // Best-effort — a slow repo walk / restic call shouldn't block the panel.
+        fetchFileBackupRepoSize(repo.id).then(setRepoSize).catch(() => setRepoSize(null));
       }
       setError(null);
     } catch (err) {
@@ -180,6 +185,91 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
     }
   }
 
+  function toggleTask(taskId: string) {
+    setExpandedTasks((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }
+
+  // Only real snapshots (Success/Warning with an id) plus anything currently
+  // running — never Failed rows (those belong in Historial, and have no
+  // snapshot to restore). Grouped by task, newest first; the default view
+  // shows just each task's latest, the rest behind a per-task toggle.
+  const relevantRuns = runs.filter((r) => r.snapshotId != null || isLiveProgress(r.status, r.progress));
+  const runsByTask = new Map<string, FileBackupRun[]>();
+  for (const r of relevantRuns) {
+    const list = runsByTask.get(r.taskId) ?? [];
+    list.push(r);
+    runsByTask.set(r.taskId, list);
+  }
+  const taskGroups = [...runsByTask.values()].sort((a, b) => b[0].startedAt.localeCompare(a[0].startedAt));
+
+  function renderSnapshotRow(run: FileBackupRun, older = false) {
+    return (
+      <Fragment key={run.id}>
+        <tr style={{ borderTop: '1px solid var(--separator)', opacity: older ? 0.7 : 1 }}>
+          <td className="px-4 py-2.5">{formatDateTime(run.startedAt)}</td>
+          <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
+            {run.taskName ?? '—'}
+          </td>
+          <td className="px-4 py-2.5">
+            <StatusChip status={run.status} errorMessage={run.errorMessage} />
+          </td>
+          <td className="px-4 py-2.5 tabular-nums" style={{ color: 'var(--muted)' }}>
+            {run.totalBytesProcessed != null ? formatSize(run.totalBytesProcessed) : '—'}
+          </td>
+          <td className="px-4 py-2.5">
+            <RunMetrics run={run} />
+          </td>
+          <td className="px-4 py-2.5">
+            <div className="flex items-center gap-1">
+              {run.snapshotId && (
+                <>
+                  <IconButton icon={<UndoIcon />} label="Restaurar snapshot completo" onPress={() => handleRestoreRun(run)} />
+                  <IconButton
+                    icon={<DownloadIcon />}
+                    label="Restaurar un archivo puntual de este snapshot"
+                    onPress={() => setDownloadRunId(downloadRunId === run.id ? null : run.id)}
+                  />
+                  <IconButton
+                    icon={<TrashIcon />}
+                    label="Eliminar snapshot"
+                    tone="danger"
+                    disabled={deletingRunId === run.id}
+                    onPress={() => handleDeleteRun(run)}
+                  />
+                </>
+              )}
+            </div>
+            {downloadRunId === run.id && (
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  style={{ ...inputStyle, width: 260 }}
+                  placeholder="Ruta original del archivo, ej: D:\...\uploads\foto.jpg"
+                  value={downloadPath}
+                  onChange={(e) => setDownloadPath(e.target.value)}
+                />
+                {downloadPath && (
+                  <IconLinkButton icon={<DownloadIcon />} label="Descargar" href={fileBackupDownloadFileUrl(run.id, downloadPath)} />
+                )}
+              </div>
+            )}
+          </td>
+        </tr>
+        {isLiveProgress(run.status, run.progress) && (
+          <tr>
+            <td colSpan={6} className="px-4 pb-2">
+              <ProgressBar progress={run.progress} />
+            </td>
+          </tr>
+        )}
+      </Fragment>
+    );
+  }
+
   if (repository === undefined) {
     return <Spinner />;
   }
@@ -249,8 +339,15 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
       )}
 
       <div>
-        <h3 className="mb-2 text-sm font-semibold">Snapshots</h3>
-        {runs.length > 0 ? (
+        <div className="mb-2 flex items-baseline gap-2">
+          <h3 className="text-sm font-semibold">Snapshots</h3>
+          {repoSize && (
+            <span className="text-xs" style={{ color: 'var(--muted)' }}>
+              · {formatSize(repoSize.diskBytes)} en disco · {repoSize.snapshotCount} snapshot{repoSize.snapshotCount === 1 ? '' : 's'}
+            </span>
+          )}
+        </div>
+        {taskGroups.length > 0 ? (
           <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
             <table className="w-full border-collapse text-sm">
               <thead>
@@ -258,73 +355,39 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
                   <th className="px-4 py-2 font-medium">Fecha</th>
                   <th className="px-4 py-2 font-medium">Tarea</th>
                   <th className="px-4 py-2 font-medium">Estado</th>
+                  <th className="px-4 py-2 font-medium">Peso</th>
                   <th className="px-4 py-2 font-medium">Nuevos/mod./elim.</th>
                   <th className="px-4 py-2 font-medium">Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {runs.map((run) => (
-                  <Fragment key={run.id}>
-                  <tr style={{ borderTop: '1px solid var(--separator)' }}>
-                    <td className="px-4 py-2.5">{formatDateTime(run.startedAt)}</td>
-                    <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
-                      {run.taskName ?? '—'}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <StatusChip status={run.status} errorMessage={run.errorMessage} />
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <RunMetrics run={run} />
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-1">
-                        {run.snapshotId && (
-                          <>
-                            <IconButton icon={<UndoIcon />} label="Restaurar snapshot completo" onPress={() => handleRestoreRun(run)} />
-                            <IconButton
-                              icon={<DownloadIcon />}
-                              label="Restaurar un archivo puntual de este snapshot"
-                              onPress={() => setDownloadRunId(downloadRunId === run.id ? null : run.id)}
-                            />
-                            <IconButton
-                              icon={<TrashIcon />}
-                              label="Eliminar snapshot"
-                              tone="danger"
-                              disabled={deletingRunId === run.id}
-                              onPress={() => handleDeleteRun(run)}
-                            />
-                          </>
-                        )}
-                        {run.errorMessage && (
-                          <span className="text-xs" style={{ color: 'var(--danger)' }} title={run.errorMessage}>
-                            ⚠
-                          </span>
-                        )}
-                      </div>
-                      {downloadRunId === run.id && (
-                        <div className="mt-2 flex items-center gap-2">
-                          <input
-                            style={{ ...inputStyle, width: 260 }}
-                            placeholder="Ruta original del archivo, ej: D:\...\uploads\foto.jpg"
-                            value={downloadPath}
-                            onChange={(e) => setDownloadPath(e.target.value)}
-                          />
-                          {downloadPath && (
-                            <IconLinkButton icon={<DownloadIcon />} label="Descargar" href={fileBackupDownloadFileUrl(run.id, downloadPath)} />
-                          )}
-                        </div>
+                {taskGroups.map((group) => {
+                  const primary = group[0];
+                  const older = group.slice(1);
+                  const isExpanded = expandedTasks.has(primary.taskId);
+                  return (
+                    <Fragment key={primary.taskId}>
+                      {renderSnapshotRow(primary)}
+                      {older.length > 0 && (
+                        <tr>
+                          <td colSpan={6} className="px-4 py-1">
+                            <button
+                              type="button"
+                              className="text-xs"
+                              style={{ color: 'var(--accent)' }}
+                              onClick={() => toggleTask(primary.taskId)}
+                            >
+                              {isExpanded
+                                ? 'Ocultar historial'
+                                : `Ver historial (${older.length} snapshot${older.length === 1 ? '' : 's'} anterior${older.length === 1 ? '' : 'es'})`}
+                            </button>
+                          </td>
+                        </tr>
                       )}
-                    </td>
-                  </tr>
-                  {isLiveProgress(run.status, run.progress) && (
-                    <tr>
-                      <td colSpan={5} className="px-4 pb-2">
-                        <ProgressBar progress={run.progress} />
-                      </td>
-                    </tr>
-                  )}
-                  </Fragment>
-                ))}
+                      {isExpanded && older.map((r) => renderSnapshotRow(r, true))}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
