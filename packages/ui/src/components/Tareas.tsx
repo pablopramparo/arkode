@@ -10,6 +10,7 @@ import { TaskCreateWizard } from './TaskCreateWizard';
 import { FileTaskCreateModal } from './FileTaskCreateModal';
 import { AddBackupChoiceModal } from './AddBackupChoiceModal';
 import { UnifiedTaskTable } from './UnifiedTaskTable';
+import { ClientFilter, distinctClients } from './ClientFilter';
 
 export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) => void }) {
   const [dbTasks, setDbTasks] = useState<TaskRow[] | null>(null);
@@ -17,6 +18,7 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
   const [connections, setConnections] = useState<ConnectionsData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
+  const [clientFilter, setClientFilter] = useState('');
 
   const [choosingKind, setChoosingKind] = useState(false);
   const [creatingKind, setCreatingKind] = useState<'db' | 'file' | null>(null);
@@ -41,7 +43,9 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
     refresh(showInactive);
   }, [refresh, showInactive]);
 
-  const rows = dbTasks && fileTasks ? mergeTasks(dbTasks, fileTasks) : null;
+  const allRows = dbTasks && fileTasks ? mergeTasks(dbTasks, fileTasks) : null;
+  const clientOptions = distinctClients(allRows, (r) => r.clientId, (r) => r.clientName);
+  const rows = allRows && clientFilter ? allRows.filter((r) => r.clientId === clientFilter) : allRows;
   const loading = rows == null;
 
   return (
@@ -54,6 +58,7 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
           </p>
         </div>
         <div className="flex items-center gap-4">
+          <ClientFilter clients={clientOptions} value={clientFilter} onChange={setClientFilter} />
           <Switch checked={showInactive} onChange={() => setShowInactive((v) => !v)} label="Mostrar inactivas" />
           <Button
             size="sm"
@@ -80,7 +85,11 @@ export function Tareas({ onSelectClient }: { onSelectClient: (clientId: string) 
         <UnifiedTaskTable rows={rows} onChanged={() => refresh(showInactive)} onSelectClient={onSelectClient} />
       )}
 
-      {rows && rows.length === 0 && <p style={{ color: 'var(--muted)' }}>No hay tareas configuradas todavía.</p>}
+      {rows && rows.length === 0 && (
+        <p style={{ color: 'var(--muted)' }}>
+          {clientFilter ? 'Este cliente no tiene tareas.' : 'No hay tareas configuradas todavía.'}
+        </p>
+      )}
 
       {choosingKind && (
         <AddBackupChoiceModal

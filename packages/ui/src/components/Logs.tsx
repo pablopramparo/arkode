@@ -3,8 +3,10 @@ import { Button } from '@heroui/react';
 import type { LogEventLevel } from 'engine-core';
 import { fetchLogs, type LogEventRow } from '../lib/logsClient';
 import { fetchFileLogs } from '../lib/fileBackupClient';
+import { fetchClients } from '../lib/clientsClient';
 import { formatDateTime } from '../lib/format';
 import { ClientLink } from './ClientLink';
+import { ClientFilter } from './ClientFilter';
 import { primaryPillStyle } from '../lib/pillStyles';
 
 type Domain = 'database' | 'files';
@@ -50,7 +52,15 @@ export function Logs({ onSelectClient }: { onSelectClient: (clientId: string) =>
   const [level, setLevel] = useState<LogEventLevel | ''>('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [clientFilter, setClientFilter] = useState('');
+  const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
   const [page, setPage] = useState(0);
+
+  useEffect(() => {
+    fetchClients({ includeInactive: true })
+      .then((cs) => setClients(cs.map((c) => ({ id: c.id, name: c.name }))))
+      .catch(() => setClients([]));
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -61,6 +71,7 @@ export function Logs({ onSelectClient }: { onSelectClient: (clientId: string) =>
         level: level || undefined,
         from: from ? `${from}T00:00:00.000Z` : undefined,
         to: to ? `${to}T23:59:59.999Z` : undefined,
+        clientId: clientFilter || undefined,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
       });
@@ -71,7 +82,7 @@ export function Logs({ onSelectClient }: { onSelectClient: (clientId: string) =>
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo conectar con el motor de backups.');
     }
-  }, [domain, search, step, level, from, to, page]);
+  }, [domain, search, step, level, from, to, clientFilter, page]);
 
   useEffect(() => {
     refresh();
@@ -155,6 +166,7 @@ export function Logs({ onSelectClient }: { onSelectClient: (clientId: string) =>
         <input type="date" style={inputStyle} value={from} onChange={(e) => updateFilter(() => setFrom(e.target.value))} />
         <span style={{ color: 'var(--muted)' }}>a</span>
         <input type="date" style={inputStyle} value={to} onChange={(e) => updateFilter(() => setTo(e.target.value))} />
+        <ClientFilter clients={clients} value={clientFilter} onChange={(v) => updateFilter(() => setClientFilter(v))} />
       </div>
 
       {error && (

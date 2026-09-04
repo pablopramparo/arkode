@@ -19,6 +19,8 @@ export interface FetchLogsOptions {
   level?: LogEventLevel;
   from?: string;
   to?: string;
+  /** Restrict to events whose run belongs to this client. */
+  clientId?: string;
   limit?: number;
   offset?: number;
 }
@@ -30,6 +32,7 @@ export async function fetchLogs(opts: FetchLogsOptions = {}): Promise<LogsResult
   if (opts.level) params.set('level', opts.level);
   if (opts.from) params.set('from', opts.from);
   if (opts.to) params.set('to', opts.to);
+  if (opts.clientId) params.set('client', opts.clientId);
   if (opts.limit) params.set('limit', String(opts.limit));
   if (opts.offset) params.set('offset', String(opts.offset));
   const query = params.toString();

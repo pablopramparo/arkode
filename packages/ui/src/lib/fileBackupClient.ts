@@ -274,6 +274,7 @@ export async function fetchFileLogs(opts: FetchLogsOptions = {}): Promise<LogsRe
   if (opts.level) params.set('level', opts.level);
   if (opts.from) params.set('from', opts.from);
   if (opts.to) params.set('to', opts.to);
+  if (opts.clientId) params.set('client', opts.clientId);
   if (opts.limit) params.set('limit', String(opts.limit));
   if (opts.offset) params.set('offset', String(opts.offset));
   const query = params.toString();

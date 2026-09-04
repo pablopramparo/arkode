@@ -46,6 +46,7 @@ export function createFileBackupLogEventsRepo(db: Database): FileBackupLogEvents
       AND (@level IS NULL OR level = @level)
       AND (@from IS NULL OR created_at >= @from)
       AND (@to IS NULL OR created_at <= @to)
+      AND (@clientId IS NULL OR run_id IN (SELECT id FROM file_backup_runs WHERE client_id = @clientId))
   `;
   const listStmt = db.prepare<Record<string, unknown>, FileBackupLogEventRow>(
     `SELECT * FROM file_backup_log_events ${whereClause} ORDER BY created_at DESC, id DESC LIMIT @limit OFFSET @offset`
@@ -69,6 +70,7 @@ export function createFileBackupLogEventsRepo(db: Database): FileBackupLogEvents
         level: opts?.level ?? null,
         from: opts?.from ?? null,
         to: opts?.to ?? null,
+        clientId: opts?.clientId ?? null,
         limit: opts?.limit ?? 50,
         offset: opts?.offset ?? 0,
       };

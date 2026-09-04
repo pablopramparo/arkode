@@ -10,6 +10,7 @@ import { StatCard } from './StatCard';
 import { ProgressBar } from './ProgressBar';
 import { isLiveProgress } from '../lib/progress';
 import { isInterruptedRun, friendlyRunError } from '../lib/runStatus';
+import { ClientFilter, distinctClients } from './ClientFilter';
 import { AlertTriangleIcon, CheckCircleIcon, ClipboardIcon, EyeIcon, PlayIcon, PulseIcon, UsersIcon } from './icons';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { IconButton } from './IconButton';
@@ -58,6 +59,7 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [actionState, setActionState] = useState<Record<string, RowActionState>>({});
+  const [clientFilter, setClientFilter] = useState('');
 
   const refresh = useCallback(async () => {
     try {
@@ -123,10 +125,13 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
     }));
   }
 
-  const problemCount = rows?.filter(isProblemRow).length ?? 0;
-  const distinctClients = rows ? new Set(rows.map((r) => r.clientId)).size : 0;
+  const clientOptions = distinctClients(rows, (r) => r.clientId, (r) => r.client);
+  const visibleRows = rows && clientFilter ? rows.filter((r) => r.clientId === clientFilter) : rows;
+
+  const problemCount = visibleRows?.filter(isProblemRow).length ?? 0;
+  const clientCount = visibleRows ? new Set(visibleRows.map((r) => r.clientId)).size : 0;
   const recentSuccessCount =
-    rows?.filter((r) => r.status === 'Success' && (ageInHours(r.latestAttemptAt) ?? Infinity) <= RECENT_SUCCESS_HOURS)
+    visibleRows?.filter((r) => r.status === 'Success' && (ageInHours(r.latestAttemptAt) ?? Infinity) <= RECENT_SUCCESS_HOURS)
       .length ?? 0;
 
   return (
@@ -138,25 +143,28 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
             Resumen general de tus backups
           </p>
         </div>
-        <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={refresh}>
-          Actualizar
-        </Button>
+        <div className="flex items-center gap-3">
+          <ClientFilter clients={clientOptions} value={clientFilter} onChange={setClientFilter} />
+          <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={refresh}>
+            Actualizar
+          </Button>
+        </div>
       </header>
 
       <InstallHealthBanner />
       <SchedulerStatusBanner />
 
-      {rows && (
+      {visibleRows && (
         <div className="mb-6 grid grid-cols-4 gap-4">
-          <StatCard icon={<UsersIcon />} value={distinctClients} label="Clientes activos" color="blue" />
-          <StatCard icon={<ClipboardIcon />} value={rows.length} label="Tareas" sublabel="en total" color="purple" />
+          <StatCard icon={<UsersIcon />} value={clientCount} label="Clientes activos" color="blue" />
+          <StatCard icon={<ClipboardIcon />} value={visibleRows.length} label="Tareas" sublabel="en total" color="purple" />
           <StatCard
             icon={<CheckCircleIcon />}
             value={recentSuccessCount}
             label="Backups exitosos"
             sublabel="últimas 24 h"
             color="green"
-            alert={rows.length > 0 && recentSuccessCount === 0}
+            alert={visibleRows.length > 0 && recentSuccessCount === 0}
           />
           <StatCard
             icon={<AlertTriangleIcon />}
@@ -178,16 +186,16 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
         </div>
       )}
 
-      {rows && rows.length === 0 && !error && (
+      {visibleRows && visibleRows.length === 0 && !error && (
         <p style={{ color: 'var(--muted)' }}>No hay clientes con tareas configuradas todavía.</p>
       )}
 
-      {rows && rows.length > 0 && (
+      {visibleRows && visibleRows.length > 0 && (
         <div className="rounded-xl border" style={{ borderColor: 'var(--border)' }}>
           <div className="border-b px-4 py-3" style={{ borderColor: 'var(--border)' }}>
             <div className="text-sm font-semibold">Estado de tareas</div>
             <div className="text-xs" style={{ color: 'var(--muted)' }}>
-              {problemCount > 0 ? `${problemCount} de ${rows.length} tareas necesitan atención` : 'Todo en orden'}
+              {problemCount > 0 ? `${problemCount} de ${visibleRows.length} tareas necesitan atención` : 'Todo en orden'}
             </div>
           </div>
           <div className="overflow-x-auto">
@@ -204,7 +212,7 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => {
+                {visibleRows.map((row) => {
                   const problem = isProblemRow(row);
                   const state = actionState[row.taskId];
                   const hasDetail = Boolean(

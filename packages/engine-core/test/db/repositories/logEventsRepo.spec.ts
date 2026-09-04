@@ -90,4 +90,27 @@ describe('logEventsRepo', () => {
 
     expect(ctx.logEventsRepo.listDistinctSteps()).toEqual(['connect', 'download']);
   });
+
+  it('filters by clientId (resolved via the run row)', () => {
+    const ctx = createTestContext();
+
+    function seedRunForClient(name: string): { clientId: string; runId: string } {
+      const client = ctx.clientsRepo.create({ name, localBasePath: `D:/Backups/${name}` });
+      const transport = ctx.transportsRepo.createSftp({ clientId: client.id, name: 'sftp', host: 'h', username: 'u', privateKeyPath: 'k' });
+      const task = ctx.tasksRepo.createFetchExisting({ clientId: client.id, transportId: transport.id, name: 'task', dbEngine: 'unknown', remotePath: '/b' });
+      const run = ctx.runsRepo.create({ taskId: task.id, clientId: client.id, strategy: 'fetch_existing', transportId: transport.id, databaseConnectionId: null, pid: 1 });
+      return { clientId: client.id, runId: run.id };
+    }
+
+    const a = seedRunForClient('A');
+    const b = seedRunForClient('B');
+    ctx.logEventsRepo.append(a.runId, 'info', 'connect', 'for-A');
+    ctx.logEventsRepo.append(b.runId, 'info', 'connect', 'for-B');
+
+    const scoped = ctx.logEventsRepo.listRecent({ clientId: a.clientId });
+    expect(scoped.total).toBe(1);
+    expect(scoped.events.map((e) => e.message)).toEqual(['for-A']);
+
+    expect(ctx.logEventsRepo.listRecent().total).toBe(2);
+  });
 });

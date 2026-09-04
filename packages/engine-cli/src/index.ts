@@ -2728,6 +2728,7 @@ program
           level: (url.searchParams.get('level') as any) ?? undefined,
           from: url.searchParams.get('from') ?? undefined,
           to: url.searchParams.get('to') ?? undefined,
+          clientId: url.searchParams.get('client') ?? undefined,
           limit: limitParam ? Number(limitParam) : undefined,
           offset: offsetParam ? Number(offsetParam) : undefined,
         });
@@ -2762,6 +2763,7 @@ program
           level: (url.searchParams.get('level') as any) ?? undefined,
           from: url.searchParams.get('from') ?? undefined,
           to: url.searchParams.get('to') ?? undefined,
+          clientId: url.searchParams.get('client') ?? undefined,
           limit: limitParam ? Number(limitParam) : undefined,
           offset: offsetParam ? Number(offsetParam) : undefined,
         });

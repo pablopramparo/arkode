@@ -39,6 +39,8 @@ export interface ListLogEventsOptions {
   /** Inclusive ISO-8601 bounds on created_at. */
   from?: string;
   to?: string;
+  /** Restrict to events whose run belongs to this client (resolved via the run row). */
+  clientId?: string;
   /** Default 50. */
   limit?: number;
   /** Default 0. */
@@ -64,6 +66,7 @@ export function createLogEventsRepo(db: Database): LogEventsRepo {
       AND (@level IS NULL OR level = @level)
       AND (@from IS NULL OR created_at >= @from)
       AND (@to IS NULL OR created_at <= @to)
+      AND (@clientId IS NULL OR run_id IN (SELECT id FROM backup_runs WHERE client_id = @clientId))
   `;
   const listStmt = db.prepare<Record<string, unknown>, LogEventRow>(
     `SELECT * FROM log_events ${whereClause} ORDER BY created_at DESC, id DESC LIMIT @limit OFFSET @offset`
@@ -87,6 +90,7 @@ export function createLogEventsRepo(db: Database): LogEventsRepo {
         level: opts?.level ?? null,
         from: opts?.from ?? null,
         to: opts?.to ?? null,
+        clientId: opts?.clientId ?? null,
         limit: opts?.limit ?? 50,
         offset: opts?.offset ?? 0,
       };

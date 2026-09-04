@@ -14,6 +14,7 @@ import {
 } from '../lib/connectionsClient';
 import type { ConnectionTestResult } from 'engine-core';
 import { Switch } from './Switch';
+import { ClientFilter } from './ClientFilter';
 import { IconButton } from './IconButton';
 import { EditIcon, PulseIcon, HelpCircleIcon } from './icons';
 import { ConnectionEditModal } from './ConnectionEditModal';
@@ -350,6 +351,7 @@ export function Conexiones({ onSelectClient }: { onSelectClient: (clientId: stri
   const [data, setData] = useState<ConnectionsData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
+  const [clientFilter, setClientFilter] = useState('');
   const [actionState, setActionState] = useState<Record<string, RowActionState>>({});
 
   const [showCreate, setShowCreate] = useState(false);
@@ -406,7 +408,9 @@ export function Conexiones({ onSelectClient }: { onSelectClient: (clientId: stri
     ? [
         ...data.transports.map((t): ConnectionRow => ({ kind: 'transport', id: t.id, data: t })),
         ...data.databaseConnections.map((d): ConnectionRow => ({ kind: 'database', id: d.id, data: d })),
-      ].sort((a, b) => a.data.clientName.localeCompare(b.data.clientName) || a.data.name.localeCompare(b.data.name))
+      ]
+        .filter((r) => !clientFilter || r.data.clientId === clientFilter)
+        .sort((a, b) => a.data.clientName.localeCompare(b.data.clientName) || a.data.name.localeCompare(b.data.name))
     : [];
 
   return (
@@ -419,6 +423,7 @@ export function Conexiones({ onSelectClient }: { onSelectClient: (clientId: stri
           </p>
         </div>
         <div className="flex items-center gap-4">
+          <ClientFilter clients={data?.clients ?? []} value={clientFilter} onChange={setClientFilter} />
           <Switch checked={showInactive} onChange={() => setShowInactive((v) => !v)} label="Mostrar inactivas" />
           <Button
             size="sm"
