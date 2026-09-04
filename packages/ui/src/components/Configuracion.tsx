@@ -21,6 +21,8 @@ import {
   type DetectedTool,
 } from '../lib/configClient';
 import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
+import { fetchDashboardStatus } from '../lib/statusClient';
+import { IN_PROGRESS_RUN_STATUSES } from '../lib/tasksClient';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { Switch } from './Switch';
 import { SchedulerStatusBanner } from './SchedulerStatusBanner';
@@ -505,6 +507,25 @@ export function Configuracion() {
 
   async function handleInstallUpdate() {
     if (!availableUpdate) return;
+
+    // The installer stops the scheduler service and force-kills engine-cli.exe
+    // before touching any file — so installing now would interrupt anything
+    // running. Warn (don't block: the user can still choose to proceed).
+    try {
+      const rows = await fetchDashboardStatus();
+      const running = rows.filter((r) => (IN_PROGRESS_RUN_STATUSES as string[]).includes(r.status));
+      if (running.length > 0) {
+        const names = running.map((r) => `${r.client} · ${r.task}`).join('\n  ');
+        const proceed = window.confirm(
+          `Hay ${running.length === 1 ? 'un backup' : `${running.length} backups`} en curso:\n  ${names}\n\n` +
+            'Instalar la actualización ahora lo va a interrumpir (queda como "Interrumpida" y se reintenta en la próxima corrida). ¿Instalar igual?'
+        );
+        if (!proceed) return;
+      }
+    } catch {
+      // If /status isn't reachable, don't get in the way of the update.
+    }
+
     setUpdateCheck('downloading');
     setUpdateError(null);
     try {

@@ -9,6 +9,7 @@ import { StatusChip } from './StatusChip';
 import { StatCard } from './StatCard';
 import { ProgressBar } from './ProgressBar';
 import { isLiveProgress } from '../lib/progress';
+import { isInterruptedRun, friendlyRunError } from '../lib/runStatus';
 import { AlertTriangleIcon, CheckCircleIcon, ClipboardIcon, EyeIcon, PlayIcon, PulseIcon, UsersIcon } from './icons';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { IconButton } from './IconButton';
@@ -25,6 +26,12 @@ const STALE_THRESHOLD_HOURS = 26;
 const RECENT_SUCCESS_HOURS = 24;
 
 function isProblemRow(row: DashboardRow): boolean {
+  // An interrupted run (update / reboot / power cut) isn't a backup failure —
+  // only flag it if the last *good* backup is also missing or stale.
+  if (isInterruptedRun(row.status, row.latestErrorMessage)) {
+    const hours = ageInHours(row.lastGoodBackupAt);
+    return hours == null || hours > STALE_THRESHOLD_HOURS;
+  }
   if (row.status === 'Failed' || row.status === 'Warning' || row.status === 'NeverRun') return true;
   const hours = ageInHours(row.lastGoodBackupAt);
   return hours != null && hours > STALE_THRESHOLD_HOURS;
@@ -225,7 +232,7 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                         </td>
                         <td className="px-4 py-2.5">{formatSize(row.sizeBytes)}</td>
                         <td className="px-4 py-2.5">
-                          <StatusChip status={row.status} />
+                          <StatusChip status={row.status} errorMessage={row.latestErrorMessage} />
                         </td>
                         <td
                           className="px-4 py-2.5"
@@ -265,7 +272,13 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                             {row.status === 'Failed' && row.latestErrorMessage && (
                               <IconButton
                                 icon={<EyeIcon />}
-                                label={state?.errorExpanded ? 'Ocultar error' : 'Ver error'}
+                                label={
+                                  state?.errorExpanded
+                                    ? 'Ocultar detalle'
+                                    : isInterruptedRun(row.status, row.latestErrorMessage)
+                                      ? 'Ver detalle'
+                                      : 'Ver error'
+                                }
                                 onPress={() => toggleError(row.taskId)}
                               />
                             )}
@@ -322,7 +335,14 @@ export function Dashboard({ onSelectClient }: { onSelectClient: (clientId: strin
                               </div>
                             )}
                             {!state?.actionError && !state?.testResult && state?.errorExpanded && row.latestErrorMessage && (
-                              <span style={{ color: 'var(--danger)', fontFamily: 'monospace' }}>{row.latestErrorMessage}</span>
+                              <span
+                                style={{
+                                  color: isInterruptedRun(row.status, row.latestErrorMessage) ? 'var(--muted)' : 'var(--danger)',
+                                  fontFamily: isInterruptedRun(row.status, row.latestErrorMessage) ? undefined : 'monospace',
+                                }}
+                              >
+                                {friendlyRunError(row.status, row.latestErrorMessage)}
+                              </span>
                             )}
                           </td>
                         </tr>

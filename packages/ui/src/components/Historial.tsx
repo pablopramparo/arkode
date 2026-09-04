@@ -10,6 +10,7 @@ import {
 import { mergeRuns, type UnifiedRunRow } from '../lib/unifiedRuns';
 import { formatDateTime, formatDuration, formatSize } from '../lib/format';
 import { isLiveProgress } from '../lib/progress';
+import { isInterruptedRun, friendlyRunError } from '../lib/runStatus';
 import { ProgressBar } from './ProgressBar';
 import { StatusChip } from './StatusChip';
 import { IconButton, IconLinkButton } from './IconButton';
@@ -201,7 +202,7 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
                         <BackupSetBadge name={run.backupSetName} />
                       </td>
                       <td className="px-4 py-2.5">
-                        <StatusChip status={run.status} />
+                        <StatusChip status={run.status} errorMessage={run.errorMessage} />
                       </td>
                       <td className="px-4 py-2.5">{formatDateTime(run.startedAt)}</td>
                       <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
@@ -265,8 +266,15 @@ export function Historial({ onSelectClient }: { onSelectClient: (clientId: strin
                     )}
                     {expanded && run.errorMessage && (
                       <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
-                        <td colSpan={7} className="px-4 py-2 text-xs" style={{ color: 'var(--danger)', fontFamily: 'monospace' }}>
-                          {run.errorMessage}
+                        <td
+                          colSpan={7}
+                          className="px-4 py-2 text-xs"
+                          style={{
+                            color: isInterruptedRun(run.status, run.errorMessage) ? 'var(--muted)' : 'var(--danger)',
+                            fontFamily: isInterruptedRun(run.status, run.errorMessage) ? undefined : 'monospace',
+                          }}
+                        >
+                          {friendlyRunError(run.status, run.errorMessage)}
                         </td>
                       </tr>
                     )}

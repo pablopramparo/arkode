@@ -271,7 +271,7 @@ export function FileBackupsPanel({ clientId }: { clientId: string }) {
                       {run.taskName ?? '—'}
                     </td>
                     <td className="px-4 py-2.5">
-                      <StatusChip status={run.status} />
+                      <StatusChip status={run.status} errorMessage={run.errorMessage} />
                     </td>
                     <td className="px-4 py-2.5">
                       <RunMetrics run={run} />

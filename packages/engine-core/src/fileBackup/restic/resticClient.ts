@@ -78,6 +78,60 @@ function resticErrorMessage(err: unknown, command: string): string {
   return `restic ${command} failed: ${message}`;
 }
 
+const STALE_LOCK_RE = /already locked|unable to create lock|failed to create lock/i;
+
+/** Whether a restic error is "the repository is locked" (as opposed to any other failure). Checks the error message plus any captured stdout/stderr. */
+export function looksLikeStaleLock(err: unknown): boolean {
+  const parts = [
+    err instanceof Error ? err.message : String(err),
+    (err as ExecErrorWithOutput)?.stdout ?? '',
+    (err as ExecErrorWithOutput)?.stderr ?? '',
+  ];
+  return parts.some((p) => STALE_LOCK_RE.test(p));
+}
+
+/**
+ * `restic unlock` — removes locks restic can prove are stale (a lock left by
+ * a process that's no longer running on this host). It never removes a lock
+ * from a genuinely-live process, so it's safe to call unconditionally when
+ * we hit a lock error.
+ */
+export async function unlockRepository(repoPath: string, password: string): Promise<void> {
+  try {
+    await execRestic(['-r', repoPath, 'unlock'], password);
+  } catch (err) {
+    throw new Error(resticErrorMessage(err, 'unlock'));
+  }
+}
+
+/**
+ * Runs a restic operation, and if it fails because "the repository is
+ * already locked", clears the stale lock with `restic unlock` and retries
+ * once. For arkode this can only ever be a *stale* lock — `checkRepositoryLock`
+ * already serializes every restic operation against a repository, so there
+ * is never a legitimate concurrent restic process — and `restic unlock`
+ * itself won't touch a live lock, so the retry is safe. Closes the "a run
+ * killed mid-restic (update, reboot, power cut) leaves the repo locked until
+ * someone runs `restic unlock` by hand" gap.
+ */
+export async function withStaleLockRetry<T>(
+  repoPath: string,
+  password: string,
+  fn: () => Promise<T>,
+  // Injectable only so a test can assert the retry path without a real
+  // stale lock (which restic auto-clears on same-host dead PIDs, making it
+  // near-impossible to reproduce deterministically). Production never passes it.
+  unlock: (repoPath: string, password: string) => Promise<void> = unlockRepository
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!looksLikeStaleLock(err)) throw err;
+    await unlock(repoPath, password);
+    return fn();
+  }
+}
+
 export interface ResticBackupStatus {
   /** 0..1 */
   percentDone?: number;
@@ -191,67 +245,72 @@ export async function runBackup(
 ): Promise<ResticBackupSummary> {
   const args = ['-r', repoPath, 'backup', sourcePath, '--json', '--host', RESTIC_HOST, '--tag', opts.tag];
 
-  const warnings: string[] = [];
-  let summary: Record<string, unknown> | null = null;
+  // Fresh per attempt — withStaleLockRetry may call this twice.
+  const attempt = async (): Promise<ResticBackupSummary> => {
+    const warnings: string[] = [];
+    let summary: Record<string, unknown> | null = null;
 
-  const handleLine = (line: string): void => {
-    let obj: Record<string, unknown>;
+    const handleLine = (line: string): void => {
+      let obj: Record<string, unknown>;
+      try {
+        obj = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        return; // restic interleaves the odd non-JSON progress line — skip it
+      }
+      if (obj.message_type === 'summary') {
+        summary = obj;
+      } else if (obj.message_type === 'status') {
+        opts.onStatus?.({
+          percentDone: obj.percent_done as number | undefined,
+          totalFiles: obj.total_files as number | undefined,
+          filesDone: obj.files_done as number | undefined,
+          totalBytes: obj.total_bytes as number | undefined,
+          bytesDone: obj.bytes_done as number | undefined,
+          secondsRemaining: obj.seconds_remaining as number | undefined,
+        });
+      } else if (obj.message_type === 'error') {
+        const item = obj.item ? ` (${obj.item as string})` : '';
+        const errorMessage = (obj.error as { message?: string } | undefined)?.message ?? 'unknown error';
+        warnings.push(`${(obj.during as string | undefined) ?? 'backup'}${item}: ${errorMessage}`);
+      }
+    };
+
+    let result: { code: number | null; stdout: string; stderr: string };
     try {
-      obj = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      return; // restic interleaves the odd non-JSON progress line — skip it
+      result = await spawnResticCollecting(args, password, handleLine);
+    } catch (err) {
+      throw new Error(resticErrorMessage(err, 'backup'));
     }
-    if (obj.message_type === 'summary') {
-      summary = obj;
-    } else if (obj.message_type === 'status') {
-      opts.onStatus?.({
-        percentDone: obj.percent_done as number | undefined,
-        totalFiles: obj.total_files as number | undefined,
-        filesDone: obj.files_done as number | undefined,
-        totalBytes: obj.total_bytes as number | undefined,
-        bytesDone: obj.bytes_done as number | undefined,
-        secondsRemaining: obj.seconds_remaining as number | undefined,
-      });
-    } else if (obj.message_type === 'error') {
-      const item = obj.item ? ` (${obj.item as string})` : '';
-      const errorMessage = (obj.error as { message?: string } | undefined)?.message ?? 'unknown error';
-      warnings.push(`${(obj.during as string | undefined) ?? 'backup'}${item}: ${errorMessage}`);
+    if (result.code !== 0) {
+      const fromStdout = exitErrorFromStdout(result.stdout);
+      throw new Error(
+        fromStdout ?? `restic backup failed (exit code ${result.code})${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}`
+      );
     }
+    // Cast defeats CFA narrowing `summary` to `never` — it's only ever
+    // assigned inside the handleLine closure, which TS can't see.
+    const summaryObj = summary as Record<string, unknown> | null;
+    if (!summaryObj) {
+      throw new Error('restic backup completed without reporting a summary line — treating as failed.');
+    }
+
+    return {
+      snapshotId: summaryObj.snapshot_id as string,
+      filesNew: summaryObj.files_new as number,
+      filesChanged: summaryObj.files_changed as number,
+      filesUnmodified: summaryObj.files_unmodified as number,
+      dirsNew: summaryObj.dirs_new as number,
+      dirsChanged: summaryObj.dirs_changed as number,
+      totalFilesProcessed: summaryObj.total_files_processed as number,
+      totalBytesProcessed: summaryObj.total_bytes_processed as number,
+      dataAdded: summaryObj.data_added as number,
+      dataAddedPacked: summaryObj.data_added_packed as number,
+      durationMs: Math.round(((summaryObj.total_duration as number | undefined) ?? 0) * 1000),
+      warnings,
+    };
   };
 
-  let result: { code: number | null; stdout: string; stderr: string };
-  try {
-    result = await spawnResticCollecting(args, password, handleLine);
-  } catch (err) {
-    throw new Error(resticErrorMessage(err, 'backup'));
-  }
-  if (result.code !== 0) {
-    const fromStdout = exitErrorFromStdout(result.stdout);
-    throw new Error(
-      fromStdout ?? `restic backup failed (exit code ${result.code})${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}`
-    );
-  }
-  // Cast defeats CFA narrowing `summary` to `never` — it's only ever
-  // assigned inside the handleLine closure, which TS can't see.
-  const summaryObj = summary as Record<string, unknown> | null;
-  if (!summaryObj) {
-    throw new Error('restic backup completed without reporting a summary line — treating as failed.');
-  }
-
-  return {
-    snapshotId: summaryObj.snapshot_id as string,
-    filesNew: summaryObj.files_new as number,
-    filesChanged: summaryObj.files_changed as number,
-    filesUnmodified: summaryObj.files_unmodified as number,
-    dirsNew: summaryObj.dirs_new as number,
-    dirsChanged: summaryObj.dirs_changed as number,
-    totalFilesProcessed: summaryObj.total_files_processed as number,
-    totalBytesProcessed: summaryObj.total_bytes_processed as number,
-    dataAdded: summaryObj.data_added as number,
-    dataAddedPacked: summaryObj.data_added_packed as number,
-    durationMs: Math.round(((summaryObj.total_duration as number | undefined) ?? 0) * 1000),
-    warnings,
-  };
+  return withStaleLockRetry(repoPath, password, attempt);
 }
 
 /**
@@ -315,7 +374,7 @@ export async function forget(
 
   let stdout: string;
   try {
-    ({ stdout } = await execRestic(args, password));
+    ({ stdout } = await withStaleLockRetry(repoPath, password, () => execRestic(args, password)));
   } catch (err) {
     throw new Error(resticErrorMessage(err, 'forget'));
   }
@@ -387,7 +446,7 @@ async function directorySizeBytes(dir: string): Promise<number> {
 export async function prune(repoPath: string, password: string, opts: { maxUnused: string }): Promise<{ bytesReclaimed: number }> {
   const before = await directorySizeBytes(repoPath);
   try {
-    await execRestic(['-r', repoPath, 'prune', '--max-unused', opts.maxUnused], password);
+    await withStaleLockRetry(repoPath, password, () => execRestic(['-r', repoPath, 'prune', '--max-unused', opts.maxUnused], password));
   } catch (err) {
     throw new Error(resticErrorMessage(err, 'prune'));
   }
@@ -406,7 +465,7 @@ export async function check(repoPath: string, password: string, opts: { readData
   if (opts.readData) args.push('--read-data');
   let stdout: string;
   try {
-    ({ stdout } = await execRestic(args, password));
+    ({ stdout } = await withStaleLockRetry(repoPath, password, () => execRestic(args, password)));
   } catch (err) {
     return { ok: false, message: resticErrorMessage(err, 'check') };
   }

@@ -28,6 +28,7 @@ import type { ConnectionTestResult, DirectDumpCompatibilityResult } from 'engine
 import { StatusChip } from './StatusChip';
 import { ProgressBar } from './ProgressBar';
 import { isLiveProgress } from '../lib/progress';
+import { isInterruptedRun, friendlyRunError } from '../lib/runStatus';
 import { Switch } from './Switch';
 import { IconButton, IconLinkButton } from './IconButton';
 import { DownloadIcon, EditIcon, EyeIcon, FolderIcon, PulseIcon, TrashIcon, UndoIcon } from './icons';
@@ -565,7 +566,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                             {formatSize(run.sizeBytes)}
                           </td>
                           <td className="px-4 py-2.5">
-                            <StatusChip status={run.status} />
+                            <StatusChip status={run.status} errorMessage={run.errorMessage} />
                           </td>
                           <td className="px-4 py-2.5">
                             <div className="flex items-center gap-1">
@@ -662,7 +663,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                               <BackupSetBadge name={run.backupSetName} />
                             </td>
                             <td className="px-4 py-2.5">
-                              <StatusChip status={run.status} />
+                              <StatusChip status={run.status} errorMessage={run.errorMessage} />
                             </td>
                             <td className="px-4 py-2.5">{formatDateTime(run.startedAt)}</td>
                             <td className="px-4 py-2.5" style={{ color: 'var(--muted)' }}>
@@ -726,8 +727,15 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                           )}
                           {expanded && run.errorMessage && (
                             <tr style={{ backgroundColor: 'color-mix(in oklab, var(--muted) 8%, transparent)' }}>
-                              <td colSpan={6} className="px-4 py-2 text-xs" style={{ color: 'var(--danger)', fontFamily: 'monospace' }}>
-                                {run.errorMessage}
+                              <td
+                                colSpan={6}
+                                className="px-4 py-2 text-xs"
+                                style={{
+                                  color: isInterruptedRun(run.status, run.errorMessage) ? 'var(--muted)' : 'var(--danger)',
+                                  fontFamily: isInterruptedRun(run.status, run.errorMessage) ? undefined : 'monospace',
+                                }}
+                              >
+                                {friendlyRunError(run.status, run.errorMessage)}
                               </td>
                             </tr>
                           )}

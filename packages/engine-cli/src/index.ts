@@ -67,6 +67,7 @@ import {
   type ReplicationDueDeps,
   type ReplicationContent,
   type RcloneDriveConfig,
+  resticClient,
 } from 'engine-core';
 import { buildContext } from './context.js';
 import { confirmHostInteractively } from './confirmHost.js';
@@ -1494,6 +1495,33 @@ program
     try {
       const key = exportFileBackupRepositoryKey(repository.id, ctx);
       console.log(key);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('file-repo:unlock')
+  .description("Clear a stale restic lock on a client's file-backup repository (restic itself only removes locks it can prove are dead — this is safe). Normally not needed: a lock left by a run killed mid-restic is cleared automatically on the next run.")
+  .requiredOption('--client <clientId>')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    const repository = ctx.fileBackupRepositoriesRepo.getByClientId(opts.client);
+    if (!repository) {
+      console.error(`Client ${opts.client} has no file-backup repository yet — create one with file-repo:create.`);
+      process.exitCode = 1;
+      return;
+    }
+    const password = ctx.secretStore.get(repository.passwordSecretRef);
+    if (!password) {
+      console.error(`Could not resolve the password for file-backup repository ${repository.id}.`);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      await resticClient.unlockRepository(repository.repoPath, password);
+      console.log(`Cleared any stale lock on ${repository.repoPath}.`);
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       process.exitCode = 1;
