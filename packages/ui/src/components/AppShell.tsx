@@ -1,12 +1,4 @@
-import {
-  ClipboardIcon,
-  ClockIcon,
-  DatabaseIcon,
-  DocumentIcon,
-  GridIcon,
-  SettingsIcon,
-  UsersIcon,
-} from "./icons";
+import { DocumentIcon, GridIcon, SettingsIcon, UsersIcon } from "./icons";
 import { TitleBar } from "./TitleBar";
 import { VaultLockChip } from "./VaultLockChip";
 import { GlobalSearch } from "./GlobalSearch";
@@ -28,25 +20,14 @@ interface NavItem {
   enabled: boolean;
 }
 
-// Mirrors project.md's actual v1 screen list (CLAUDE.md "UX direction") —
-// "Detalle de cliente" is a drill-down from Clientes, not its own sidebar
-// destination, so it has no entry here.
+// "Dashboard observa. Cliente administra." — Conexiones / Tareas / Historial
+// were removed from the sidebar (their screens, routes and endpoints stay:
+// Conexiones y Tareas se administran desde la ficha del cliente; el historial
+// global vive en Logs y en el Historial de cada cliente). "Detalle de cliente"
+// is a drill-down from Clientes, not its own sidebar destination.
 const NAV_ITEMS: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: <GridIcon />, enabled: true },
   { id: "clientes", label: "Clientes", icon: <UsersIcon />, enabled: true },
-  {
-    id: "conexiones",
-    label: "Conexiones",
-    icon: <DatabaseIcon />,
-    enabled: true,
-  },
-  { id: "tareas", label: "Tareas", icon: <ClockIcon />, enabled: true },
-  {
-    id: "historial",
-    label: "Historial",
-    icon: <ClipboardIcon />,
-    enabled: true,
-  },
   { id: "logs", label: "Logs", icon: <DocumentIcon />, enabled: true },
   {
     id: "configuracion",
@@ -121,15 +102,23 @@ export function AppShell({
           })}
         </nav>
 
-        <a
-          href="https://codebius.com"
-          target="_blank"
-          rel="noreferrer"
-          className="mt-auto px-2 pt-4 text-xs hover:underline"
-          style={{ color: "var(--muted)" }}
-        >
-          arkode by codebius
-        </a>
+        <div className="mt-auto px-2 pt-4">
+          <a
+            href="https://codebius.com"
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs hover:underline"
+            style={{ color: "var(--muted)" }}
+          >
+            arkode by codebius
+          </a>
+          <p
+            className="mt-1 text-[10px] leading-tight"
+            style={{ color: "var(--muted)", opacity: 0.8 }}
+          >
+            Backup your data. Not your drama.
+          </p>
+        </div>
         </aside>
 
         <main className="flex-1 overflow-y-auto">{children}</main>

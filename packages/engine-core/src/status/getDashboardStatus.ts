@@ -6,6 +6,7 @@ import type { FileBackupTasksRepo } from '../fileBackup/db/repositories/fileBack
 import type { FileBackupRunsRepo } from '../fileBackup/db/repositories/fileBackupRunsRepo.js';
 import type { BackupRunStatus, BackupStrategyKind, RunProgress } from '../types.js';
 import type { FileBackupSourceKind } from '../fileBackup/types.js';
+import { nextScheduledRunAt } from '../scheduler/nextOccurrence.js';
 
 export interface DashboardRow {
   /**
@@ -44,6 +45,14 @@ export interface DashboardRow {
   progress: RunProgress | null;
   /** Pure visual/reporting label, or null if unassigned — see BackupSet's own doc comment. */
   backupSetName: string | null;
+  /**
+   * ISO timestamp of this task's next scheduled run, or null when it has no
+   * enabled schedule. A forward projection of the same schedule fields
+   * isTaskDue/isFileBackupTaskDue read — see scheduler/nextOccurrence.ts.
+   * An overdue-but-not-yet-run task reads null here (it shows under the
+   * dashboard's "needs attention", not "upcoming").
+   */
+  nextRunAt: string | null;
 }
 
 export interface GetDashboardStatusDeps {
@@ -62,7 +71,13 @@ function liveProgress(run: { status: string; progress: RunProgress | null } | nu
   return run && IN_PROGRESS.has(run.status) ? run.progress : null;
 }
 
-export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[] {
+function ranToday(startedAt: string | null | undefined, now: Date): boolean {
+  if (!startedAt) return false;
+  const d = new Date(startedAt);
+  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+}
+
+export function getDashboardStatus(deps: GetDashboardStatusDeps, now: Date = new Date()): DashboardRow[] {
   return deps.clientsRepo.listActive().flatMap((client) => {
     const dbRows = deps.tasksRepo
       .listByClient(client.id)
@@ -70,7 +85,9 @@ export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[]
       .map((task): DashboardRow => {
         const latestRun = deps.runsRepo.getLatestByTask(task.id);
         const latestGoodRun = deps.runsRepo.getLatestWithFileByTask(task.id);
+        const latestScheduledRun = deps.runsRepo.getLatestScheduledByTask(task.id);
         const backupSet = task.backupSetId ? deps.backupSetsRepo.getById(task.backupSetId) : null;
+        const next = nextScheduledRunAt(task, now, ranToday(latestScheduledRun?.startedAt, now));
         return {
           kind: 'db',
           clientId: client.id,
@@ -86,6 +103,7 @@ export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[]
           latestErrorMessage: latestRun?.errorMessage ?? null,
           progress: liveProgress(latestRun),
           backupSetName: backupSet?.name ?? null,
+          nextRunAt: next ? next.toISOString() : null,
         };
       });
 
@@ -96,6 +114,9 @@ export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[]
         const latestRun = deps.fileBackupRunsRepo.getLatestByTask(task.id);
         const latestGoodRun = deps.fileBackupRunsRepo.getLatestSuccessfulByTask(task.id);
         const backupSet = task.backupSetId ? deps.backupSetsRepo.getById(task.backupSetId) : null;
+        // The file-backup scheduler (isFileBackupTaskDue) has no run trigger
+        // to distinguish manual vs scheduled, so "ran today" is any run today.
+        const next = nextScheduledRunAt(task, now, ranToday(latestRun?.startedAt, now));
         return {
           kind: 'file',
           clientId: client.id,
@@ -111,6 +132,7 @@ export function getDashboardStatus(deps: GetDashboardStatusDeps): DashboardRow[]
           latestErrorMessage: latestRun?.errorMessage ?? null,
           progress: liveProgress(latestRun),
           backupSetName: backupSet?.name ?? null,
+          nextRunAt: next ? next.toISOString() : null,
         };
       });
 

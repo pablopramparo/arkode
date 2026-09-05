@@ -104,6 +104,8 @@ export { deleteBackupRun } from './retention/deleteBackupRun.js';
 export type { DeleteBackupRunDeps } from './retention/deleteBackupRun.js';
 
 export { isTaskDue } from './scheduler/isTaskDue.js';
+export { nextScheduledRunAt } from './scheduler/nextOccurrence.js';
+export type { ScheduleShape } from './scheduler/nextOccurrence.js';
 export { runDueTasks } from './scheduler/runDueTasks.js';
 export type { RunDueResult } from './scheduler/runDueTasks.js';
 export { runSchedulerTick, SCHEDULER_HEARTBEAT_KEY } from './scheduler/runSchedulerTick.js';

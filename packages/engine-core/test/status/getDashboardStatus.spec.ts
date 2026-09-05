@@ -190,4 +190,20 @@ describe('getDashboardStatus', () => {
 
     expect(getDashboardStatus(ctx)).toHaveLength(0);
   });
+
+  it('nextRunAt is null for an unscheduled task and a future ISO for a scheduled one', () => {
+    const ctx = createTestContext();
+    const { task } = seedTask(ctx);
+    expect(getDashboardStatus(ctx)[0].nextRunAt).toBeNull();
+
+    ctx.tasksRepo.setSchedule(task.id, { scheduleTime: '03:00', scheduleEnabled: true, scheduleFrequency: 'daily' });
+    // A fixed "now" a little before 03:00 today → next run is today at 03:00.
+    const now = new Date();
+    now.setHours(1, 0, 0, 0);
+    const row = getDashboardStatus(ctx, now)[0];
+    expect(row.nextRunAt).not.toBeNull();
+    const next = new Date(row.nextRunAt!);
+    expect(next.getHours()).toBe(3);
+    expect(next.getTime()).toBeGreaterThan(now.getTime());
+  });
 });

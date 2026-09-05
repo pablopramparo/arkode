@@ -73,37 +73,68 @@ interface RowActionState {
   schedulerMessage?: string;
 }
 
+/** Tabs that belong to the "Backups / operación" domain (drives when BackupSetsSection shows). */
+const BACKUPS_TABS: Tab[] = ['tareas', 'conexiones', 'archivos', 'backups', 'historial', 'copia-externa'];
+
 function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab) => void; counts: Partial<Record<Tab, number>> }) {
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'resumen', label: 'Resumen' },
-    { id: 'tareas', label: 'Tareas' },
-    { id: 'conexiones', label: 'Conexiones' },
-    { id: 'credenciales', label: 'Credenciales' },
-    { id: 'urls', label: 'URLs' },
-    { id: 'snippets', label: 'Snippets' },
-    { id: 'procesos', label: 'Procesos' },
-    { id: 'notas', label: 'Notas' },
-    { id: 'archivos', label: 'Repositorio' },
-    { id: 'backups', label: 'Backups' },
-    { id: 'historial', label: 'Historial' },
-    { id: 'copia-externa', label: 'Copia externa' },
+  // One flat row — a single click still reaches any section. The BACKUPS /
+  // PROYECTO labels are non-interactive separators, not a second nav level.
+  const groups: { header?: string; tabs: { id: Tab; label: string }[] }[] = [
+    { tabs: [{ id: 'resumen', label: 'Resumen' }] },
+    {
+      header: 'Backups',
+      tabs: [
+        { id: 'tareas', label: 'Tareas' },
+        { id: 'conexiones', label: 'Conexiones' },
+        { id: 'archivos', label: 'Repositorio' },
+        { id: 'backups', label: 'Backups' },
+        { id: 'historial', label: 'Historial' },
+        { id: 'copia-externa', label: 'Copia externa' },
+      ],
+    },
+    {
+      header: 'Proyecto',
+      tabs: [
+        { id: 'credenciales', label: 'Credenciales' },
+        { id: 'urls', label: 'URLs' },
+        { id: 'snippets', label: 'Snippets' },
+        { id: 'procesos', label: 'Procesos' },
+        { id: 'notas', label: 'Notas' },
+      ],
+    },
   ];
   return (
-    <div className="flex flex-1 gap-1 overflow-x-auto" style={{ borderColor: 'var(--border)' }}>
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          onClick={() => onChange(tab.id)}
-          className="whitespace-nowrap px-3 py-2 text-sm font-medium"
-          style={{
-            color: active === tab.id ? 'var(--foreground)' : 'var(--muted)',
-            borderBottom: active === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
-          }}
+    <div className="flex flex-1 items-stretch overflow-x-auto" style={{ borderColor: 'var(--border)' }}>
+      {groups.map((group, i) => (
+        <div
+          key={group.header ?? 'resumen'}
+          className={`flex items-stretch gap-1 ${i > 0 ? 'ml-2 border-l pl-3' : ''}`}
+          style={{ borderColor: 'var(--border)' }}
         >
-          {tab.label}
-          {counts[tab.id] != null ? ` (${counts[tab.id]})` : ''}
-        </button>
+          {group.header && (
+            <span
+              className="flex select-none items-center pr-1 text-[10px] font-semibold uppercase tracking-wider"
+              style={{ color: 'var(--muted)' }}
+            >
+              {group.header}
+            </span>
+          )}
+          {group.tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => onChange(tab.id)}
+              className="whitespace-nowrap px-3 py-2 text-sm font-medium"
+              style={{
+                color: active === tab.id ? 'var(--foreground)' : 'var(--muted)',
+                borderBottom: active === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+              }}
+            >
+              {tab.label}
+              {counts[tab.id] != null ? ` (${counts[tab.id]})` : ''}
+            </button>
+          ))}
+        </div>
       ))}
     </div>
   );
@@ -121,7 +152,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   const [backupsPage, setBackupsPage] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [actionState, setActionState] = useState<Record<string, RowActionState>>({});
-  const [activeTab, setActiveTab] = useState<Tab>('tareas');
+  const [activeTab, setActiveTab] = useState<Tab>('resumen');
   const [showInactive, setShowInactive] = useState(false);
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [choosingKind, setChoosingKind] = useState(false);
@@ -241,8 +272,8 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
         fetchTasks({ includeInactive: true }),
         fetchFileBackupTasks(clientId, { includeInactive: true }),
         fetchConnections({ includeInactive: true }),
-        fetchRuns({ clientId, limit: 30 }),
-        fetchFileBackupRuns({ clientId, limit: 30 }),
+        fetchRuns({ clientId, limit: 100 }),
+        fetchFileBackupRuns({ clientId, limit: 100 }),
       ]);
       setClient(clients.find((c) => c.id === clientId) ?? null);
       setTasks(allTasks.filter((t) => t.clientId === clientId));
@@ -313,7 +344,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   const visibleConnectionRows = connectionRows.filter((r) => showInactive || r.data.isActive);
 
   // Historial tab: DB attempts + file runs, newest first, capped.
-  const historialRows = runs && fileRuns ? mergeRuns(runs, fileRuns).slice(0, 30) : null;
+  const historialRows = runs && fileRuns ? mergeRuns(runs, fileRuns).slice(0, 100) : null;
   // Backups tab: keep DB pagination; file snapshots (Success/Warning with a
   // real snapshot) all show on page 0, merged and re-sorted by date.
   const fileBackupRows = (fileRuns ?? [])
@@ -373,7 +404,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             )}
           </header>
 
-          <BackupSetsSection clientId={clientId} />
+          {BACKUPS_TABS.includes(activeTab) && <BackupSetsSection clientId={clientId} />}
 
           <div className="mb-4">
             <div className="flex border-b" style={{ borderColor: 'var(--border)' }}>
