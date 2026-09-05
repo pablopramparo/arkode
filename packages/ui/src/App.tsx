@@ -27,7 +27,7 @@ function App() {
   }
 
   return (
-    <AppShell screen={screen} onNavigate={navigate}>
+    <AppShell screen={screen} onNavigate={navigate} onSelectClient={goToClient}>
       {screen === 'dashboard' && <Dashboard onSelectClient={goToClient} />}
       {screen === 'clientes' &&
         (selectedClientId ? (

@@ -8,6 +8,8 @@ import {
   UsersIcon,
 } from "./icons";
 import { TitleBar } from "./TitleBar";
+import { VaultLockChip } from "./VaultLockChip";
+import { GlobalSearch } from "./GlobalSearch";
 import arkodeLogo from "../assets/arkode-logo-completo.png";
 
 export type Screen =
@@ -57,10 +59,12 @@ const NAV_ITEMS: NavItem[] = [
 export function AppShell({
   screen,
   onNavigate,
+  onSelectClient,
   children,
 }: {
   screen: Screen;
   onNavigate: (screen: Screen) => void;
+  onSelectClient?: (clientId: string) => void;
   children: React.ReactNode;
 }) {
   return (
@@ -75,8 +79,16 @@ export function AppShell({
               "color-mix(in oklab, var(--foreground) 3%, var(--background))",
           }}
         >
-        <div className="mb-6 px-2">
+        <div className="mb-4 px-2">
           <img src={arkodeLogo} alt="arkode by codebius" className="w-full" />
+        </div>
+
+        <div className="mb-3 px-2">
+          <GlobalSearch onSelectClient={onSelectClient} />
+        </div>
+
+        <div className="mb-4 flex flex-wrap items-center gap-2 px-2">
+          <VaultLockChip />
         </div>
 
         <nav className="flex flex-col gap-0.5">

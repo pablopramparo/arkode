@@ -123,7 +123,15 @@ export interface BaseTransportConfig {
   host: string;
   port: number;
   username: string;
-  privateKeyPath: string;
+  /**
+   * Path to the private key file. Supply this OR `privateKey` (in-memory
+   * bytes). A transport-backed adapter uses the path; a vault-credential
+   * adapter that runs while the vault is unlocked passes the bytes
+   * directly, so no plaintext key file has to exist on disk.
+   */
+  privateKeyPath?: string;
+  /** In-memory private key bytes — an alternative to `privateKeyPath`. */
+  privateKey?: Buffer;
   /** Resolved from SecretStore by the caller — never read from disk here. */
   passphrase?: string;
   /** Pinned fingerprint; undefined means "unknown host, ask before proceeding." */

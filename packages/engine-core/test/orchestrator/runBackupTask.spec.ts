@@ -317,4 +317,37 @@ describe('runBackupTask', () => {
       await expect(readFile(secondResult.run.localPath!, 'utf8')).resolves.toBe('second');
     });
   });
+
+  it('redacts a secret that leaked into a strategy error before it reaches log_events', async () => {
+    await withTempDir(async (dir) => {
+      const ctx = createTestContext();
+      const { task } = seedClientAndTask(ctx, dir);
+      const executor = createThrowingExecutor(
+        new Error('remote backup command exited with code 1. stderr: mysqldump: Access denied (password=hunter2)')
+      );
+
+      await runBackupTask(task, buildDeps(ctx, executor));
+
+      const messages = ctx.logEventsRepo.listRecent({ limit: 100 }).events.map((e) => e.message);
+      const resultLine = messages.find((m) => m.startsWith('Run failed:'));
+      expect(resultLine).toBeDefined();
+      expect(resultLine).toContain('password=[redacted]');
+      expect(messages.join('\n')).not.toContain('hunter2');
+    });
+  });
+
+  it('does not touch a sha256 checksum line in the logs (no false-positive redaction)', async () => {
+    await withTempDir(async (dir) => {
+      const ctx = createTestContext();
+      const { task } = seedClientAndTask(ctx, dir);
+      const executor = createFakeExecutor({ content: 'hello backup', provideChecksum: true });
+      const expectedDigest = createHash('sha256').update('hello backup').digest('hex');
+
+      await runBackupTask(task, buildDeps(ctx, executor));
+
+      const messages = ctx.logEventsRepo.listRecent({ limit: 100 }).events.map((e) => e.message);
+      const successLine = messages.find((m) => m.startsWith('Backup succeeded:'));
+      expect(successLine).toContain(`sha256 ${expectedDigest}`);
+    });
+  });
 });

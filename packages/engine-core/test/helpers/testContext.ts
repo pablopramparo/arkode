@@ -19,6 +19,13 @@ import { createFileBackupRetentionDeletionsRepo } from '../../src/fileBackup/db/
 import { createFileBackupLogEventsRepo } from '../../src/fileBackup/db/repositories/fileBackupLogEventsRepo.js';
 import { createReplicationTargetsRepo } from '../../src/db/repositories/replicationTargetsRepo.js';
 import { createReplicationRunsRepo } from '../../src/db/repositories/replicationRunsRepo.js';
+import { createVaultMetaRepo } from '../../src/vault/vaultMetaRepo.js';
+import { createVaultState, type VaultState } from '../../src/vault/vaultState.js';
+import { createVaultSecretStore } from '../../src/vault/vaultSecretStore.js';
+import { createVaultCredentialsRepo } from '../../src/db/repositories/vaultCredentialsRepo.js';
+import { createVaultUrlsRepo } from '../../src/db/repositories/vaultUrlsRepo.js';
+import { createVaultItemsRepo } from '../../src/db/repositories/vaultItemsRepo.js';
+import { createVaultBackupTargetsRepo } from '../../src/db/repositories/vaultBackupTargetsRepo.js';
 import type { SecretStore } from '../../src/secrets/types.js';
 
 /** In-memory Map-based SecretStore — never touches the real Windows Credential Manager in tests. */
@@ -61,6 +68,16 @@ export function createTestContext() {
   const replicationTargetsRepo = createReplicationTargetsRepo(db);
   const replicationRunsRepo = createReplicationRunsRepo(db);
 
+  // Encrypted credential vault (Tier 2). Auto-lock disabled by default in
+  // tests; a spec that exercises it passes its own timing via createVaultState.
+  const vaultMetaRepo = createVaultMetaRepo(db);
+  const vaultState: VaultState = createVaultState({ vaultMetaRepo, autoLockMs: null });
+  const vaultSecretStore = createVaultSecretStore(db, vaultState);
+  const vaultCredentialsRepo = createVaultCredentialsRepo(db);
+  const vaultUrlsRepo = createVaultUrlsRepo(db);
+  const vaultItemsRepo = createVaultItemsRepo(db);
+  const vaultBackupTargetsRepo = createVaultBackupTargetsRepo(db);
+
   return {
     db,
     clientsRepo,
@@ -82,6 +99,13 @@ export function createTestContext() {
     fileBackupLogEventsRepo,
     replicationTargetsRepo,
     replicationRunsRepo,
+    vaultMetaRepo,
+    vaultState,
+    vaultSecretStore,
+    vaultCredentialsRepo,
+    vaultUrlsRepo,
+    vaultItemsRepo,
+    vaultBackupTargetsRepo,
   };
 }
 

@@ -20,6 +20,13 @@ import {
   createFileBackupLogEventsRepo,
   createReplicationTargetsRepo,
   createReplicationRunsRepo,
+  createVaultMetaRepo,
+  createVaultState,
+  createVaultSecretStore,
+  createVaultCredentialsRepo,
+  createVaultUrlsRepo,
+  createVaultItemsRepo,
+  createVaultBackupTargetsRepo,
   throttleProgressSink,
   type ProgressSink,
 } from 'engine-core';
@@ -53,6 +60,21 @@ export function buildContext() {
   const replicationTargetsRepo = createReplicationTargetsRepo(db);
   const replicationRunsRepo = createReplicationRunsRepo(db);
 
+  // Encrypted credential vault (Tier 2). The DEK lives only in this
+  // process's memory once unlocked; a scheduled run in the arkode-scheduler
+  // service never unlocks it (it reads Tier 1 DPAPI secrets instead).
+  const vaultMetaRepo = createVaultMetaRepo(db);
+  const autoLockMinutes = Number.parseInt(settingsRepo.get('vaultAutoLockMinutes') ?? '', 10);
+  const vaultState = createVaultState({
+    vaultMetaRepo,
+    autoLockMs: Number.isFinite(autoLockMinutes) && autoLockMinutes > 0 ? autoLockMinutes * 60_000 : undefined,
+  });
+  const vaultSecretStore = createVaultSecretStore(db, vaultState);
+  const vaultCredentialsRepo = createVaultCredentialsRepo(db);
+  const vaultUrlsRepo = createVaultUrlsRepo(db);
+  const vaultItemsRepo = createVaultItemsRepo(db);
+  const vaultBackupTargetsRepo = createVaultBackupTargetsRepo(db);
+
   // Live-progress sinks: the orchestrators call onProgress(runId, progress)
   // repeatedly during a run; these throttle the writes (~1/s or on a real
   // change) and persist them to the run row, where the UI polls them. One
@@ -83,6 +105,13 @@ export function buildContext() {
     fileBackupLogEventsRepo,
     replicationTargetsRepo,
     replicationRunsRepo,
+    vaultMetaRepo,
+    vaultState,
+    vaultSecretStore,
+    vaultCredentialsRepo,
+    vaultUrlsRepo,
+    vaultItemsRepo,
+    vaultBackupTargetsRepo,
     dbProgressSink,
     fileProgressSink,
   };

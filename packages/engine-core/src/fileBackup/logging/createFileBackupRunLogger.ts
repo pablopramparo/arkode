@@ -2,6 +2,7 @@ import pino from 'pino';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { logsDir } from '../../paths.js';
+import { redactSecrets } from '../../logging/redact.js';
 import type { FileBackupLogEventsRepo } from '../db/repositories/fileBackupLogEventsRepo.js';
 
 export interface FileBackupRunLogger {
@@ -58,12 +59,13 @@ export function createFileBackupRunLogger(
   return {
     filePath,
     log(level, step, message, extra) {
+      const safeMessage = redactSecrets(message);
       try {
-        fileLogger?.[level]({ step, ...extra }, message);
+        fileLogger?.[level]({ step, ...extra }, safeMessage);
       } catch {
         /* best-effort */
       }
-      logEvents.append(runId, level, step, message);
+      logEvents.append(runId, level, step, safeMessage);
     },
   };
 }

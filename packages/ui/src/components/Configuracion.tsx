@@ -26,6 +26,7 @@ import { IN_PROGRESS_RUN_STATUSES } from '../lib/tasksClient';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { Switch } from './Switch';
 import { SchedulerStatusBanner } from './SchedulerStatusBanner';
+import { VaultBackupSection } from './VaultBackupSection';
 import arkodeIsotipo from '../assets/arkode-isotipo.png';
 
 const inputStyle: React.CSSProperties = {
@@ -691,6 +692,10 @@ export function Configuracion() {
               Versión, actualizaciones e inicio automático solo están disponibles corriendo la app de escritorio (Tauri), no en este modo de desarrollo web.
             </p>
           )}
+
+          <section className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+            <VaultBackupSection />
+          </section>
         </div>
       )}
 

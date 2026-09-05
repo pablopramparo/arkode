@@ -95,6 +95,7 @@ export { createMysqlDumpValidator } from './validators/mysqlDumpValidator.js';
 
 export { createRunLogger } from './logging/logger.js';
 export type { RunLogger } from './logging/logger.js';
+export { redactSecrets } from './logging/redact.js';
 
 export { applyRetention, resolveRetentionPolicy } from './retention/applyRetention.js';
 export type { RetentionPolicy, ApplyRetentionDeps } from './retention/applyRetention.js';
@@ -131,6 +132,109 @@ export type { DashboardRow, GetDashboardStatusDeps } from './status/getDashboard
 
 export { getSystemInfo } from './status/getSystemInfo.js';
 export type { SystemInfo, ToolPathStatus } from './status/getSystemInfo.js';
+
+export { getVaultStatus } from './status/getVaultStatus.js';
+export type { VaultStatus } from './status/getVaultStatus.js';
+
+// Encrypted credential vault (Tier 2) — master-password envelope encryption.
+export {
+  VAULT_FORMAT_VERSION,
+  DEFAULT_SCRYPT_PARAMS,
+  VaultCryptoError,
+  deriveKek,
+  generateSalt,
+  generateDek,
+  encryptBytes,
+  decryptBytes,
+  encryptString,
+  decryptString,
+  wrapDek,
+  unwrapDek,
+  buildVerifier,
+  verifierMatches,
+} from './vault/crypto.js';
+export type { ScryptParams } from './vault/crypto.js';
+export { createVaultMetaRepo } from './vault/vaultMetaRepo.js';
+export type { VaultMetaRepo, VaultMetaRow } from './vault/vaultMetaRepo.js';
+export {
+  createVaultState,
+  VaultLockedError,
+  VaultNotInitializedError,
+  VaultAlreadyInitializedError,
+  WrongMasterPasswordError,
+} from './vault/vaultState.js';
+export type { VaultState, VaultStateDeps } from './vault/vaultState.js';
+export { createVaultSecretStore } from './vault/vaultSecretStore.js';
+export type { VaultSecretStore } from './vault/vaultSecretStore.js';
+export { createVaultCredentialsRepo } from './db/repositories/vaultCredentialsRepo.js';
+export type {
+  VaultCredentialsRepo,
+  CreateVaultCredentialInput,
+  UpdateVaultCredentialInput,
+} from './db/repositories/vaultCredentialsRepo.js';
+export {
+  VAULT_CREDENTIAL_KINDS,
+  linkTargetForKind,
+} from './vault/types.js';
+export type {
+  VaultCredential,
+  VaultCredentialKind,
+  VaultCredentialSecret,
+  OperationalSyncState,
+} from './vault/types.js';
+export {
+  newCredentialSecretRef,
+  normalizeCredentialSecret,
+  writeCredentialSecret,
+  readCredentialSecret,
+} from './vault/credentialBlob.js';
+export { createVaultUrlsRepo } from './db/repositories/vaultUrlsRepo.js';
+export type {
+  VaultUrlsRepo,
+  CreateVaultUrlInput,
+  UpdateVaultUrlInput,
+} from './db/repositories/vaultUrlsRepo.js';
+export { createVaultItemsRepo } from './db/repositories/vaultItemsRepo.js';
+export type {
+  VaultItemsRepo,
+  CreateVaultItemInput,
+  UpdateVaultItemInput,
+} from './db/repositories/vaultItemsRepo.js';
+export type {
+  VaultUrl,
+  VaultItem,
+  VaultItemType,
+  VaultItemMetadata,
+  VaultProcessStep,
+} from './vault/types.js';
+export {
+  applyOperationalCopy,
+  syncOperationalCopy,
+  resyncOperationalCopies,
+} from './vault/syncOperationalCopy.js';
+export { createVaultBackupTargetsRepo } from './db/repositories/vaultBackupTargetsRepo.js';
+export type {
+  VaultBackupTargetsRepo,
+  VaultBackupTarget,
+  VaultBackupRun,
+  CreateVaultBackupTargetInput,
+} from './db/repositories/vaultBackupTargetsRepo.js';
+export {
+  exportVaultBuffer,
+  importVaultBuffer,
+  inspectVaultBuffer,
+  ArkvaultParseError,
+  ARKVAULT_FORMAT_VERSION,
+} from './vault/exportVault.js';
+export type { VaultBackupDeps, ImportVaultResult } from './vault/exportVault.js';
+export { runVaultBackup, runAllVaultBackups } from './vault/runVaultBackup.js';
+export type { RunVaultBackupDeps, RunAllVaultBackupsResult } from './vault/runVaultBackup.js';
+export type {
+  SyncOperationalCopyDeps,
+  SyncOperationalCopyResult,
+  SyncOperationalCopyOptions,
+  ResyncResult,
+} from './vault/syncOperationalCopy.js';
 
 export { runBackupTask } from './orchestrator/runBackupTask.js';
 export type { RunBackupTaskDeps, RunBackupTaskResult } from './orchestrator/runBackupTask.js';

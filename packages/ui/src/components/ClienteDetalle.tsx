@@ -45,9 +45,23 @@ import { FileBackupsPanel } from './FileBackupsPanel';
 import { ReplicationPanel } from './ReplicationPanel';
 import { BackupSetsSection } from './BackupSetsSection';
 import { BackupSetBadge } from './BackupSetBadge';
+import { CredencialesTab } from './CredencialesTab';
+import { UrlsTab, ItemsTab, ResumenTab } from './VaultKnowledgeTabs';
 import type { ConnectionRow } from './Conexiones';
 
-type Tab = 'tareas' | 'conexiones' | 'backups' | 'historial' | 'archivos' | 'copia-externa';
+type Tab =
+  | 'resumen'
+  | 'tareas'
+  | 'conexiones'
+  | 'credenciales'
+  | 'urls'
+  | 'snippets'
+  | 'procesos'
+  | 'notas'
+  | 'backups'
+  | 'historial'
+  | 'archivos'
+  | 'copia-externa';
 
 const BACKUPS_PAGE_SIZE = 20;
 
@@ -61,8 +75,14 @@ interface RowActionState {
 
 function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab) => void; counts: Partial<Record<Tab, number>> }) {
   const tabs: { id: Tab; label: string }[] = [
+    { id: 'resumen', label: 'Resumen' },
     { id: 'tareas', label: 'Tareas' },
     { id: 'conexiones', label: 'Conexiones' },
+    { id: 'credenciales', label: 'Credenciales' },
+    { id: 'urls', label: 'URLs' },
+    { id: 'snippets', label: 'Snippets' },
+    { id: 'procesos', label: 'Procesos' },
+    { id: 'notas', label: 'Notas' },
     { id: 'archivos', label: 'Repositorio' },
     { id: 'backups', label: 'Backups' },
     { id: 'historial', label: 'Historial' },
@@ -534,6 +554,13 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                 Este cliente no tiene conexiones todavía.
               </p>
             ))}
+
+          {activeTab === 'resumen' && <ResumenTab clientId={clientId} onGoToTab={(t) => setActiveTab(t as Tab)} />}
+          {activeTab === 'credenciales' && <CredencialesTab clientId={clientId} />}
+          {activeTab === 'urls' && <UrlsTab clientId={clientId} />}
+          {activeTab === 'snippets' && <ItemsTab clientId={clientId} type="snippet" />}
+          {activeTab === 'procesos' && <ItemsTab clientId={clientId} type="process" />}
+          {activeTab === 'notas' && <ItemsTab clientId={clientId} type="note" />}
 
           {activeTab === 'archivos' && <FileBackupsPanel clientId={clientId} />}
 

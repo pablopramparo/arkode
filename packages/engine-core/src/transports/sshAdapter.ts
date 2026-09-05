@@ -1,7 +1,7 @@
 import { Client, type SFTPWrapper } from 'ssh2';
 import { createWriteStream } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
+import { resolvePrivateKeyMaterial } from './privateKeyMaterial.js';
 import { pipeline } from 'node:stream/promises';
 import type { KnownHostsRepo } from '../db/repositories/knownHostsRepo.js';
 import type { SecretStore } from '../secrets/types.js';
@@ -111,7 +111,7 @@ export function createSshAdapter(config: SshTransportConfig, knownHosts: KnownHo
 
     async connect() {
       lastUnknownHost = undefined;
-      const privateKey = await readFile(config.privateKeyPath);
+      const privateKey = await resolvePrivateKeyMaterial(config);
       try {
         await connectClient(client, {
           host: config.host,

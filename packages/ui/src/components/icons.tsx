@@ -232,3 +232,32 @@ export function TrashIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function LockIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <rect x="4.5" y="10.5" width="15" height="10" rx="2" />
+      <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+      <circle cx="12" cy="15.5" r="1.25" />
+    </svg>
+  );
+}
+
+export function LockOpenIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <rect x="4.5" y="10.5" width="15" height="10" rx="2" />
+      <path d="M8 10.5V7a4 4 0 0 1 7.5-1.9" />
+      <circle cx="12" cy="15.5" r="1.25" />
+    </svg>
+  );
+}
+
+export function CopyIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}

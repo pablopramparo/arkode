@@ -30,6 +30,25 @@ import {
   listArkodeScheduledTaskNames,
   getDashboardStatus,
   getSystemInfo,
+  getVaultStatus,
+  VaultNotInitializedError,
+  VaultAlreadyInitializedError,
+  WrongMasterPasswordError,
+  VaultLockedError,
+  VaultCryptoError,
+  newCredentialSecretRef,
+  normalizeCredentialSecret,
+  writeCredentialSecret,
+  readCredentialSecret,
+  syncOperationalCopy,
+  resyncOperationalCopies,
+  type SyncOperationalCopyDeps,
+  exportVaultBuffer,
+  importVaultBuffer,
+  inspectVaultBuffer,
+  runAllVaultBackups,
+  ArkvaultParseError,
+  type RunVaultBackupDeps,
   detectInstalledDbTools,
   copyPrivateKeyIntoAppStorage,
   createPostgresToolRegistry,
@@ -73,6 +92,7 @@ import {
 } from 'engine-core';
 import { buildContext } from './context.js';
 import { confirmHostInteractively } from './confirmHost.js';
+import { promptPassword } from './promptPassword.js';
 
 /** The scheduled-task naming helper only ever interpolates a bare id — reused unchanged for file-backup task ids under a distinct alias for readability at call sites. */
 const scheduledTaskNameForFileBackupTask = scheduledTaskNameForId;
@@ -1262,6 +1282,540 @@ program
   });
 
 program
+  .command('vault:status')
+  .description('Show whether the encrypted credential vault is initialized and (in this process) unlocked.')
+  .action(() => {
+    const ctx = buildContext();
+    console.log(JSON.stringify(getVaultStatus(ctx.vaultState), null, 2));
+  });
+
+program
+  .command('vault:init')
+  .description('Set the master password for the encrypted credential vault (one-time). Prompts on the terminal; the password is never taken from argv.')
+  .action(async () => {
+    const ctx = buildContext();
+    if (ctx.vaultState.isInitialized()) {
+      console.error('The vault is already initialized. Use "vault:change-password" to change the master password.');
+      process.exitCode = 1;
+      return;
+    }
+    const password = await promptPassword('New master password: ');
+    if (password.length < 8) {
+      console.error('Master password must be at least 8 characters.');
+      process.exitCode = 1;
+      return;
+    }
+    const again = await promptPassword('Confirm master password: ');
+    if (again !== password) {
+      console.error('Passwords did not match.');
+      process.exitCode = 1;
+      return;
+    }
+    ctx.vaultState.init(password);
+    console.log('Vault initialized. Keep this password safe — there is no recovery if it is lost.');
+  });
+
+program
+  .command('vault:change-password')
+  .description('Change the vault master password. Prompts on the terminal.')
+  .action(async () => {
+    const ctx = buildContext();
+    if (!ctx.vaultState.isInitialized()) {
+      console.error('The vault is not initialized. Run "vault:init" first.');
+      process.exitCode = 1;
+      return;
+    }
+    const current = await promptPassword('Current master password: ');
+    const next = await promptPassword('New master password: ');
+    if (next.length < 8) {
+      console.error('Master password must be at least 8 characters.');
+      process.exitCode = 1;
+      return;
+    }
+    if ((await promptPassword('Confirm new master password: ')) !== next) {
+      console.error('Passwords did not match.');
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      ctx.vaultState.changePassword(current, next);
+      console.log('Master password changed.');
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+/** Prompts for the master password and unlocks the vault for this (short-lived) CLI process. */
+async function unlockVaultForCli(ctx: ReturnType<typeof buildContext>): Promise<boolean> {
+  if (!ctx.vaultState.isInitialized()) {
+    console.error('The vault is not initialized. Run "vault:init" first.');
+    return false;
+  }
+  if (ctx.vaultState.isUnlocked()) return true;
+  try {
+    ctx.vaultState.unlock(await promptPassword('Master password: '));
+    return true;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return false;
+  }
+}
+
+program
+  .command('vault:credential:list')
+  .description('List vault credentials (metadata only — no secrets, no unlock needed).')
+  .option('--client <clientId>', 'filter to one client')
+  .action((opts) => {
+    const ctx = buildContext();
+    const rows = opts.client
+      ? ctx.vaultCredentialsRepo.listByClient(opts.client)
+      : ctx.vaultCredentialsRepo.listAll();
+    console.log(JSON.stringify(rows, null, 2));
+  });
+
+program
+  .command('vault:credential:show')
+  .description('Show one credential including its decrypted secret. Prompts for the master password.')
+  .argument('<credentialId>')
+  .action(async (credentialId: string) => {
+    const ctx = buildContext();
+    const cred = ctx.vaultCredentialsRepo.getById(credentialId);
+    if (!cred) {
+      console.error(`Vault credential ${credentialId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!(await unlockVaultForCli(ctx))) {
+      process.exitCode = 1;
+      return;
+    }
+    const secret = cred.secretBlobRef ? readCredentialSecret(ctx.vaultSecretStore, cred.secretBlobRef) : {};
+    console.log(JSON.stringify({ ...cred, secret }, null, 2));
+  });
+
+async function promptCredentialSecretInteractively(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const password = await promptPassword('  password (blank to skip): ');
+  if (password) out.password = password;
+  const token = await promptPassword('  token/secret (blank to skip): ');
+  if (token) out.token = token;
+  const notes = await promptPassword('  notes (blank to skip): ');
+  if (notes) out.notes = notes;
+  return out;
+}
+
+program
+  .command('vault:credential:add')
+  .description('Create a vault credential. Prompts for the secret values (never taken from argv).')
+  .requiredOption('--client <clientId>')
+  .requiredOption('--name <name>')
+  .requiredOption('--kind <kind>', 'ssh|sftp|ftp|postgres|mysql|mariadb|smtp|http_basic|web_panel|api|oauth_client|generic_login|generic_secret|ssh_key|custom')
+  .option('--host <host>')
+  .option('--port <port>')
+  .option('--username <username>')
+  .option('--database <databaseName>')
+  .option('--url <url>')
+  .option('--environment <environment>')
+  .option('--tags <tags>', 'comma-separated')
+  .option('--description <description>')
+  .option('--favorite', 'pin this credential', false)
+  .action(async (opts) => {
+    const ctx = buildContext();
+    if (!(await unlockVaultForCli(ctx))) {
+      process.exitCode = 1;
+      return;
+    }
+    console.log('Enter secret values:');
+    const secret = normalizeCredentialSecret(await promptCredentialSecretInteractively());
+    let secretBlobRef: string | null = null;
+    if (secret) {
+      secretBlobRef = newCredentialSecretRef();
+      writeCredentialSecret(ctx.vaultSecretStore, secretBlobRef, secret);
+    }
+    try {
+      const created = ctx.vaultCredentialsRepo.create({
+        clientId: opts.client,
+        name: opts.name,
+        kind: opts.kind,
+        host: opts.host ?? null,
+        port: opts.port != null ? Number(opts.port) : null,
+        username: opts.username ?? null,
+        databaseName: opts.database ?? null,
+        url: opts.url ?? null,
+        environment: opts.environment ?? null,
+        tags: opts.tags ? String(opts.tags).split(',').map((t: string) => t.trim()).filter(Boolean) : [],
+        description: opts.description ?? null,
+        favorite: Boolean(opts.favorite),
+        secretBlobRef,
+      });
+      console.log(JSON.stringify(created, null, 2));
+    } catch (err) {
+      if (secretBlobRef) ctx.vaultSecretStore.delete(secretBlobRef);
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('vault:credential:edit')
+  .description("Update a credential's metadata, and optionally re-enter its secret with --set-secret.")
+  .argument('<credentialId>')
+  .option('--name <name>')
+  .option('--host <host>')
+  .option('--port <port>')
+  .option('--username <username>')
+  .option('--database <databaseName>')
+  .option('--url <url>')
+  .option('--environment <environment>')
+  .option('--tags <tags>', 'comma-separated (replaces the whole list)')
+  .option('--description <description>')
+  .option('--favorite <bool>', 'true|false')
+  .option('--set-secret', 'prompt for and replace the secret values', false)
+  .action(async (credentialId: string, opts) => {
+    const ctx = buildContext();
+    const existing = ctx.vaultCredentialsRepo.getById(credentialId);
+    if (!existing) {
+      console.error(`Vault credential ${credentialId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    const patch: Record<string, unknown> = {};
+    if (opts.name !== undefined) patch.name = opts.name;
+    if (opts.host !== undefined) patch.host = opts.host;
+    if (opts.port !== undefined) patch.port = Number(opts.port);
+    if (opts.username !== undefined) patch.username = opts.username;
+    if (opts.database !== undefined) patch.databaseName = opts.database;
+    if (opts.url !== undefined) patch.url = opts.url;
+    if (opts.environment !== undefined) patch.environment = opts.environment;
+    if (opts.tags !== undefined) patch.tags = String(opts.tags).split(',').map((t: string) => t.trim()).filter(Boolean);
+    if (opts.description !== undefined) patch.description = opts.description;
+    if (opts.favorite !== undefined) patch.favorite = String(opts.favorite) === 'true';
+
+    if (Object.keys(patch).length > 0) ctx.vaultCredentialsRepo.update(credentialId, patch);
+
+    if (opts.setSecret) {
+      if (!(await unlockVaultForCli(ctx))) {
+        process.exitCode = 1;
+        return;
+      }
+      console.log('Enter new secret values:');
+      const secret = normalizeCredentialSecret(await promptCredentialSecretInteractively());
+      const ref = existing.secretBlobRef ?? newCredentialSecretRef();
+      if (secret) {
+        writeCredentialSecret(ctx.vaultSecretStore, ref, secret);
+        if (!existing.secretBlobRef) ctx.vaultCredentialsRepo.setSecretBlobRef(credentialId, ref);
+      } else if (existing.secretBlobRef) {
+        ctx.vaultSecretStore.delete(existing.secretBlobRef);
+        ctx.vaultCredentialsRepo.setSecretBlobRef(credentialId, null);
+      }
+    }
+    console.log(JSON.stringify(ctx.vaultCredentialsRepo.getById(credentialId), null, 2));
+  });
+
+program
+  .command('vault:credential:rm')
+  .description('Delete a vault credential and its encrypted secret blob.')
+  .argument('<credentialId>')
+  .action((credentialId: string) => {
+    const ctx = buildContext();
+    try {
+      const { secretBlobRef } = ctx.vaultCredentialsRepo.delete(credentialId);
+      if (secretBlobRef) ctx.vaultSecretStore.delete(secretBlobRef);
+      console.log('Deleted.');
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('vault:credential:link')
+  .description('Use this credential for backups: create/refresh a machine-bound operational copy (Tier 1) and link it.')
+  .argument('<credentialId>')
+  .action(async (credentialId: string) => {
+    const ctx = buildContext();
+    if (!ctx.vaultCredentialsRepo.getById(credentialId)) {
+      console.error(`Vault credential ${credentialId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!(await unlockVaultForCli(ctx))) {
+      process.exitCode = 1;
+      return;
+    }
+    const result = syncOperationalCopy(buildVaultSyncDeps(ctx), credentialId, { useForBackups: true });
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
+  });
+
+program
+  .command('vault:credential:unlink')
+  .description('Stop using this credential for backups. The existing backup job keeps its last-synced secret.')
+  .argument('<credentialId>')
+  .action((credentialId: string) => {
+    const ctx = buildContext();
+    try {
+      const result = syncOperationalCopy(buildVaultSyncDeps(ctx), credentialId, { useForBackups: false });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('vault:resync-operational')
+  .description('Re-derive every linked credential\'s Tier-1 DPAPI secret + operational key file from the vault (disaster recovery / repair).')
+  .option('--client <clientId>', 'limit to one client')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    if (!(await unlockVaultForCli(ctx))) {
+      process.exitCode = 1;
+      return;
+    }
+    const results = resyncOperationalCopies(buildVaultSyncDeps(ctx), opts.client ?? undefined);
+    console.log(JSON.stringify(results, null, 2));
+    if (results.some((r) => !r.result.ok)) process.exitCode = 1;
+  });
+
+program
+  .command('vault:url:add')
+  .description('Add a project URL (plaintext).')
+  .requiredOption('--client <clientId>')
+  .requiredOption('--name <name>')
+  .requiredOption('--url <url>')
+  .option('--environment <environment>')
+  .option('--tags <tags>', 'comma-separated')
+  .option('--credential <credentialId>', 'link to a vault credential')
+  .option('--description <description>')
+  .option('--favorite', 'pin', false)
+  .action((opts) => {
+    const ctx = buildContext();
+    const created = ctx.vaultUrlsRepo.create({
+      clientId: opts.client,
+      name: opts.name,
+      url: opts.url,
+      environment: opts.environment ?? null,
+      tags: opts.tags ? String(opts.tags).split(',').map((t: string) => t.trim()).filter(Boolean) : [],
+      linkedCredentialId: opts.credential ?? null,
+      description: opts.description ?? null,
+      favorite: Boolean(opts.favorite),
+    });
+    console.log(JSON.stringify(created, null, 2));
+  });
+
+program
+  .command('vault:url:list')
+  .description('List project URLs.')
+  .option('--client <clientId>')
+  .action((opts) => {
+    const ctx = buildContext();
+    console.log(JSON.stringify(opts.client ? ctx.vaultUrlsRepo.listByClient(opts.client) : ctx.vaultUrlsRepo.listAll(), null, 2));
+  });
+
+program
+  .command('vault:url:rm')
+  .argument('<urlId>')
+  .description('Delete a project URL.')
+  .action((urlId: string) => {
+    const ctx = buildContext();
+    try {
+      ctx.vaultUrlsRepo.delete(urlId);
+      console.log('Deleted.');
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('vault:item:add')
+  .description('Add a snippet, process or note.')
+  .requiredOption('--client <clientId>')
+  .requiredOption('--type <type>', 'snippet|process|note')
+  .requiredOption('--title <title>')
+  .option('--body <body>', 'plaintext body (for a non-sensitive item)')
+  .option('--language <language>', 'snippet language')
+  .option('--environment <environment>')
+  .option('--tags <tags>', 'comma-separated')
+  .option('--description <description>')
+  .option('--sensitive', 'store the body encrypted (prompts for it)', false)
+  .option('--favorite', 'pin', false)
+  .action(async (opts) => {
+    const ctx = buildContext();
+    let bodyPlaintext: string | null = opts.body ?? null;
+    let bodyBlobRef: string | null = null;
+    if (opts.sensitive) {
+      if (!(await unlockVaultForCli(ctx))) {
+        process.exitCode = 1;
+        return;
+      }
+      const body = await promptPassword('Body (hidden): ');
+      bodyBlobRef = `vault:item:${randomUUID()}`;
+      ctx.vaultSecretStore.set(bodyBlobRef, body);
+      bodyPlaintext = null;
+    }
+    const created = ctx.vaultItemsRepo.create({
+      clientId: opts.client,
+      type: opts.type,
+      title: opts.title,
+      environment: opts.environment ?? null,
+      tags: opts.tags ? String(opts.tags).split(',').map((t: string) => t.trim()).filter(Boolean) : [],
+      description: opts.description ?? null,
+      favorite: Boolean(opts.favorite),
+      isSensitive: Boolean(opts.sensitive),
+      bodyPlaintext,
+      bodyBlobRef,
+      metadata: opts.language ? { language: opts.language } : {},
+    });
+    console.log(JSON.stringify(created, null, 2));
+  });
+
+program
+  .command('vault:item:list')
+  .description('List snippets/processes/notes.')
+  .option('--client <clientId>')
+  .option('--type <type>', 'snippet|process|note')
+  .action((opts) => {
+    const ctx = buildContext();
+    const rows = opts.client
+      ? ctx.vaultItemsRepo.listByClient(opts.client, opts.type)
+      : ctx.vaultItemsRepo.listAll();
+    console.log(JSON.stringify(rows, null, 2));
+  });
+
+program
+  .command('vault:item:show')
+  .description('Show one item including its body (prompts for the master password if sensitive).')
+  .argument('<itemId>')
+  .action(async (itemId: string) => {
+    const ctx = buildContext();
+    const item = ctx.vaultItemsRepo.getById(itemId);
+    if (!item) {
+      console.error(`Vault item ${itemId} not found.`);
+      process.exitCode = 1;
+      return;
+    }
+    let body: string | null = item.bodyPlaintext;
+    if (item.isSensitive) {
+      if (!(await unlockVaultForCli(ctx))) {
+        process.exitCode = 1;
+        return;
+      }
+      body = item.bodyBlobRef ? ctx.vaultSecretStore.get(item.bodyBlobRef) : '';
+    }
+    console.log(JSON.stringify({ ...item, body }, null, 2));
+  });
+
+program
+  .command('vault:item:rm')
+  .argument('<itemId>')
+  .description('Delete a snippet/process/note and its encrypted body (if any).')
+  .action((itemId: string) => {
+    const ctx = buildContext();
+    try {
+      const { bodyBlobRef } = ctx.vaultItemsRepo.delete(itemId);
+      if (bodyBlobRef) ctx.vaultSecretStore.delete(bodyBlobRef);
+      console.log('Deleted.');
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('vault:backup-target:add')
+  .description('Add a filesystem destination for the portable encrypted vault backup (.arkvault). Only encrypted material is written there.')
+  .requiredOption('--path <dir>')
+  .option('--retention-count <n>', 'keep only the newest N .arkvault files there')
+  .option('--disabled', 'add it disabled', false)
+  .action((opts) => {
+    const ctx = buildContext();
+    const t = ctx.vaultBackupTargetsRepo.create({
+      path: opts.path,
+      retentionCount: opts.retentionCount != null ? Number(opts.retentionCount) : null,
+      enabled: !opts.disabled,
+    });
+    console.log(JSON.stringify(t, null, 2));
+  });
+
+program
+  .command('vault:backup-target:list')
+  .action(() => {
+    const ctx = buildContext();
+    console.log(JSON.stringify(ctx.vaultBackupTargetsRepo.list(), null, 2));
+  });
+
+program
+  .command('vault:backup-target:rm')
+  .argument('<targetId>')
+  .action((targetId: string) => {
+    const ctx = buildContext();
+    ctx.vaultBackupTargetsRepo.remove(targetId);
+    console.log('Removed.');
+  });
+
+program
+  .command('vault:backup')
+  .description('Write the full encrypted .arkvault (whole operational state + every secret) to every configured destination, or to --output. Prompts for the master password.')
+  .option('--output <file>', 'write a single .arkvault to this exact path instead of the configured targets')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    if (!(await unlockVaultForCli(ctx))) {
+      process.exitCode = 1;
+      return;
+    }
+    if (opts.output) {
+      const buf = exportVaultBuffer(buildVaultBackupDeps(ctx));
+      await writeFile(opts.output, buf);
+      console.log(`Wrote ${buf.length} bytes to ${opts.output}`);
+      return;
+    }
+    const result = runAllVaultBackups(buildVaultBackupDeps(ctx));
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.allOk) process.exitCode = 1;
+  });
+
+program
+  .command('vault:restore')
+  .description('Rebuild Arkode from an .arkvault into a FRESH install: clients, connections, tasks, schedules, restic keys, replication config, SSH keys and all secrets. Prompts for the master password.')
+  .requiredOption('--file <path>')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    if (ctx.vaultState.isInitialized()) {
+      console.error('This machine already has a vault. Restore is only supported into a fresh install.');
+      process.exitCode = 1;
+      return;
+    }
+    const buf = await readFile(opts.file);
+    try {
+      const info = inspectVaultBuffer(buf);
+      console.log(`Backup created ${info.createdAt} (format v${info.formatVersion}).`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+      return;
+    }
+    const password = await promptPassword('Master password for this backup: ');
+    try {
+      const result = importVaultBuffer(buildVaultBackupDeps(ctx), buf, password);
+      console.log(JSON.stringify(result, null, 2));
+      if (result.warnings.length > 0) {
+        console.log('\nWarnings:');
+        for (const w of result.warnings) console.log(`  - ${w}`);
+      }
+      console.log(
+        '\nRestored. The arkode-scheduler service picks up the schedules on its next tick. ' +
+          'Re-register per-task Windows Scheduled Tasks only if you used the legacy model.'
+      );
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command('db-tools:detect')
   .description('Scan the usual Windows install locations (Program Files, WAMP/XAMPP/Laragon) for pg_dump/psql/mysqldump/mysql/mariadb-dump/mariadb and print what was found, with versions.')
   .action(async () => {
@@ -1444,6 +1998,42 @@ function buildReplicationDeps(ctx: ReturnType<typeof buildContext>): ReplicateTa
     transportsRepo: ctx.transportsRepo,
     secretStore: ctx.secretStore,
     runsRepo: ctx.runsRepo,
+  };
+}
+
+/** Deps for the vault reuse-bridge (Tier 2 credential -> Tier 1 operational copy). */
+function buildVaultSyncDeps(ctx: ReturnType<typeof buildContext>): SyncOperationalCopyDeps {
+  return {
+    db: ctx.db,
+    vaultCredentialsRepo: ctx.vaultCredentialsRepo,
+    vaultSecretStore: ctx.vaultSecretStore,
+    transportsRepo: ctx.transportsRepo,
+    databaseConnectionsRepo: ctx.databaseConnectionsRepo,
+    secretStore: ctx.secretStore,
+  };
+}
+
+/** Deps for portable .arkvault export/import/backup. */
+function buildVaultBackupDeps(ctx: ReturnType<typeof buildContext>): RunVaultBackupDeps {
+  return {
+    db: ctx.db,
+    vaultMetaRepo: ctx.vaultMetaRepo,
+    vaultState: ctx.vaultState,
+    vaultSecretStore: ctx.vaultSecretStore,
+    secretStore: ctx.secretStore,
+    clientsRepo: ctx.clientsRepo,
+    backupSetsRepo: ctx.backupSetsRepo,
+    transportsRepo: ctx.transportsRepo,
+    databaseConnectionsRepo: ctx.databaseConnectionsRepo,
+    tasksRepo: ctx.tasksRepo,
+    settingsRepo: ctx.settingsRepo,
+    fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
+    fileBackupTasksRepo: ctx.fileBackupTasksRepo,
+    replicationTargetsRepo: ctx.replicationTargetsRepo,
+    vaultCredentialsRepo: ctx.vaultCredentialsRepo,
+    vaultUrlsRepo: ctx.vaultUrlsRepo,
+    vaultItemsRepo: ctx.vaultItemsRepo,
+    vaultBackupTargetsRepo: ctx.vaultBackupTargetsRepo,
   };
 }
 
@@ -2455,17 +3045,35 @@ program
       if (req.method === 'GET' && pathname === '/connections') {
         const includeInactive = url.searchParams.get('includeInactive') === 'true';
         const clients = ctx.clientsRepo.listActive();
+        const ownerOfTransport = (id: string) => ctx.vaultCredentialsRepo.getByLinkedTransportId(id);
+        const ownerOfDbConn = (id: string) => ctx.vaultCredentialsRepo.getByLinkedDatabaseConnectionId(id);
         const transports = clients.flatMap((client) =>
           ctx.transportsRepo
             .listByClient(client.id)
             .filter((t) => includeInactive || t.isActive)
-            .map((t) => ({ ...t, clientName: client.name }))
+            .map((t) => {
+              const owner = ownerOfTransport(t.id);
+              return {
+                ...t,
+                clientName: client.name,
+                credentialName: owner?.name ?? null,
+                operationalSyncState: owner?.operationalSyncState ?? null,
+              };
+            })
         );
         const databaseConnections = clients.flatMap((client) =>
           ctx.databaseConnectionsRepo
             .listByClient(client.id)
             .filter((d) => includeInactive || d.isActive)
-            .map((d) => ({ ...d, clientName: client.name }))
+            .map((d) => {
+              const owner = ownerOfDbConn(d.id);
+              return {
+                ...d,
+                clientName: client.name,
+                credentialName: owner?.name ?? null,
+                operationalSyncState: owner?.operationalSyncState ?? null,
+              };
+            })
         );
         sendJson(res, 200, {
           clients: clients.map((c) => ({ id: c.id, name: c.name, retentionCount: c.retentionCount, retentionDays: c.retentionDays })),
@@ -2662,6 +3270,11 @@ program
               // Whether the task's remote-* pipeline fields are still editable
               // (see UpdateTaskInput's doc comment) — a real backup locks them.
               const hasRealBackups = ctx.runsRepo.listBackups({ taskId: t.id, limit: 1 }).total > 0;
+              const owner = t.transportId
+                ? ctx.vaultCredentialsRepo.getByLinkedTransportId(t.transportId)
+                : t.databaseConnectionId
+                  ? ctx.vaultCredentialsRepo.getByLinkedDatabaseConnectionId(t.databaseConnectionId)
+                  : null;
               return {
                 ...t,
                 kind: 'db' as const,
@@ -2671,6 +3284,8 @@ program
                 latestRunStatus: latestRun?.status ?? null,
                 backupSetName: backupSet?.name ?? null,
                 hasRealBackups,
+                credentialName: owner?.name ?? null,
+                operationalSyncState: owner?.operationalSyncState ?? null,
               };
             })
         );
@@ -2832,6 +3447,494 @@ program
         const heartbeatAt = ctx.settingsRepo.get(SCHEDULER_HEARTBEAT_KEY);
         const heartbeatAgeSeconds = heartbeatAt ? Math.max(0, Math.round((Date.now() - Date.parse(heartbeatAt)) / 1000)) : null;
         sendJson(res, 200, { heartbeatAt, heartbeatAgeSeconds });
+        return;
+      }
+
+      // --- Encrypted credential vault (Tier 2) lifecycle ---------------------
+      if (req.method === 'GET' && pathname === '/vault/status') {
+        sendJson(res, 200, getVaultStatus(ctx.vaultState));
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/vault/lock') {
+        ctx.vaultState.lock();
+        sendJson(res, 200, getVaultStatus(ctx.vaultState));
+        return;
+      }
+
+      if (
+        req.method === 'POST' &&
+        (pathname === '/vault/init' || pathname === '/vault/unlock' || pathname === '/vault/change-password')
+      ) {
+        const body = await readJsonBody(req).catch(() => ({}));
+        try {
+          if (pathname === '/vault/init') {
+            if (typeof body.password !== 'string' || body.password.length < 1) {
+              sendJson(res, 400, { error: 'password is required.' });
+              return;
+            }
+            ctx.vaultState.init(body.password);
+          } else if (pathname === '/vault/unlock') {
+            if (typeof body.password !== 'string' || body.password.length < 1) {
+              sendJson(res, 400, { error: 'password is required.' });
+              return;
+            }
+            ctx.vaultState.unlock(body.password);
+          } else {
+            if (
+              typeof body.currentPassword !== 'string' ||
+              typeof body.newPassword !== 'string' ||
+              body.newPassword.length < 1
+            ) {
+              sendJson(res, 400, { error: 'currentPassword and newPassword are required.' });
+              return;
+            }
+            ctx.vaultState.changePassword(body.currentPassword, body.newPassword);
+          }
+          sendJson(res, 200, getVaultStatus(ctx.vaultState));
+        } catch (err) {
+          if (err instanceof WrongMasterPasswordError) {
+            sendJson(res, 401, { error: err.message });
+          } else if (err instanceof VaultAlreadyInitializedError || err instanceof VaultNotInitializedError) {
+            sendJson(res, 409, { error: err.message });
+          } else {
+            sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        return;
+      }
+
+      // --- Vault credentials (Tier 2) --------------------------------------
+      // GET is metadata-only and works while locked; reveal / write need unlock.
+      const clientCredsMatch = req.method === 'GET' && pathname.match(/^\/clients\/([^/]+)\/credentials$/);
+      if (clientCredsMatch) {
+        sendJson(res, 200, ctx.vaultCredentialsRepo.listByClient(clientCredsMatch[1]));
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/vault/search') {
+        const tokens = (url.searchParams.get('q') ?? '').split(/\s+/).filter((t) => t.length > 0);
+        const clientId = url.searchParams.get('client') ?? undefined;
+        sendJson(res, 200, {
+          credentials: ctx.vaultCredentialsRepo.search(tokens, clientId),
+          urls: ctx.vaultUrlsRepo.search(tokens, clientId),
+          items: ctx.vaultItemsRepo.search(tokens, clientId),
+        });
+        return;
+      }
+
+      const clientUrlsMatch = req.method === 'GET' && pathname.match(/^\/clients\/([^/]+)\/urls$/);
+      if (clientUrlsMatch) {
+        sendJson(res, 200, ctx.vaultUrlsRepo.listByClient(clientUrlsMatch[1]));
+        return;
+      }
+      const clientItemsMatch = req.method === 'GET' && pathname.match(/^\/clients\/([^/]+)\/items$/);
+      if (clientItemsMatch) {
+        const type = url.searchParams.get('type') as 'snippet' | 'process' | 'note' | null;
+        sendJson(res, 200, ctx.vaultItemsRepo.listByClient(clientItemsMatch[1], type ?? undefined));
+        return;
+      }
+      const clientWorkspaceMatch = req.method === 'GET' && pathname.match(/^\/clients\/([^/]+)\/workspace$/);
+      if (clientWorkspaceMatch) {
+        const cid = clientWorkspaceMatch[1];
+        sendJson(res, 200, {
+          credentials: ctx.vaultCredentialsRepo.listByClient(cid),
+          urls: ctx.vaultUrlsRepo.listByClient(cid),
+          items: ctx.vaultItemsRepo.listByClient(cid),
+        });
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/vault/urls') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.clientId || !body.name || !body.url) {
+            sendJson(res, 400, { error: 'clientId, name, and url are required.' });
+            return;
+          }
+          sendJson(res, 201, ctx.vaultUrlsRepo.create({
+            clientId: body.clientId,
+            name: body.name,
+            url: body.url,
+            environment: body.environment ?? null,
+            tags: Array.isArray(body.tags) ? body.tags : [],
+            linkedCredentialId: body.linkedCredentialId ?? null,
+            favorite: Boolean(body.favorite),
+            description: body.description ?? null,
+          }));
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+      const urlByIdMatch = pathname.match(/^\/vault\/urls\/([^/]+)$/);
+      if (urlByIdMatch && (req.method === 'PATCH' || req.method === 'DELETE')) {
+        try {
+          if (req.method === 'DELETE') {
+            ctx.vaultUrlsRepo.delete(urlByIdMatch[1]);
+            sendJson(res, 200, { ok: true });
+            return;
+          }
+          sendJson(res, 200, ctx.vaultUrlsRepo.update(urlByIdMatch[1], await readJsonBody(req)));
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/vault/items') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.clientId || !body.type || !body.title) {
+            sendJson(res, 400, { error: 'clientId, type, and title are required.' });
+            return;
+          }
+          const isSensitive = Boolean(body.isSensitive);
+          const bodyText: string | null = body.body ?? null;
+          let bodyBlobRef: string | null = null;
+          let bodyPlaintext: string | null = null;
+          if (isSensitive && bodyText) {
+            if (!ctx.vaultState.isUnlocked()) {
+              sendJson(res, 423, { error: 'The vault is locked. Unlock it to store a sensitive body.' });
+              return;
+            }
+            bodyBlobRef = `vault:item:${randomUUID()}`;
+            ctx.vaultSecretStore.set(bodyBlobRef, bodyText);
+          } else {
+            bodyPlaintext = bodyText;
+          }
+          sendJson(res, 201, ctx.vaultItemsRepo.create({
+            clientId: body.clientId,
+            type: body.type,
+            title: body.title,
+            environment: body.environment ?? null,
+            tags: Array.isArray(body.tags) ? body.tags : [],
+            description: body.description ?? null,
+            favorite: Boolean(body.favorite),
+            isSensitive,
+            bodyPlaintext,
+            bodyBlobRef,
+            metadata: body.metadata ?? {},
+          }));
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+      const itemByIdMatch = pathname.match(/^\/vault\/items\/([^/]+)$/);
+      if (itemByIdMatch && (req.method === 'PATCH' || req.method === 'DELETE')) {
+        const id = itemByIdMatch[1];
+        const existing = ctx.vaultItemsRepo.getById(id);
+        if (!existing) {
+          sendJson(res, 404, { error: `Vault item ${id} not found.` });
+          return;
+        }
+        try {
+          if (req.method === 'DELETE') {
+            const { bodyBlobRef } = ctx.vaultItemsRepo.delete(id);
+            if (bodyBlobRef) ctx.vaultSecretStore.delete(bodyBlobRef);
+            sendJson(res, 200, { ok: true });
+            return;
+          }
+          const body = await readJsonBody(req);
+          const { body: bodyText, ...rest } = body;
+          const patch = { ...rest } as Record<string, unknown>;
+          if ('body' in body) {
+            const isSensitive = 'isSensitive' in body ? Boolean(body.isSensitive) : existing.isSensitive;
+            if (isSensitive) {
+              if (!ctx.vaultState.isUnlocked()) {
+                sendJson(res, 423, { error: 'The vault is locked. Unlock it to change a sensitive body.' });
+                return;
+              }
+              const ref = existing.bodyBlobRef ?? `vault:item:${randomUUID()}`;
+              ctx.vaultSecretStore.set(ref, bodyText ?? '');
+              patch.bodyBlobRef = ref;
+              patch.bodyPlaintext = null;
+            } else {
+              if (existing.bodyBlobRef) ctx.vaultSecretStore.delete(existing.bodyBlobRef);
+              patch.bodyPlaintext = bodyText ?? null;
+              patch.bodyBlobRef = null;
+            }
+          }
+          sendJson(res, 200, ctx.vaultItemsRepo.update(id, patch));
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+      const itemRevealMatch = req.method === 'POST' && pathname.match(/^\/vault\/items\/([^/]+)\/reveal$/);
+      if (itemRevealMatch) {
+        const item = ctx.vaultItemsRepo.getById(itemRevealMatch[1]);
+        if (!item) {
+          sendJson(res, 404, { error: 'Vault item not found.' });
+          return;
+        }
+        if (item.isSensitive && !ctx.vaultState.isUnlocked()) {
+          sendJson(res, 423, { error: 'The vault is locked.' });
+          return;
+        }
+        try {
+          const body = item.isSensitive
+            ? item.bodyBlobRef
+              ? ctx.vaultSecretStore.get(item.bodyBlobRef)
+              : ''
+            : item.bodyPlaintext;
+          sendJson(res, 200, { body: body ?? '' });
+        } catch (err) {
+          if (err instanceof VaultLockedError) sendJson(res, 423, { error: err.message });
+          else if (err instanceof VaultCryptoError)
+            sendJson(res, 500, { error: `This item's body is corrupted: ${err.message}` });
+          else sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/vault/credentials') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.clientId || !body.name || !body.kind) {
+            sendJson(res, 400, { error: 'clientId, name, and kind are required.' });
+            return;
+          }
+          const secret = normalizeCredentialSecret(body.secret);
+          if (secret && !ctx.vaultState.isUnlocked()) {
+            sendJson(res, 423, { error: 'The vault is locked. Unlock it to store a secret.' });
+            return;
+          }
+          let secretBlobRef: string | null = null;
+          if (secret) {
+            secretBlobRef = newCredentialSecretRef();
+            writeCredentialSecret(ctx.vaultSecretStore, secretBlobRef, secret);
+          }
+          const created = ctx.vaultCredentialsRepo.create({
+            clientId: body.clientId,
+            name: body.name,
+            kind: body.kind,
+            environment: body.environment ?? null,
+            tags: Array.isArray(body.tags) ? body.tags : [],
+            host: body.host ?? null,
+            port: body.port ?? null,
+            username: body.username ?? null,
+            databaseName: body.databaseName ?? null,
+            url: body.url ?? null,
+            secretBlobRef,
+            favorite: Boolean(body.favorite),
+            description: body.description ?? null,
+          });
+          let operationalSync: { ok: boolean; state: string; message?: string } = { ok: true, state: 'none' };
+          if (body.useForBackups) {
+            operationalSync = syncOperationalCopy(buildVaultSyncDeps(ctx), created.id, {
+              useForBackups: true,
+              secret: secret ?? {},
+            });
+          }
+          sendJson(res, 201, { credential: ctx.vaultCredentialsRepo.getById(created.id), operationalSync });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const credByIdMatch = pathname.match(/^\/vault\/credentials\/([^/]+)$/);
+      if (credByIdMatch && (req.method === 'PATCH' || req.method === 'DELETE')) {
+        const id = credByIdMatch[1];
+        const existing = ctx.vaultCredentialsRepo.getById(id);
+        if (!existing) {
+          sendJson(res, 404, { error: `Vault credential ${id} not found.` });
+          return;
+        }
+        try {
+          if (req.method === 'DELETE') {
+            const { secretBlobRef } = ctx.vaultCredentialsRepo.delete(id);
+            if (secretBlobRef) ctx.vaultSecretStore.delete(secretBlobRef);
+            sendJson(res, 200, { ok: true });
+            return;
+          }
+          const body = await readJsonBody(req);
+          const hasSecretField = 'secret' in body;
+          const secret = hasSecretField ? normalizeCredentialSecret(body.secret) : undefined;
+          if (hasSecretField && !ctx.vaultState.isUnlocked()) {
+            sendJson(res, 423, { error: 'The vault is locked. Unlock it to change a secret.' });
+            return;
+          }
+          const { secret: _s, useForBackups: _u, ...metaPatch } = body;
+          const updated = ctx.vaultCredentialsRepo.update(id, metaPatch);
+
+          const wantsBridge = body.useForBackups === true;
+          if (secret && !wantsBridge) {
+            const ref = existing.secretBlobRef ?? newCredentialSecretRef();
+            writeCredentialSecret(ctx.vaultSecretStore, ref, secret);
+            if (!existing.secretBlobRef) ctx.vaultCredentialsRepo.setSecretBlobRef(id, ref);
+          } else if (hasSecretField && secret === undefined && existing.secretBlobRef && !wantsBridge) {
+            // `secret: null/{}` explicitly clears it.
+            ctx.vaultSecretStore.delete(existing.secretBlobRef);
+            ctx.vaultCredentialsRepo.setSecretBlobRef(id, null);
+          }
+
+          let operationalSync: { ok: boolean; state: string; message?: string } = {
+            ok: true,
+            state: updated.operationalSyncState,
+          };
+          if (body.useForBackups === true) {
+            // syncOperationalCopy owns the blob write (atomic with the Tier-1 copy) when a secret is supplied.
+            const currentRef = ctx.vaultCredentialsRepo.getById(id)!.secretBlobRef ?? newCredentialSecretRef();
+            if (!ctx.vaultCredentialsRepo.getById(id)!.secretBlobRef) {
+              ctx.vaultCredentialsRepo.setSecretBlobRef(id, currentRef);
+            }
+            operationalSync = syncOperationalCopy(buildVaultSyncDeps(ctx), id, {
+              useForBackups: true,
+              ...(secret ? { secret } : {}),
+            });
+          } else if (body.useForBackups === false) {
+            operationalSync = syncOperationalCopy(buildVaultSyncDeps(ctx), id, { useForBackups: false });
+          }
+
+          sendJson(res, 200, {
+            credential: ctx.vaultCredentialsRepo.getById(id),
+            operationalSync,
+          });
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+
+      const credRevealMatch = req.method === 'POST' && pathname.match(/^\/vault\/credentials\/([^/]+)\/reveal$/);
+      if (credRevealMatch) {
+        const id = credRevealMatch[1];
+        const cred = ctx.vaultCredentialsRepo.getById(id);
+        if (!cred) {
+          sendJson(res, 404, { error: `Vault credential ${id} not found.` });
+          return;
+        }
+        if (!ctx.vaultState.isUnlocked()) {
+          sendJson(res, 423, { error: 'The vault is locked.' });
+          return;
+        }
+        try {
+          const secret = cred.secretBlobRef ? readCredentialSecret(ctx.vaultSecretStore, cred.secretBlobRef) : {};
+          sendJson(res, 200, { secret });
+        } catch (err) {
+          if (err instanceof VaultLockedError) {
+            sendJson(res, 423, { error: err.message });
+          } else if (err instanceof VaultCryptoError) {
+            sendJson(res, 500, { error: `This credential's secret is corrupted and cannot be decrypted: ${err.message}` });
+          } else {
+            sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        return;
+      }
+
+      const credResyncMatch = req.method === 'POST' && pathname.match(/^\/vault\/credentials\/([^/]+)\/resync-operational$/);
+      if (credResyncMatch) {
+        const id = credResyncMatch[1];
+        if (!ctx.vaultCredentialsRepo.getById(id)) {
+          sendJson(res, 404, { error: `Vault credential ${id} not found.` });
+          return;
+        }
+        if (!ctx.vaultState.isUnlocked()) {
+          sendJson(res, 423, { error: 'The vault is locked.' });
+          return;
+        }
+        try {
+          const result = syncOperationalCopy(buildVaultSyncDeps(ctx), id, { useForBackups: true });
+          sendJson(res, result.ok ? 200 : 502, result);
+        } catch (err) {
+          if (err instanceof VaultLockedError) sendJson(res, 423, { error: err.message });
+          else sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/vault/resync-operational') {
+        if (!ctx.vaultState.isUnlocked()) {
+          sendJson(res, 423, { error: 'The vault is locked.' });
+          return;
+        }
+        const body = await readJsonBody(req).catch(() => ({}));
+        try {
+          const results = resyncOperationalCopies(buildVaultSyncDeps(ctx), body.client ?? undefined);
+          const allOk = results.every((r) => r.result.ok);
+          sendJson(res, allOk ? 200 : 502, { results, allOk });
+        } catch (err) {
+          if (err instanceof VaultLockedError) sendJson(res, 423, { error: err.message });
+          else sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // --- Portable vault backup (.arkvault) ------------------------------
+      if (req.method === 'GET' && pathname === '/vault/backup-targets') {
+        sendJson(res, 200, ctx.vaultBackupTargetsRepo.list());
+        return;
+      }
+      if (req.method === 'POST' && pathname === '/vault/backup-targets') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.path) {
+            sendJson(res, 400, { error: 'path is required.' });
+            return;
+          }
+          sendJson(res, 201, ctx.vaultBackupTargetsRepo.create({
+            path: body.path,
+            retentionCount: body.retentionCount ?? null,
+            enabled: body.enabled !== false,
+          }));
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+      const vbtByIdMatch = pathname.match(/^\/vault\/backup-targets\/([^/]+)$/);
+      if (vbtByIdMatch && req.method === 'PATCH') {
+        try {
+          sendJson(res, 200, ctx.vaultBackupTargetsRepo.update(vbtByIdMatch[1], await readJsonBody(req)));
+        } catch (err) {
+          sendRepoError(res, err);
+        }
+        return;
+      }
+      const vbtRemoveMatch = req.method === 'POST' && pathname.match(/^\/vault\/backup-targets\/([^/]+)\/remove$/);
+      if (vbtRemoveMatch) {
+        ctx.vaultBackupTargetsRepo.remove(vbtRemoveMatch[1]);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+      if (req.method === 'GET' && pathname === '/vault/backup-runs') {
+        const limit = url.searchParams.get('limit');
+        sendJson(res, 200, ctx.vaultBackupTargetsRepo.listRecentRuns(limit ? Number(limit) : undefined));
+        return;
+      }
+      if (req.method === 'POST' && pathname === '/vault/backup') {
+        if (!ctx.vaultState.isUnlocked()) {
+          sendJson(res, 423, { error: 'The vault is locked.' });
+          return;
+        }
+        try {
+          const result = runAllVaultBackups(buildVaultBackupDeps(ctx));
+          sendJson(res, result.allOk ? 200 : 502, result);
+        } catch (err) {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+      if (req.method === 'POST' && pathname === '/vault/restore') {
+        const body = await readJsonBody(req).catch(() => ({}));
+        if (typeof body.fileBase64 !== 'string' || typeof body.password !== 'string') {
+          sendJson(res, 400, { error: 'fileBase64 and password are required.' });
+          return;
+        }
+        try {
+          const buf = Buffer.from(body.fileBase64, 'base64');
+          const result = importVaultBuffer(buildVaultBackupDeps(ctx), buf, body.password);
+          sendJson(res, 200, result);
+        } catch (err) {
+          if (err instanceof WrongMasterPasswordError) sendJson(res, 401, { error: err.message });
+          else if (err instanceof ArkvaultParseError) sendJson(res, 400, { error: err.message });
+          else if (err instanceof Error && /already has a vault/i.test(err.message)) sendJson(res, 409, { error: err.message });
+          else sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
         return;
       }
 
@@ -3727,6 +4830,21 @@ program
       console.log(`PORT=${actualPort}`);
       console.log(`Serving dashboard status at http://127.0.0.1:${actualPort}/status (Ctrl+C to stop)`);
     });
+
+    // Best-effort portable vault backup: runs the configured .arkvault
+    // destinations shortly after start and once a day, but ONLY while the
+    // vault is unlocked (the scheduler service can't do this — no DEK).
+    const runVaultBackupsQuietly = () => {
+      try {
+        if (ctx.vaultState.isUnlocked() && ctx.vaultBackupTargetsRepo.listEnabled().length > 0) {
+          runAllVaultBackups(buildVaultBackupDeps(ctx));
+        }
+      } catch (err) {
+        console.error(`Vault backup sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+    setTimeout(runVaultBackupsQuietly, 60_000).unref();
+    setInterval(runVaultBackupsQuietly, 24 * 60 * 60 * 1000).unref();
 
     server.listen(port, '127.0.0.1');
   });

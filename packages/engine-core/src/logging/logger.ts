@@ -2,6 +2,7 @@ import pino from 'pino';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { logsDir } from '../paths.js';
+import { redactSecrets } from './redact.js';
 import type { LogEventsRepo, LogEventLevel } from '../db/repositories/logEventsRepo.js';
 
 export interface RunLogger {
@@ -62,12 +63,14 @@ export function createRunLogger(runId: string, logEvents: LogEventsRepo, dir: st
   return {
     filePath,
     log(level, step, message, extra) {
+      // Redact once, up front: the same string goes to both sinks.
+      const safeMessage = redactSecrets(message);
       try {
-        fileLogger?.[level]({ step, ...extra }, message);
+        fileLogger?.[level]({ step, ...extra }, safeMessage);
       } catch {
         /* best-effort — never let file logging break a run */
       }
-      logEvents.append(runId, level, step, message);
+      logEvents.append(runId, level, step, safeMessage);
     },
   };
 }
