@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import type { ClientsRepo } from '../db/repositories/clientsRepo.js';
 import type { ReplicationRunsRepo } from '../db/repositories/replicationRunsRepo.js';
 import type { ReplicationTargetsRepo } from '../db/repositories/replicationTargetsRepo.js';
+import type { TransportsRepo } from '../db/repositories/transportsRepo.js';
 import type { FileBackupRepositoriesRepo } from '../fileBackup/db/repositories/fileBackupRepositoriesRepo.js';
 import type { RepositoryLockDeps } from '../fileBackup/locking/repositoryLock.js';
 import { checkRepositoryLock, recoverStaleRepositoryRuns } from '../fileBackup/locking/repositoryLock.js';
@@ -9,7 +10,8 @@ import { isStaleInProgressRun } from '../util/processIdentity.js';
 import type { SecretStore } from '../secrets/types.js';
 import { listSnapshots } from '../fileBackup/restic/resticClient.js';
 import { rcloneSync, withRcloneConfig } from './rcloneClient.js';
-import type { RcloneDriveConfig, ReplicationTarget, ReplicationTrigger } from './types.js';
+import { captureSftpHostKeys, formatHostKeyFingerprints } from './sftpHostKeyCapture.js';
+import type { RcloneDriveConfig, ReplicationTarget, ReplicationTrigger, ResolvedRcloneRemote } from './types.js';
 
 /** Test seam — production never sets `rcloneOverride`/`preflightOverride`. */
 export interface RcloneOps {
@@ -22,10 +24,13 @@ export interface ReplicateTargetDeps extends RepositoryLockDeps {
   replicationRunsRepo: ReplicationRunsRepo;
   clientsRepo: ClientsRepo;
   fileBackupRepositoriesRepo: FileBackupRepositoriesRepo;
+  transportsRepo: TransportsRepo;
   secretStore: SecretStore;
   rcloneOverride?: RcloneOps;
   /** Replaces the "can we read the restic repo?" pre-flight (restic_repo targets only). */
   preflightOverride?: (repoPath: string, password: string) => Promise<void>;
+  /** Test seam for captureSftpHostKeys — production never sets this. */
+  captureHostKeysOverride?: typeof captureSftpHostKeys;
 }
 
 export interface ReplicateTargetOptions {
@@ -45,6 +50,92 @@ export interface ReplicateTargetResult {
 
 function msg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Resolves a target's ResolvedRcloneRemote -- either its stored
+ * RcloneDriveConfig secret (rclone_drive), or an existing transport's own
+ * fields/secrets (rclone_sftp/rclone_ftp). For rclone_sftp, captures and
+ * persists the target's pinned host key(s) on first use (see
+ * sftpHostKeyCapture.ts for why every algorithm the server supports has to
+ * be captured, not just one). Shared by replicateTarget() below and the
+ * engine-cli replication:test/pull commands, so there's exactly one place
+ * that knows how to turn a target into something rcloneClient.ts can act on.
+ */
+export async function resolveRcloneRemote(
+  deps: Pick<ReplicateTargetDeps, 'replicationTargetsRepo' | 'transportsRepo' | 'secretStore' | 'captureHostKeysOverride'>,
+  target: ReplicationTarget
+): Promise<ResolvedRcloneRemote> {
+  if (target.provider === 'rclone_drive') {
+    const rawConfig = target.rcloneConfigSecretRef ? deps.secretStore.get(target.rcloneConfigSecretRef) : null;
+    if (!rawConfig) {
+      throw new Error('This target is not authorized yet — connect a Google account first.');
+    }
+    let drive: RcloneDriveConfig;
+    try {
+      drive = JSON.parse(rawConfig) as RcloneDriveConfig;
+    } catch {
+      throw new Error('The stored rclone configuration is corrupt.');
+    }
+    return { provider: 'rclone_drive', drive };
+  }
+
+  if (!target.transportId) {
+    throw new Error('This target has no linked connection configured.');
+  }
+  const transport = deps.transportsRepo.getById(target.transportId);
+  if (!transport || !transport.isActive) {
+    throw new Error('The connection this target replicates through was removed or deactivated.');
+  }
+
+  if (target.provider === 'rclone_sftp') {
+    if (transport.type !== 'sftp') {
+      throw new Error(`Expected an sftp connection, got "${transport.type}".`);
+    }
+    if (!transport.privateKeyPath) {
+      throw new Error('The linked SFTP connection is missing its private key.');
+    }
+    const keyPassphrase = transport.passphraseSecretRef
+      ? (deps.secretStore.get(transport.passphraseSecretRef) ?? undefined)
+      : undefined;
+
+    let knownHostsContent = target.sftpHostKey ?? undefined;
+    if (!knownHostsContent) {
+      const capture = deps.captureHostKeysOverride ?? captureSftpHostKeys;
+      const result = await capture({ host: transport.host, port: transport.port });
+      knownHostsContent = result.knownHostsContent;
+      deps.replicationTargetsRepo.setSftpHostKey(
+        target.id,
+        result.knownHostsContent,
+        formatHostKeyFingerprints(result.entries)
+      );
+    }
+
+    return {
+      provider: 'rclone_sftp',
+      sftp: {
+        host: transport.host,
+        port: transport.port,
+        username: transport.username,
+        privateKeyPath: transport.privateKeyPath,
+        keyPassphrase,
+        knownHostsContent,
+      },
+    };
+  }
+
+  // rclone_ftp
+  if (transport.type !== 'ftp') {
+    throw new Error(`Expected an ftp connection, got "${transport.type}".`);
+  }
+  const password = transport.passwordSecretRef ? deps.secretStore.get(transport.passwordSecretRef) : null;
+  if (!password) {
+    throw new Error('The linked FTP connection is missing its password.');
+  }
+  return {
+    provider: 'rclone_ftp',
+    ftp: { host: transport.host, port: transport.port, username: transport.username, password },
+  };
 }
 
 const DB_DUMPS_EXCLUDES = [
@@ -132,22 +223,14 @@ export async function replicateTarget(
     }
   }
 
-  // --- Secrets --------------------------------------------------------------
-  const rawConfig = deps.secretStore.get(target.rcloneConfigSecretRef);
-  if (!rawConfig) {
-    return recordImmediateFailure(
-      deps,
-      target,
-      opts,
-      'This target is not authorized yet — connect a Google account first.'
-    );
-  }
-  let drive: RcloneDriveConfig;
+  // --- Remote connection material --------------------------------------
+  let remote: ResolvedRcloneRemote;
   try {
-    drive = JSON.parse(rawConfig) as RcloneDriveConfig;
-  } catch {
-    return recordImmediateFailure(deps, target, opts, 'The stored rclone configuration is corrupt.');
+    remote = await resolveRcloneRemote(deps, target);
+  } catch (err) {
+    return recordImmediateFailure(deps, target, opts, msg(err));
   }
+
   let cryptPassword: string | undefined;
   if (target.encryptWithCrypt) {
     cryptPassword = target.cryptPasswordSecretRef ? deps.secretStore.get(target.cryptPasswordSecretRef) ?? undefined : undefined;
@@ -167,7 +250,7 @@ export async function replicateTarget(
   try {
     if (preflight) await preflight();
 
-    const result = await rclone.withRcloneConfig(target, { drive, cryptPassword }, (configPath, remoteSection) =>
+    const result = await rclone.withRcloneConfig(target, remote, cryptPassword, (configPath, remoteSection) =>
       rclone.sync({
         configPath,
         remoteSection,

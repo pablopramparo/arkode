@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveToolPath } from '../toolPaths.js';
 import { buildRcloneConfigIni, rcloneRemoteSection } from './rcloneConfig.js';
-import type { RcloneDriveConfig, RcloneSyncResult, ReplicationTarget } from './types.js';
+import type { ResolvedRcloneRemote, RcloneSyncResult, ReplicationTarget } from './types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -51,31 +51,48 @@ export async function rcloneObscure(plaintext: string): Promise<string> {
   return stdout.trim();
 }
 
-export interface RcloneSecrets {
-  drive: RcloneDriveConfig;
-  /** Plaintext crypt password — obscured here before it touches the config file. */
-  cryptPassword?: string;
-}
-
 /**
- * Writes a locked-down temp rclone.conf for `target`, invokes `fn` with its
- * path and the remote section to address, then deletes it (even on throw).
+ * Writes a locked-down temp rclone.conf (and, for rclone_sftp with a pinned
+ * host key, a sibling known_hosts file) for `target`, invokes `fn` with the
+ * config's path and the remote section to address, then deletes the whole
+ * temp dir (even on throw).
  */
 export async function withRcloneConfig<T>(
   target: Pick<ReplicationTarget, 'encryptWithCrypt'>,
-  secrets: RcloneSecrets,
+  remote: ResolvedRcloneRemote,
+  cryptPassword: string | undefined,
   fn: (configPath: string, remoteSection: string) => Promise<T>
 ): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), 'arkode-rclone-'));
   const configPath = join(dir, 'rclone.conf');
   try {
     const obscuredCryptPassword = target.encryptWithCrypt
-      ? await rcloneObscure(requireCryptPassword(secrets))
+      ? await rcloneObscure(requireCryptPassword(cryptPassword))
       : undefined;
+
+    let obscuredKeyPassphrase: string | undefined;
+    let knownHostsFilePath: string | undefined;
+    let obscuredFtpPassword: string | undefined;
+
+    if (remote.provider === 'rclone_sftp') {
+      if (remote.sftp.keyPassphrase) {
+        obscuredKeyPassphrase = await rcloneObscure(remote.sftp.keyPassphrase);
+      }
+      if (remote.sftp.knownHostsContent) {
+        knownHostsFilePath = join(dir, 'known_hosts');
+        await writeFile(knownHostsFilePath, remote.sftp.knownHostsContent, { mode: 0o600 });
+      }
+    } else if (remote.provider === 'rclone_ftp') {
+      obscuredFtpPassword = await rcloneObscure(remote.ftp.password);
+    }
+
     const ini = buildRcloneConfigIni({
-      drive: secrets.drive,
+      remote,
       withCrypt: target.encryptWithCrypt,
       obscuredCryptPassword,
+      obscuredKeyPassphrase,
+      obscuredFtpPassword,
+      knownHostsFilePath,
     });
     await writeFile(configPath, ini, { mode: 0o600 });
     await chmod(configPath, 0o600).catch(() => {});
@@ -85,11 +102,11 @@ export async function withRcloneConfig<T>(
   }
 }
 
-function requireCryptPassword(secrets: RcloneSecrets): string {
-  if (!secrets.cryptPassword) {
+function requireCryptPassword(cryptPassword: string | undefined): string {
+  if (!cryptPassword) {
     throw new Error('This replication target is encrypted but no crypt password was provided.');
   }
-  return secrets.cryptPassword;
+  return cryptPassword;
 }
 
 interface RcloneStatsLine {

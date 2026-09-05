@@ -16,6 +16,7 @@ function deps(ctx: TestContext, over: Partial<ReplicateTargetDeps> = {}): Replic
     fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
     fileBackupRunsRepo: ctx.fileBackupRunsRepo,
     fileBackupMaintenanceRunsRepo: ctx.fileBackupMaintenanceRunsRepo,
+    transportsRepo: ctx.transportsRepo,
     secretStore: ctx.secretStore,
     preflightOverride: async () => {},
     ...over,
@@ -30,7 +31,7 @@ function fakeRclone(syncImpl?: RcloneOps['sync']): { ops: RcloneOps; sync: Retur
   return {
     sync,
     ops: {
-      withRcloneConfig: async (_t, _s, fn) => fn('/tmp/fake-rclone.conf', 'drive'),
+      withRcloneConfig: async (_t, _remote, _cryptPassword, fn) => fn('/tmp/fake-rclone.conf', 'base'),
       sync: sync as unknown as RcloneOps['sync'],
     },
   };
@@ -49,6 +50,7 @@ function seedResticTarget(ctx: TestContext) {
   const target = ctx.replicationTargetsRepo.create({
     clientId: client.id,
     content: 'restic_repo',
+    provider: 'rclone_drive',
     remotePath: 'arkode/Winners/repo',
     rcloneConfigSecretRef: 'repl:cfg',
     encryptWithCrypt: false,
@@ -156,6 +158,7 @@ describe('replicateTarget', () => {
     const target = ctx.replicationTargetsRepo.create({
       clientId: client.id,
       content: 'db_dumps',
+      provider: 'rclone_drive',
       remotePath: 'arkode/W/dumps',
       rcloneConfigSecretRef: 'repl:cfg2',
       encryptWithCrypt: true,
@@ -171,5 +174,112 @@ describe('replicateTarget', () => {
     const call = sync.mock.calls[0][0];
     expect(call.source).toBe(dir);
     expect(call.extraArgs).toEqual(expect.arrayContaining(['--exclude', '_restic-repo/**']));
+  });
+
+  it('rclone_sftp target captures + persists the host key on the first run, reuses it on the second', async () => {
+    const ctx = createTestContext();
+    const dir = mkdtempSync(join(tmpdir(), 'arkode-repl-sftp-'));
+    tempDirs.push(dir);
+    const client = ctx.clientsRepo.create({ name: 'W', localBasePath: dir });
+    const transport = ctx.transportsRepo.createSftp({
+      clientId: client.id,
+      name: 'Off-site',
+      host: 'backup.example.com',
+      username: 'arkode',
+      privateKeyPath: 'C:/keys/x.key',
+    });
+    const target = ctx.replicationTargetsRepo.create({
+      clientId: client.id,
+      content: 'db_dumps',
+      provider: 'rclone_sftp',
+      remotePath: 'arkode/W/dumps',
+      transportId: transport.id,
+      encryptWithCrypt: false,
+      cryptPasswordSecretRef: null,
+    });
+    const { ops, sync } = fakeRclone();
+    const captureHostKeysOverride = vi.fn(async () => ({
+      knownHostsContent: 'backup.example.com ssh-ed25519 AAAA...\n',
+      entries: [{ keyType: 'ssh-ed25519', base64Key: 'AAAA...', fingerprintSha256: 'abc' }],
+    }));
+
+    const result1 = await replicateTarget(
+      deps(ctx, { rcloneOverride: ops, captureHostKeysOverride }),
+      target.id,
+      { trigger: 'manual' }
+    );
+    expect(result1.status).toBe('Success');
+    expect(captureHostKeysOverride).toHaveBeenCalledTimes(1);
+    expect(captureHostKeysOverride).toHaveBeenCalledWith({ host: 'backup.example.com', port: 22 });
+    const afterFirst = ctx.replicationTargetsRepo.getById(target.id)!;
+    expect(afterFirst.sftpHostKey).toBe('backup.example.com ssh-ed25519 AAAA...\n');
+    expect(afterFirst.sftpHostKeyFingerprint).toBe('ssh-ed25519 abc');
+
+    const result2 = await replicateTarget(
+      deps(ctx, { rcloneOverride: ops, captureHostKeysOverride }),
+      target.id,
+      { trigger: 'manual' }
+    );
+    expect(result2.status).toBe('Success');
+    expect(captureHostKeysOverride).toHaveBeenCalledTimes(1); // not called again -- the pinned key was reused
+    expect(sync).toHaveBeenCalledTimes(2);
+  });
+
+  it('rclone_ftp target resolves its password from the linked transport secret', async () => {
+    const ctx = createTestContext();
+    const dir = mkdtempSync(join(tmpdir(), 'arkode-repl-ftp-'));
+    tempDirs.push(dir);
+    const client = ctx.clientsRepo.create({ name: 'W', localBasePath: dir });
+    const transport = ctx.transportsRepo.createFtp({
+      clientId: client.id,
+      name: 'Off-site FTP',
+      host: 'ftp.example.com',
+      username: 'arkode',
+      passwordSecretRef: 'transport:pw',
+    });
+    ctx.secretStore.set('transport:pw', 's3cret');
+    const target = ctx.replicationTargetsRepo.create({
+      clientId: client.id,
+      content: 'db_dumps',
+      provider: 'rclone_ftp',
+      remotePath: 'arkode/W/dumps',
+      transportId: transport.id,
+      encryptWithCrypt: false,
+      cryptPasswordSecretRef: null,
+    });
+    const { ops, sync } = fakeRclone();
+
+    const result = await replicateTarget(deps(ctx, { rcloneOverride: ops }), target.id, { trigger: 'manual' });
+    expect(result.status).toBe('Success');
+    expect(sync).toHaveBeenCalledTimes(1);
+  });
+
+  it('a missing/inactive/wrong-type linked transport fails the run cleanly, never throws', async () => {
+    const ctx = createTestContext();
+    const dir = mkdtempSync(join(tmpdir(), 'arkode-repl-badtransport-'));
+    tempDirs.push(dir);
+    const client = ctx.clientsRepo.create({ name: 'W', localBasePath: dir });
+    const sshTransport = ctx.transportsRepo.createSsh({
+      clientId: client.id,
+      name: 'Wrong kind',
+      host: 'h',
+      username: 'u',
+      privateKeyPath: 'C:/keys/x.key',
+    });
+    const target = ctx.replicationTargetsRepo.create({
+      clientId: client.id,
+      content: 'db_dumps',
+      provider: 'rclone_sftp',
+      remotePath: 'p',
+      transportId: sshTransport.id,
+      encryptWithCrypt: false,
+      cryptPasswordSecretRef: null,
+    });
+    const { ops, sync } = fakeRclone();
+
+    const result = await replicateTarget(deps(ctx, { rcloneOverride: ops }), target.id, { trigger: 'manual' });
+    expect(result.status).toBe('Failed');
+    expect(result.message).toMatch(/expected an sftp connection/i);
+    expect(sync).not.toHaveBeenCalled();
   });
 });

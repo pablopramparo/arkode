@@ -48,6 +48,7 @@ import {
   deleteBackupRun,
   deleteFileBackupRun,
   replicateTarget,
+  resolveRcloneRemote,
   isReplicationDue,
   rcloneClient,
   hardenExistingKeyStore,
@@ -66,6 +67,7 @@ import {
   type ReplicateTargetDeps,
   type ReplicationDueDeps,
   type ReplicationContent,
+  type ReplicationProvider,
   type RcloneDriveConfig,
   resticClient,
 } from 'engine-core';
@@ -1439,6 +1441,7 @@ function buildReplicationDeps(ctx: ReturnType<typeof buildContext>): ReplicateTa
     fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
     fileBackupRunsRepo: ctx.fileBackupRunsRepo,
     fileBackupMaintenanceRunsRepo: ctx.fileBackupMaintenanceRunsRepo,
+    transportsRepo: ctx.transportsRepo,
     secretStore: ctx.secretStore,
     runsRepo: ctx.runsRepo,
   };
@@ -1956,36 +1959,48 @@ function parseReplicationContent(value: string): ReplicationContent {
   throw new Error(`--content must be "restic_repo" or "db_dumps", got "${value}"`);
 }
 
-/** Loads a target's rclone drive config + (if encrypted) its crypt password from SecretStore. */
-function loadReplicationSecrets(
+/** Reads a target's crypt password from SecretStore, throwing a clear error if it's supposed to have one but doesn't. */
+function loadReplicationCryptPassword(
   ctx: ReturnType<typeof buildContext>,
-  target: { rcloneConfigSecretRef: string; encryptWithCrypt: boolean; cryptPasswordSecretRef: string | null }
-): { drive: RcloneDriveConfig; cryptPassword?: string } {
-  const raw = ctx.secretStore.get(target.rcloneConfigSecretRef);
-  if (!raw) throw new Error('This target is not authorized yet — run `replication:authorize` first.');
-  const drive = JSON.parse(raw) as RcloneDriveConfig;
-  let cryptPassword: string | undefined;
-  if (target.encryptWithCrypt) {
-    cryptPassword = target.cryptPasswordSecretRef
-      ? ctx.secretStore.get(target.cryptPasswordSecretRef) ?? undefined
-      : undefined;
-    if (!cryptPassword) throw new Error('The encryption password for this target could not be read.');
+  target: { encryptWithCrypt: boolean; cryptPasswordSecretRef: string | null }
+): string | undefined {
+  if (!target.encryptWithCrypt) return undefined;
+  const cryptPassword = target.cryptPasswordSecretRef
+    ? (ctx.secretStore.get(target.cryptPasswordSecretRef) ?? undefined)
+    : undefined;
+  if (!cryptPassword) throw new Error('The encryption password for this target could not be read.');
+  return cryptPassword;
+}
+
+/** Errors clearly when a Drive-only command (authorize/paste-token) is run against a non-Drive target. */
+function requireDriveProvider(provider: ReplicationProvider): void {
+  if (provider !== 'rclone_drive') {
+    throw new Error('Esta replicación no usa Google Drive; no requiere autorización.');
   }
-  return { drive, cryptPassword };
+}
+
+function parseReplicationProvider(value: string | undefined): ReplicationProvider {
+  if (!value || value === 'drive') return 'rclone_drive';
+  if (value === 'sftp') return 'rclone_sftp';
+  if (value === 'ftp') return 'rclone_ftp';
+  throw new Error(`--provider must be "drive", "sftp", or "ftp", got "${value}"`);
 }
 
 program
   .command('replication:add')
-  .description('Configure an off-site copy of a client\'s backups to Google Drive. Opt-in, one per (client, content). Does NOT authorize a Google account — run replication:authorize next.')
+  .description('Configure an off-site copy of a client\'s backups. Opt-in, one per (client, content). --provider drive (default) needs replication:authorize next; --provider sftp/ftp reuses an existing Conexiones transport and is usable immediately.')
   .requiredOption('--client <clientId>')
   .requiredOption('--content <kind>', 'restic_repo | db_dumps')
-  .requiredOption('--remote-path <path>', 'destination folder inside the Drive account, e.g. arkode/Winners/repo')
-  .option('--no-encrypt', 'db_dumps only: sync raw instead of wrapping in an rclone crypt remote (NOT recommended — Google would see plaintext dumps)')
+  .requiredOption('--remote-path <path>', 'destination folder inside the remote, e.g. arkode/Winners/repo')
+  .option('--provider <kind>', 'drive (default) | sftp | ftp')
+  .option('--transport <transportId>', 'required for --provider sftp/ftp: an existing sftp/ftp transport for this client')
+  .option('--no-encrypt', 'db_dumps only: sync raw instead of wrapping in an rclone crypt remote (NOT recommended — the destination would see plaintext dumps)')
   .option('--crypt-password <pw>', 'db_dumps only: supply the crypt password instead of generating one')
   .action(async (opts) => {
     const ctx = buildContext();
     try {
       const content = parseReplicationContent(opts.content);
+      const provider = parseReplicationProvider(opts.provider);
       if (!ctx.clientsRepo.getById(opts.client)) throw new Error(`Client ${opts.client} not found.`);
 
       const encrypt = content === 'db_dumps' && opts.encrypt !== false;
@@ -1998,11 +2013,30 @@ program
         if (!opts.cryptPassword) generated = pw;
       }
 
+      let transportId: string | undefined;
+      let rcloneConfigSecretRef: string | undefined;
+      if (provider === 'rclone_drive') {
+        rcloneConfigSecretRef = replicationConfigSecretRef(opts.client, content);
+      } else {
+        if (!opts.transport) throw new Error('--transport is required for --provider sftp/ftp.');
+        const transport = ctx.transportsRepo.getById(opts.transport);
+        if (!transport || transport.clientId !== opts.client) {
+          throw new Error(`Transport ${opts.transport} not found for client ${opts.client}.`);
+        }
+        const expectedType = provider === 'rclone_sftp' ? 'sftp' : 'ftp';
+        if (transport.type !== expectedType) {
+          throw new Error(`--provider ${provider === 'rclone_sftp' ? 'sftp' : 'ftp'} needs a "${expectedType}" transport, got "${transport.type}".`);
+        }
+        transportId = transport.id;
+      }
+
       const target = ctx.replicationTargetsRepo.create({
         clientId: opts.client,
         content,
+        provider,
         remotePath: opts.remotePath,
-        rcloneConfigSecretRef: replicationConfigSecretRef(opts.client, content),
+        rcloneConfigSecretRef,
+        transportId,
         encryptWithCrypt: encrypt,
         cryptPasswordSecretRef: cryptRef,
       });
@@ -2010,7 +2044,7 @@ program
       if (generated) {
         console.log(
           '\n⚠  Save this encryption password somewhere safe OUTSIDE this machine — it is required to read these\n' +
-            '   dumps back from Drive, and it is NOT included in a config export.'
+            '   dumps back, and it is NOT included in a config export.'
         );
       }
     } catch (err) {
@@ -2033,6 +2067,7 @@ program
       const content = parseReplicationContent(opts.content);
       const target = ctx.replicationTargetsRepo.getByClientAndContent(opts.client, content);
       if (!target) throw new Error('No replication target for that client + content. Run `replication:add` first.');
+      requireDriveProvider(target.provider);
       console.log(
         opts.openBrowser === false
           ? 'Starting Google sign-in… open the link below in any browser on this machine, approve access, then return here.'
@@ -2049,7 +2084,8 @@ program
         config.clientId = opts.clientId;
         config.clientSecret = opts.clientSecret;
       }
-      ctx.secretStore.set(target.rcloneConfigSecretRef, JSON.stringify(config));
+      // requireDriveProvider() above + the repo's own create()-time validation guarantee this is set for a drive target.
+      ctx.secretStore.set(target.rcloneConfigSecretRef!, JSON.stringify(config));
       console.log('Authorized. Run `replication:test` to verify.');
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
@@ -2069,9 +2105,10 @@ program
       const content = parseReplicationContent(opts.content);
       const target = ctx.replicationTargetsRepo.getByClientAndContent(opts.client, content);
       if (!target) throw new Error('No replication target for that client + content. Run `replication:add` first.');
+      requireDriveProvider(target.provider);
       const token = rcloneClient.extractTokenBlob(opts.token) ?? opts.token.trim();
       JSON.parse(token); // validate it parses
-      ctx.secretStore.set(target.rcloneConfigSecretRef, JSON.stringify({ token } satisfies RcloneDriveConfig));
+      ctx.secretStore.set(target.rcloneConfigSecretRef!, JSON.stringify({ token } satisfies RcloneDriveConfig));
       console.log('Token stored. Run `replication:test` to verify.');
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
@@ -2108,8 +2145,9 @@ program
     try {
       const target = ctx.replicationTargetsRepo.getById(targetId);
       if (!target) throw new Error(`Replication target ${targetId} not found.`);
-      const secrets = loadReplicationSecrets(ctx, target);
-      const out = await rcloneClient.withRcloneConfig(target, secrets, (configPath, remoteSection) =>
+      const remote = await resolveRcloneRemote(ctx, target);
+      const cryptPassword = loadReplicationCryptPassword(ctx, target);
+      const out = await rcloneClient.withRcloneConfig(target, remote, cryptPassword, (configPath, remoteSection) =>
         rcloneClient.rcloneAbout({ configPath, remoteSection })
       );
       console.log(out);
@@ -2176,10 +2214,11 @@ program
     try {
       const target = ctx.replicationTargetsRepo.getById(targetId);
       if (!target) throw new Error(`Replication target ${targetId} not found.`);
-      const secrets = loadReplicationSecrets(ctx, target);
+      const remote = await resolveRcloneRemote(ctx, target);
+      const cryptPassword = loadReplicationCryptPassword(ctx, target);
       const dest = resolvePath(opts.dest);
       await mkdir(dest, { recursive: true });
-      await rcloneClient.withRcloneConfig(target, secrets, (configPath, remoteSection) =>
+      await rcloneClient.withRcloneConfig(target, remote, cryptPassword, (configPath, remoteSection) =>
         rcloneClient.rcloneCopyDown({ configPath, remoteSection, remotePath: target.remotePath, destDir: dest })
       );
       console.log(`Pulled ${target.content} to ${dest}`);
@@ -3453,7 +3492,8 @@ program
           targets.map((t) => ({
             ...t,
             clientName: ctx.clientsRepo.getById(t.clientId)?.name ?? null,
-            authorized: Boolean(ctx.secretStore.get(t.rcloneConfigSecretRef)),
+            transportName: t.transportId ? (ctx.transportsRepo.getById(t.transportId)?.name ?? null) : null,
+            authorized: t.provider === 'rclone_drive' ? Boolean(t.rcloneConfigSecretRef && ctx.secretStore.get(t.rcloneConfigSecretRef)) : Boolean(t.transportId),
             due: isReplicationDue(t, repDeps),
           }))
         );
@@ -3464,6 +3504,7 @@ program
         try {
           const body = await readJsonBody(req);
           const content = parseReplicationContent(String(body.content));
+          const provider = parseReplicationProvider(typeof body.provider === 'string' ? body.provider : undefined);
           if (!ctx.clientsRepo.getById(body.clientId)) {
             sendJson(res, 400, { error: `Client ${body.clientId} not found.` });
             return;
@@ -3480,11 +3521,32 @@ program
             ctx.secretStore.set(cryptRef, pw);
             if (!body.cryptPassword) generated = pw;
           }
+
+          let transportId: string | undefined;
+          let rcloneConfigSecretRef: string | undefined;
+          if (provider === 'rclone_drive') {
+            rcloneConfigSecretRef = replicationConfigSecretRef(body.clientId, content);
+          } else {
+            const transport = typeof body.transportId === 'string' ? ctx.transportsRepo.getById(body.transportId) : null;
+            if (!transport || transport.clientId !== body.clientId) {
+              sendJson(res, 400, { error: `Transport ${body.transportId} not found for client ${body.clientId}.` });
+              return;
+            }
+            const expectedType = provider === 'rclone_sftp' ? 'sftp' : 'ftp';
+            if (transport.type !== expectedType) {
+              sendJson(res, 400, { error: `--provider ${expectedType} needs a "${expectedType}" transport, got "${transport.type}".` });
+              return;
+            }
+            transportId = transport.id;
+          }
+
           const target = ctx.replicationTargetsRepo.create({
             clientId: body.clientId,
             content,
+            provider,
             remotePath: String(body.remotePath ?? '').trim(),
-            rcloneConfigSecretRef: replicationConfigSecretRef(body.clientId, content),
+            rcloneConfigSecretRef,
+            transportId,
             encryptWithCrypt: encrypt,
             cryptPasswordSecretRef: cryptRef,
           });
@@ -3503,6 +3565,10 @@ program
             sendJson(res, 404, { error: 'not found' });
             return;
           }
+          if (target.provider !== 'rclone_drive') {
+            sendJson(res, 400, { error: 'Esta replicación no usa Google Drive; no requiere autorización.' });
+            return;
+          }
           const body = await readJsonBody(req);
           const token = rcloneClient.extractTokenBlob(String(body.token ?? '')) ?? String(body.token ?? '').trim();
           JSON.parse(token); // validate
@@ -3511,7 +3577,7 @@ program
             config.clientId = String(body.clientId);
             config.clientSecret = String(body.clientSecret);
           }
-          ctx.secretStore.set(target.rcloneConfigSecretRef, JSON.stringify(config));
+          ctx.secretStore.set(target.rcloneConfigSecretRef!, JSON.stringify(config));
           sendJson(res, 200, { ok: true });
         } catch (err) {
           sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
@@ -3539,8 +3605,9 @@ program
             sendJson(res, 404, { error: 'not found' });
             return;
           }
-          const secrets = loadReplicationSecrets(ctx, target);
-          const out = await rcloneClient.withRcloneConfig(target, secrets, (configPath, remoteSection) =>
+          const remote = await resolveRcloneRemote(ctx, target);
+          const cryptPassword = loadReplicationCryptPassword(ctx, target);
+          const out = await rcloneClient.withRcloneConfig(target, remote, cryptPassword, (configPath, remoteSection) =>
             rcloneClient.rcloneAbout({ configPath, remoteSection })
           );
           sendJson(res, 200, { ok: true, detail: out });
@@ -3576,8 +3643,9 @@ program
             return;
           }
           await mkdir(dest, { recursive: true });
-          const secrets = loadReplicationSecrets(ctx, target);
-          await rcloneClient.withRcloneConfig(target, secrets, (configPath, remoteSection) =>
+          const remote = await resolveRcloneRemote(ctx, target);
+          const cryptPassword = loadReplicationCryptPassword(ctx, target);
+          await rcloneClient.withRcloneConfig(target, remote, cryptPassword, (configPath, remoteSection) =>
             rcloneClient.rcloneCopyDown({ configPath, remoteSection, remotePath: target.remotePath, destDir: dest })
           );
           sendJson(res, 200, { ok: true, dest });

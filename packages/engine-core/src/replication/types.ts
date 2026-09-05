@@ -14,7 +14,7 @@
  */
 export type ReplicationContent = 'restic_repo' | 'db_dumps';
 
-export type ReplicationProvider = 'rclone_drive';
+export type ReplicationProvider = 'rclone_drive' | 'rclone_sftp' | 'rclone_ftp';
 
 export type ReplicationRunStatus = 'Running' | 'Success' | 'Warning' | 'Failed';
 export type ReplicationTrigger = 'manual' | 'scheduled';
@@ -27,8 +27,14 @@ export interface ReplicationTarget {
   provider: ReplicationProvider;
   /** Destination folder inside the remote account, e.g. "arkode/Winners/repo". */
   remotePath: string;
-  /** SecretStore ref for the rclone remote definition JSON (see RcloneDriveConfig). */
-  rcloneConfigSecretRef: string;
+  /** rclone_drive only: SecretStore ref for the rclone remote definition JSON (see RcloneDriveConfig). */
+  rcloneConfigSecretRef: string | null;
+  /** rclone_sftp/rclone_ftp only: an existing transports row supplies host/port/username + credentials. */
+  transportId: string | null;
+  /** rclone_sftp only: the pinned host key (rclone `host_keys` format, "algo base64key"), captured on first use. */
+  sftpHostKey: string | null;
+  /** rclone_sftp only: SHA256 fingerprint of the same key, for display only. */
+  sftpHostKeyFingerprint: string | null;
   encryptWithCrypt: boolean;
   /** SecretStore ref for the rclone `crypt` password. Non-null iff encryptWithCrypt. */
   cryptPasswordSecretRef: string | null;
@@ -82,3 +88,37 @@ export interface RcloneSyncResult {
   filesDeleted: number;
   warnings: string[];
 }
+
+/** rclone_sftp remote material, resolved from an existing sftp-type transport + its secrets. */
+export interface RcloneSftpRemoteMaterial {
+  host: string;
+  port: number;
+  username: string;
+  /** Path to the PEM-encoded private key file (transports.private_key_path). */
+  privateKeyPath: string;
+  /** Plaintext passphrase for the key, if any (resolved from transports.passphrase_secret_ref). */
+  keyPassphrase?: string;
+  /** Pinned host key(s), as real OpenSSH known_hosts-format line(s), once captured. */
+  knownHostsContent?: string;
+}
+
+/** rclone_ftp remote material, resolved from an existing ftp-type transport + its secret. */
+export interface RcloneFtpRemoteMaterial {
+  host: string;
+  port: number;
+  username: string;
+  /** Plaintext password (resolved from transports.password_secret_ref). */
+  password: string;
+}
+
+/**
+ * The remote connection material `rcloneConfig.ts`/`rcloneClient.ts` need to
+ * build a temp rclone.conf, resolved by the caller (replicateTarget.ts / the
+ * engine-cli replication:* commands) from whichever source the target's
+ * provider dictates -- a stored RcloneDriveConfig secret, or an existing
+ * transport's own fields/secrets.
+ */
+export type ResolvedRcloneRemote =
+  | { provider: 'rclone_drive'; drive: RcloneDriveConfig }
+  | { provider: 'rclone_sftp'; sftp: RcloneSftpRemoteMaterial }
+  | { provider: 'rclone_ftp'; ftp: RcloneFtpRemoteMaterial };

@@ -3,14 +3,19 @@ import { listen } from '@tauri-apps/api/event';
 import { getApiBase } from './apiBase';
 
 export type ReplicationContent = 'restic_repo' | 'db_dumps';
+export type ReplicationProvider = 'rclone_drive' | 'rclone_sftp' | 'rclone_ftp';
 export type ReplicationLastStatus = 'Success' | 'Warning' | 'Failed';
 
 export interface ReplicationTarget {
   id: string;
   clientId: string;
   content: ReplicationContent;
-  provider: 'rclone_drive';
+  provider: ReplicationProvider;
   remotePath: string;
+  /** rclone_sftp/rclone_ftp only: the linked Conexiones transport. */
+  transportId?: string | null;
+  /** rclone_sftp only: human-readable "algo fingerprint" pairs, once captured on first use. */
+  sftpHostKeyFingerprint?: string | null;
   encryptWithCrypt: boolean;
   enabled: boolean;
   lastReplicatedAt: string | null;
@@ -20,6 +25,7 @@ export interface ReplicationTarget {
   updatedAt: string;
   /** Enriched by GET /replication-targets. */
   clientName?: string | null;
+  transportName?: string | null;
   authorized?: boolean;
   due?: boolean;
   /** Only present in the POST /replication-targets response, once. */
@@ -55,6 +61,10 @@ export async function createReplicationTarget(input: {
   clientId: string;
   content: ReplicationContent;
   remotePath: string;
+  /** Defaults to Google Drive when omitted. */
+  provider?: 'drive' | 'sftp' | 'ftp';
+  /** Required when provider is "sftp"/"ftp": an existing sftp/ftp transport for this client. */
+  transportId?: string;
   encrypt?: boolean;
 }): Promise<ReplicationTarget> {
   return handleJson(

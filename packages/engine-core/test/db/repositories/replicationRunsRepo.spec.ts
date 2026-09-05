@@ -6,6 +6,7 @@ function seedTarget(ctx: ReturnType<typeof createTestContext>) {
   const target = ctx.replicationTargetsRepo.create({
     clientId: client.id,
     content: 'restic_repo',
+    provider: 'rclone_drive',
     remotePath: 'p',
     rcloneConfigSecretRef: 'r',
     encryptWithCrypt: false,
@@ -52,6 +53,7 @@ describe('replicationRunsRepo', () => {
     const other = ctx.replicationTargetsRepo.create({
       clientId: client.id,
       content: 'db_dumps',
+      provider: 'rclone_drive',
       remotePath: 'p2',
       rcloneConfigSecretRef: 'r2',
       encryptWithCrypt: false,

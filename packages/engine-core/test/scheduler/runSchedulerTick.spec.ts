@@ -45,11 +45,12 @@ function tickDeps(ctx: TestContext): RunSchedulerTickDeps {
       fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
       fileBackupRunsRepo: ctx.fileBackupRunsRepo,
       fileBackupMaintenanceRunsRepo: ctx.fileBackupMaintenanceRunsRepo,
+      transportsRepo: ctx.transportsRepo,
       secretStore: ctx.secretStore,
       runsRepo: ctx.runsRepo,
       preflightOverride: async () => {},
       rcloneOverride: {
-        withRcloneConfig: async (_t, _s, fn) => fn('/tmp/c.conf', 'drive'),
+        withRcloneConfig: async (_t, _remote, _cryptPassword, fn) => fn('/tmp/c.conf', 'base'),
         sync: async () => ({ bytesTransferred: 1, filesTransferred: 1, filesDeleted: 0, warnings: [] }),
       },
     },
@@ -86,6 +87,7 @@ describe('runSchedulerTick', () => {
     const target = ctx.replicationTargetsRepo.create({
       clientId: client.id,
       content: 'restic_repo',
+      provider: 'rclone_drive',
       remotePath: 'arkode/W/repo',
       rcloneConfigSecretRef: 'repl:cfg',
       encryptWithCrypt: false,

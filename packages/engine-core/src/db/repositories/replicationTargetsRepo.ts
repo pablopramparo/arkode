@@ -12,7 +12,10 @@ interface ReplicationTargetRow {
   content: string;
   provider: string;
   remote_path: string;
-  rclone_config_secret_ref: string;
+  rclone_config_secret_ref: string | null;
+  transport_id: string | null;
+  sftp_host_key: string | null;
+  sftp_host_key_fingerprint: string | null;
   encrypt_with_crypt: number;
   crypt_password_secret_ref: string | null;
   enabled: number;
@@ -31,6 +34,9 @@ function toDomain(row: ReplicationTargetRow): ReplicationTarget {
     provider: row.provider as ReplicationTarget['provider'],
     remotePath: row.remote_path,
     rcloneConfigSecretRef: row.rclone_config_secret_ref,
+    transportId: row.transport_id,
+    sftpHostKey: row.sftp_host_key,
+    sftpHostKeyFingerprint: row.sftp_host_key_fingerprint,
     encryptWithCrypt: row.encrypt_with_crypt === 1,
     cryptPasswordSecretRef: row.crypt_password_secret_ref,
     enabled: row.enabled === 1,
@@ -45,8 +51,12 @@ function toDomain(row: ReplicationTargetRow): ReplicationTarget {
 export interface CreateReplicationTargetInput {
   clientId: string;
   content: ReplicationContent;
+  provider: ReplicationTarget['provider'];
   remotePath: string;
-  rcloneConfigSecretRef: string;
+  /** Required iff provider === 'rclone_drive'. */
+  rcloneConfigSecretRef?: string;
+  /** Required iff provider is 'rclone_sftp' or 'rclone_ftp'. */
+  transportId?: string;
   encryptWithCrypt: boolean;
   cryptPasswordSecretRef: string | null;
 }
@@ -65,6 +75,8 @@ export interface ReplicationTargetsRepo {
   listEnabled(): ReplicationTarget[];
   update(id: string, input: UpdateReplicationTargetInput): void;
   recordResult(id: string, status: ReplicationLastStatus, error: string | null): void;
+  /** Persists the target's pinned SFTP host key(s) — rclone_sftp only, set once on first successful test/run. */
+  setSftpHostKey(id: string, knownHostsContent: string, fingerprintDisplay: string): void;
   remove(id: string): void;
 }
 
@@ -81,8 +93,15 @@ function friendlyUniqueError(err: unknown): never {
 export function createReplicationTargetsRepo(db: Database): ReplicationTargetsRepo {
   const insertStmt = db.prepare(
     `INSERT INTO replication_targets
-       (id, client_id, content, remote_path, rclone_config_secret_ref, encrypt_with_crypt, crypt_password_secret_ref)
-     VALUES (@id, @clientId, @content, @remotePath, @rcloneConfigSecretRef, @encryptWithCrypt, @cryptPasswordSecretRef)`
+       (id, client_id, content, provider, remote_path, rclone_config_secret_ref, transport_id, encrypt_with_crypt, crypt_password_secret_ref)
+     VALUES (@id, @clientId, @content, @provider, @remotePath, @rcloneConfigSecretRef, @transportId, @encryptWithCrypt, @cryptPasswordSecretRef)`
+  );
+  const setSftpHostKeyStmt = db.prepare(
+    `UPDATE replication_targets
+     SET sftp_host_key = @knownHostsContent,
+         sftp_host_key_fingerprint = @fingerprintDisplay,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE id = @id`
   );
   const getByIdStmt = db.prepare<[string], ReplicationTargetRow>('SELECT * FROM replication_targets WHERE id = ?');
   const getByClientAndContentStmt = db.prepare<[string, string], ReplicationTargetRow>(
@@ -109,14 +128,32 @@ export function createReplicationTargetsRepo(db: Database): ReplicationTargetsRe
 
   return {
     create(input) {
+      if (input.provider === 'rclone_drive') {
+        if (!input.rcloneConfigSecretRef) {
+          throw new Error('A Google Drive replication target requires rcloneConfigSecretRef.');
+        }
+        if (input.transportId) {
+          throw new Error('A Google Drive replication target cannot be linked to a transport.');
+        }
+      } else {
+        if (!input.transportId) {
+          throw new Error(`A ${input.provider} replication target requires transportId.`);
+        }
+        if (input.rcloneConfigSecretRef) {
+          throw new Error(`A ${input.provider} replication target cannot have rcloneConfigSecretRef.`);
+        }
+      }
+
       const id = randomUUID();
       try {
         insertStmt.run({
           id,
           clientId: input.clientId,
           content: input.content,
+          provider: input.provider,
           remotePath: input.remotePath,
-          rcloneConfigSecretRef: input.rcloneConfigSecretRef,
+          rcloneConfigSecretRef: input.rcloneConfigSecretRef ?? null,
+          transportId: input.transportId ?? null,
           encryptWithCrypt: input.encryptWithCrypt ? 1 : 0,
           cryptPasswordSecretRef: input.cryptPasswordSecretRef,
         });
@@ -164,6 +201,10 @@ export function createReplicationTargetsRepo(db: Database): ReplicationTargetsRe
 
     recordResult(id, status, error) {
       recordResultStmt.run({ id, status, error });
+    },
+
+    setSftpHostKey(id, knownHostsContent, fingerprintDisplay) {
+      setSftpHostKeyStmt.run({ id, knownHostsContent, fingerprintDisplay });
     },
 
     remove(id) {

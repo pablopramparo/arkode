@@ -8,7 +8,7 @@ import type { KnownHostsRepo } from '../db/repositories/knownHostsRepo.js';
  * Parsing just the algorithm name lets known_hosts record a real key type
  * instead of a placeholder.
  */
-function parseKeyType(rawKey: Buffer): string {
+export function parseKeyType(rawKey: Buffer): string {
   if (rawKey.length < 4) return 'unknown';
   const nameLength = rawKey.readUInt32BE(0);
   if (nameLength <= 0 || 4 + nameLength > rawKey.length) return 'unknown';

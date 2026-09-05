@@ -19,6 +19,7 @@ import {
   type ReplicationRun,
 } from '../lib/replicationClient';
 import { fetchFileBackupRepository } from '../lib/fileBackupClient';
+import { fetchConnections, type TransportWithClientName } from '../lib/connectionsClient';
 import { StatusChip } from './StatusChip';
 import { Switch } from './Switch';
 import { Modal } from './Modal';
@@ -69,8 +70,9 @@ export function ReplicationPanel({ clientId }: { clientId: string }) {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm" style={{ color: 'var(--muted)' }}>
-        Copia opcional de los backups de este cliente a Google Drive (vía rclone). Corre automáticamente después de
-        cada backup exitoso. Cada tipo se configura por separado y con su propia cuenta de Google — nada es obligatorio.
+        Copia opcional de los backups de este cliente a un destino externo (Google Drive, u otro servidor por SFTP/FTP
+        — vía rclone). Corre automáticamente después de cada backup exitoso. Cada tipo se configura por separado — nada
+        es obligatorio.
       </p>
       {error && (
         <p className="text-sm" style={{ color: 'var(--danger)' }}>
@@ -159,7 +161,7 @@ function ReplicationSlot({
             </p>
           </div>
           <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setShowConfigure(true)}>
-            Configurar copia a Drive
+            Configurar copia externa
           </Button>
         </div>
         {showConfigure && (
@@ -212,14 +214,33 @@ function ReplicationSlot({
       </div>
 
       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs" style={{ color: 'var(--muted)' }}>
-        <dt>Carpeta en Drive</dt>
+        <dt>Destino</dt>
         <dd className="font-mono break-all" style={{ color: 'var(--foreground)' }}>
           {target.remotePath}
         </dd>
-        <dt>Cuenta Google</dt>
-        <dd style={{ color: target.authorized ? 'var(--foreground)' : 'var(--warning)' }}>
-          {target.authorized ? 'conectada' : 'sin conectar'}
-        </dd>
+        {target.provider === 'rclone_drive' ? (
+          <>
+            <dt>Cuenta Google</dt>
+            <dd style={{ color: target.authorized ? 'var(--foreground)' : 'var(--warning)' }}>
+              {target.authorized ? 'conectada' : 'sin conectar'}
+            </dd>
+          </>
+        ) : (
+          <>
+            <dt>Conexión</dt>
+            <dd style={{ color: 'var(--foreground)' }}>
+              {target.transportName ?? '—'} ({target.provider === 'rclone_sftp' ? 'SFTP' : 'FTP'})
+            </dd>
+          </>
+        )}
+        {target.provider === 'rclone_sftp' && (
+          <>
+            <dt>Huella SSH</dt>
+            <dd className="break-all" style={{ color: target.sftpHostKeyFingerprint ? 'var(--foreground)' : 'var(--muted)' }}>
+              {target.sftpHostKeyFingerprint ?? 'se confirma en la primera copia'}
+            </dd>
+          </>
+        )}
         <dt>Cifrado</dt>
         <dd style={{ color: 'var(--foreground)' }}>
           {target.encryptWithCrypt ? 'sí (rclone crypt)' : 'no'}
@@ -232,7 +253,7 @@ function ReplicationSlot({
       </dl>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {!target.authorized && canAuthorizeInApp() && (
+        {target.provider === 'rclone_drive' && !target.authorized && canAuthorizeInApp() && (
           <>
             <Button
               size="sm"
@@ -259,9 +280,11 @@ function ReplicationSlot({
             </Button>
           </>
         )}
-        <Button size="sm" variant="ghost" className="rounded-full px-3" onPress={() => setShowPasteToken(true)}>
-          {target.authorized ? 'Reconectar (pegar token)' : 'Pegar token'}
-        </Button>
+        {target.provider === 'rclone_drive' && (
+          <Button size="sm" variant="ghost" className="rounded-full px-3" onPress={() => setShowPasteToken(true)}>
+            {target.authorized ? 'Reconectar (pegar token)' : 'Pegar token'}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"
@@ -410,6 +433,8 @@ function ReplicationSlot({
   );
 }
 
+type ConfigureProvider = 'drive' | 'sftp' | 'ftp';
+
 function ConfigureModal({
   content,
   clientId,
@@ -421,14 +446,78 @@ function ConfigureModal({
   onClose: () => void;
   onCreated: (generatedCryptPassword: string | null) => void | Promise<void>;
 }) {
+  const [provider, setProvider] = useState<ConfigureProvider>('drive');
   const [remotePath, setRemotePath] = useState(`arkode/${content === 'restic_repo' ? 'repo' : 'dumps'}`);
   const [encrypt, setEncrypt] = useState(content === 'db_dumps');
+  const [transports, setTransports] = useState<TransportWithClientName[] | null>(null);
+  const [transportId, setTransportId] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (provider === 'drive') return;
+    let alive = true;
+    fetchConnections()
+      .then((data) => {
+        if (!alive) return;
+        const matching = data.transports.filter((t) => t.clientId === clientId && t.type === provider);
+        setTransports(matching);
+        setTransportId(matching[0]?.id ?? '');
+      })
+      .catch((e) => alive && setErr(e instanceof Error ? e.message : String(e)));
+    return () => {
+      alive = false;
+    };
+  }, [provider, clientId]);
+
+  const providerLabel = provider === 'drive' ? 'Google Drive' : provider === 'sftp' ? 'SFTP existente' : 'FTP existente';
+  const needsTransport = provider !== 'drive';
+  const canSubmit = remotePath.trim() && (!needsTransport || transportId);
+
   return (
-    <Modal title={`Configurar copia a Drive — ${CONTENT_LABEL[content]}`} onClose={onClose}>
-      <label className="mb-1 block text-sm">Carpeta de destino en Drive</label>
+    <Modal title={`Configurar copia externa — ${CONTENT_LABEL[content]}`} onClose={onClose}>
+      <label className="mb-1 block text-sm">Destino</label>
+      <select
+        className="mb-3 w-full rounded-md border px-3 py-2 text-sm"
+        style={inputStyle}
+        value={provider}
+        onChange={(e) => setProvider(e.target.value as ConfigureProvider)}
+      >
+        <option value="drive">Google Drive</option>
+        <option value="sftp">SFTP existente (Conexiones)</option>
+        <option value="ftp">FTP existente (Conexiones)</option>
+      </select>
+
+      {needsTransport && (
+        <>
+          <label className="mb-1 block text-sm">Conexión ({providerLabel})</label>
+          {transports === null ? (
+            <p className="mb-3 text-sm" style={{ color: 'var(--muted)' }}>
+              Cargando conexiones…
+            </p>
+          ) : transports.length === 0 ? (
+            <p className="mb-3 text-sm" style={{ color: 'var(--warning)' }}>
+              Este cliente no tiene ninguna conexión {provider.toUpperCase()} activa todavía — creá una primero en
+              Conexiones.
+            </p>
+          ) : (
+            <select
+              className="mb-3 w-full rounded-md border px-3 py-2 text-sm"
+              style={inputStyle}
+              value={transportId}
+              onChange={(e) => setTransportId(e.target.value)}
+            >
+              {transports.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.host}:{t.port})
+                </option>
+              ))}
+            </select>
+          )}
+        </>
+      )}
+
+      <label className="mb-1 block text-sm">Carpeta de destino</label>
       <input
         className="mb-3 w-full rounded-md border px-3 py-2 text-sm"
         style={inputStyle}
@@ -455,7 +544,7 @@ function ConfigureModal({
           size="sm"
           className="rounded-full px-4"
           style={primaryPillStyle}
-          isDisabled={busy || !remotePath.trim()}
+          isDisabled={busy || !canSubmit}
           onPress={async () => {
             setBusy(true);
             setErr(null);
@@ -464,6 +553,8 @@ function ConfigureModal({
                 clientId,
                 content,
                 remotePath: remotePath.trim(),
+                provider,
+                transportId: needsTransport ? transportId : undefined,
                 encrypt,
               });
               await onCreated(created.generatedCryptPassword ?? null);

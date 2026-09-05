@@ -9,6 +9,7 @@ describe('replicationTargetsRepo', () => {
     const target = ctx.replicationTargetsRepo.create({
       clientId: client.id,
       content: 'restic_repo',
+      provider: 'rclone_drive',
       remotePath: 'arkode/Winners/repo',
       rcloneConfigSecretRef: 'replication:x:restic_repo:rclone-config',
       encryptWithCrypt: false,
@@ -28,6 +29,7 @@ describe('replicationTargetsRepo', () => {
     const client = ctx.clientsRepo.create({ name: 'W', localBasePath: 'D:/W' });
     const base = {
       clientId: client.id,
+      provider: 'rclone_drive',
       remotePath: 'p',
       rcloneConfigSecretRef: 'r',
       encryptWithCrypt: false,
@@ -47,6 +49,7 @@ describe('replicationTargetsRepo', () => {
       ctx.replicationTargetsRepo.create({
         clientId,
         content,
+        provider: 'rclone_drive',
         remotePath: 'p',
         rcloneConfigSecretRef: 'r',
         encryptWithCrypt: false,
@@ -70,6 +73,7 @@ describe('replicationTargetsRepo', () => {
     const target = ctx.replicationTargetsRepo.create({
       clientId: client.id,
       content: 'restic_repo',
+      provider: 'rclone_drive',
       remotePath: 'old',
       rcloneConfigSecretRef: 'r',
       encryptWithCrypt: false,
@@ -94,6 +98,7 @@ describe('replicationTargetsRepo', () => {
     const target = ctx.replicationTargetsRepo.create({
       clientId: client.id,
       content: 'db_dumps',
+      provider: 'rclone_drive',
       remotePath: 'p',
       rcloneConfigSecretRef: 'r',
       encryptWithCrypt: true,
@@ -101,5 +106,90 @@ describe('replicationTargetsRepo', () => {
     });
     ctx.replicationTargetsRepo.remove(target.id);
     expect(ctx.replicationTargetsRepo.getById(target.id)).toBeNull();
+  });
+
+  it('creates an rclone_sftp target linked to a transport, with no rcloneConfigSecretRef', () => {
+    const ctx = createTestContext();
+    const client = ctx.clientsRepo.create({ name: 'W', localBasePath: 'D:/W' });
+    const transport = ctx.transportsRepo.createSftp({
+      clientId: client.id,
+      name: 'Off-site',
+      host: 'backup.example.com',
+      username: 'arkode',
+      privateKeyPath: 'C:/keys/x.key',
+    });
+
+    const target = ctx.replicationTargetsRepo.create({
+      clientId: client.id,
+      content: 'restic_repo',
+      provider: 'rclone_sftp',
+      remotePath: 'arkode/W/repo',
+      transportId: transport.id,
+      encryptWithCrypt: false,
+      cryptPasswordSecretRef: null,
+    });
+
+    expect(target.provider).toBe('rclone_sftp');
+    expect(target.transportId).toBe(transport.id);
+    expect(target.rcloneConfigSecretRef).toBeNull();
+  });
+
+  it('rejects an rclone_sftp target with no transportId, and an rclone_drive target with no rcloneConfigSecretRef', () => {
+    const ctx = createTestContext();
+    const client = ctx.clientsRepo.create({ name: 'W', localBasePath: 'D:/W' });
+
+    expect(() =>
+      ctx.replicationTargetsRepo.create({
+        clientId: client.id,
+        content: 'restic_repo',
+        provider: 'rclone_sftp',
+        remotePath: 'p',
+        encryptWithCrypt: false,
+        cryptPasswordSecretRef: null,
+      })
+    ).toThrow(/requires transportId/i);
+
+    expect(() =>
+      ctx.replicationTargetsRepo.create({
+        clientId: client.id,
+        content: 'db_dumps',
+        provider: 'rclone_drive',
+        remotePath: 'p',
+        encryptWithCrypt: false,
+        cryptPasswordSecretRef: null,
+      })
+    ).toThrow(/requires rcloneConfigSecretRef/i);
+  });
+
+  it('setSftpHostKey() round-trips through getById()', () => {
+    const ctx = createTestContext();
+    const client = ctx.clientsRepo.create({ name: 'W', localBasePath: 'D:/W' });
+    const transport = ctx.transportsRepo.createSftp({
+      clientId: client.id,
+      name: 'Off-site',
+      host: 'backup.example.com',
+      username: 'arkode',
+      privateKeyPath: 'C:/keys/x.key',
+    });
+    const target = ctx.replicationTargetsRepo.create({
+      clientId: client.id,
+      content: 'restic_repo',
+      provider: 'rclone_sftp',
+      remotePath: 'p',
+      transportId: transport.id,
+      encryptWithCrypt: false,
+      cryptPasswordSecretRef: null,
+    });
+
+    expect(target.sftpHostKey).toBeNull();
+    ctx.replicationTargetsRepo.setSftpHostKey(
+      target.id,
+      'backup.example.com ssh-ed25519 AAAA...\n',
+      'ssh-ed25519 abc123'
+    );
+
+    const after = ctx.replicationTargetsRepo.getById(target.id)!;
+    expect(after.sftpHostKey).toBe('backup.example.com ssh-ed25519 AAAA...\n');
+    expect(after.sftpHostKeyFingerprint).toBe('ssh-ed25519 abc123');
   });
 });
