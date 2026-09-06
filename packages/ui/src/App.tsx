@@ -6,6 +6,7 @@ import { Conexiones } from './components/Conexiones';
 import { Tareas } from './components/Tareas';
 import { Historial } from './components/Historial';
 import { Logs } from './components/Logs';
+import { Ayuda } from './components/Ayuda';
 import { Configuracion } from './components/Configuracion';
 import { AppShell, type Screen } from './components/AppShell';
 
@@ -39,6 +40,7 @@ function App() {
       {screen === 'tareas' && <Tareas onSelectClient={goToClient} />}
       {screen === 'historial' && <Historial onSelectClient={goToClient} />}
       {screen === 'logs' && <Logs onSelectClient={goToClient} />}
+      {screen === 'ayuda' && <Ayuda onNavigate={navigate} />}
       {screen === 'configuracion' && <Configuracion />}
     </AppShell>
   );

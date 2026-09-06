@@ -1,4 +1,4 @@
-import { DocumentIcon, GridIcon, SettingsIcon, UsersIcon } from "./icons";
+import { DocumentIcon, GridIcon, HelpCircleIcon, SettingsIcon, UsersIcon } from "./icons";
 import { TitleBar } from "./TitleBar";
 import { VaultLockChip } from "./VaultLockChip";
 import { GlobalSearch } from "./GlobalSearch";
@@ -11,6 +11,7 @@ export type Screen =
   | "tareas"
   | "historial"
   | "logs"
+  | "ayuda"
   | "configuracion";
 
 interface NavItem {
@@ -29,6 +30,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: <GridIcon />, enabled: true },
   { id: "clientes", label: "Clientes", icon: <UsersIcon />, enabled: true },
   { id: "logs", label: "Logs", icon: <DocumentIcon />, enabled: true },
+  { id: "ayuda", label: "Ayuda", icon: <HelpCircleIcon />, enabled: true },
   {
     id: "configuracion",
     label: "Configuración",
