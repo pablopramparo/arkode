@@ -3,7 +3,7 @@ import { Button } from '@heroui/react';
 import type { VaultCredential, VaultCredentialKind, VaultCredentialSecret } from 'engine-core';
 import { Modal } from './Modal';
 import { IconButton } from './IconButton';
-import { CopyIcon, EditIcon, EyeIcon, TrashIcon } from './icons';
+import { CopyIcon, EditIcon, EyeIcon, EyeOffIcon, TrashIcon } from './icons';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { useVaultStatus } from '../lib/useVaultStatus';
 import { useClipboardAutoClear } from '../lib/useClipboardAutoClear';
@@ -269,20 +269,37 @@ function CopyField({
   copiedKey: string | null;
   secret?: boolean;
 }) {
+  const [shown, setShown] = useState(false);
+  const display = copiedKey === k ? 'copiado ✓' : secret && !shown ? '••••••' : value;
   return (
-    <button
-      type="button"
-      onClick={() => void copy(value, k)}
+    <span
       className="flex items-center gap-1 rounded-md border px-2 py-1"
       style={{ borderColor: 'var(--border)' }}
-      title={`Copiar ${label}`}
     >
       <span style={{ color: 'var(--muted)' }}>{label}:</span>
-      <span className="font-mono">{copiedKey === k ? 'copiado ✓' : secret ? '••••••' : value}</span>
-      <span className="h-3 w-3 [&>svg]:h-3 [&>svg]:w-3" style={{ color: 'var(--muted)' }}>
-        <CopyIcon />
-      </span>
-    </button>
+      <button
+        type="button"
+        onClick={() => void copy(value, k)}
+        className="flex items-center gap-1"
+        title={`Copiar ${label}`}
+      >
+        <span className="max-w-88 truncate font-mono">{display}</span>
+        <span className="h-3 w-3 [&>svg]:h-3 [&>svg]:w-3" style={{ color: 'var(--muted)' }}>
+          <CopyIcon />
+        </span>
+      </button>
+      {secret && (
+        <button
+          type="button"
+          onClick={() => setShown((s) => !s)}
+          className="h-3.5 w-3.5 shrink-0 [&>svg]:h-3.5 [&>svg]:w-3.5"
+          style={{ color: 'var(--muted)' }}
+          title={shown ? 'Ocultar' : 'Mostrar'}
+        >
+          {shown ? <EyeOffIcon /> : <EyeIcon />}
+        </button>
+      )}
+    </span>
   );
 }
 
@@ -321,6 +338,7 @@ function CredentialFormModal({
 
   const BRIDGEABLE: VaultCredentialKind[] = ['ssh', 'sftp', 'ftp', 'ssh_key', 'postgres', 'mysql', 'mariadb'];
   const canBridge = BRIDGEABLE.includes((form.kind ?? 'custom') as VaultCredentialKind);
+  const linked = !!(existing?.linkedTransportId || existing?.linkedDatabaseConnectionId);
 
   const set = <K extends keyof CredentialInput>(key: K, value: CredentialInput[K]) => setForm((f) => ({ ...f, [key]: value }));
   const setS = (key: keyof VaultCredentialSecret, value: string) => setSecret((s) => ({ ...s, [key]: value }));
@@ -374,7 +392,7 @@ function CredentialFormModal({
             className={inputCls}
             style={inputStyle}
             value={form.kind}
-            disabled={!!existing}
+            disabled={linked}
             onChange={(e) => set('kind', e.target.value as VaultCredentialKind)}
           >
             {KINDS.map((k) => (
@@ -383,6 +401,11 @@ function CredentialFormModal({
               </option>
             ))}
           </select>
+          {linked && (
+            <span className="text-[11px]" style={{ color: 'var(--muted)' }}>
+              Desvinculá de backups para cambiar el tipo.
+            </span>
+          )}
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Host">

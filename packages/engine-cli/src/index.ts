@@ -1464,6 +1464,7 @@ program
   .description("Update a credential's metadata, and optionally re-enter its secret with --set-secret.")
   .argument('<credentialId>')
   .option('--name <name>')
+  .option('--kind <kind>', 'change the kind (only allowed while not linked to a backup connection)')
   .option('--host <host>')
   .option('--port <port>')
   .option('--username <username>')
@@ -1484,6 +1485,7 @@ program
     }
     const patch: Record<string, unknown> = {};
     if (opts.name !== undefined) patch.name = opts.name;
+    if (opts.kind !== undefined) patch.kind = opts.kind;
     if (opts.host !== undefined) patch.host = opts.host;
     if (opts.port !== undefined) patch.port = Number(opts.port);
     if (opts.username !== undefined) patch.username = opts.username;

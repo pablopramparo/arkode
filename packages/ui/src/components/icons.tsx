@@ -126,6 +126,17 @@ export function EyeIcon({ className }: IconProps) {
   );
 }
 
+export function EyeOffIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...base}>
+      <path d="M4 4l16 16" />
+      <path d="M9.9 5.7A9 9 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a15.7 15.7 0 0 1-3.2 3.8" />
+      <path d="M6.3 7.8A15.6 15.6 0 0 0 2.5 12S6 18.5 12 18.5a8.8 8.8 0 0 0 3.4-.7" />
+      <path d="M9.8 10a2.8 2.8 0 0 0 4 3.9" />
+    </svg>
+  );
+}
+
 export function SettingsIcon({ className }: IconProps) {
   return (
     <svg className={className} {...base}>

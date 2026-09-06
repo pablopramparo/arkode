@@ -47,6 +47,7 @@ import { BackupSetsSection } from './BackupSetsSection';
 import { BackupSetBadge } from './BackupSetBadge';
 import { CredencialesTab } from './CredencialesTab';
 import { UrlsTab, ItemsTab } from './VaultKnowledgeTabs';
+import { ClientVaultSearch } from './ClientVaultSearch';
 import { ClienteResumen, type ResumenNavTarget } from './ClienteResumen';
 import type { ConnectionRow } from './Conexiones';
 
@@ -444,7 +445,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
               />
             )}
             {mainTab === 'proyecto' && (
-              <TabRow variant="secondary" tabs={PROJECT_TABS} active={projectTab} onChange={setProjectTab} />
+              <div className="space-y-2">
+                <ClientVaultSearch clientId={clientId} onJump={setProjectTab} />
+                <TabRow variant="secondary" tabs={PROJECT_TABS} active={projectTab} onChange={setProjectTab} />
+              </div>
             )}
 
             {(section === 'tareas' || section === 'conexiones') && (

@@ -156,4 +156,23 @@ describe('vaultCredentialsRepo — reuse-bridge link rules (Phase 3 groundwork)'
     ctx.transportsRepo.deactivate(t.id);
     expect(ctx.vaultCredentialsRepo.getById(ssh.id)!.linkedTransportId).toBe(t.id);
   });
+
+  it('changes the kind of an unlinked credential', () => {
+    const cred = ctx.vaultCredentialsRepo.create({ clientId, name: 'x', kind: 'generic_login' });
+    expect(ctx.vaultCredentialsRepo.update(cred.id, { kind: 'web_panel' }).kind).toBe('web_panel');
+  });
+
+  it('rejects a kind change while the credential is linked to a connection', () => {
+    const t = makeTransport();
+    const ssh = ctx.vaultCredentialsRepo.create({ clientId, name: 'ssh', kind: 'ssh' });
+    ctx.vaultCredentialsRepo.setLink(ssh.id, { linkedTransportId: t.id });
+    expect(() => ctx.vaultCredentialsRepo.update(ssh.id, { kind: 'postgres' })).toThrow(/unlink this credential from backups/i);
+    // passing the same kind is a no-op, not a rejection
+    expect(ctx.vaultCredentialsRepo.update(ssh.id, { kind: 'ssh', name: 'ssh2' }).name).toBe('ssh2');
+  });
+
+  it('rejects an unknown kind on update', () => {
+    const cred = ctx.vaultCredentialsRepo.create({ clientId, name: 'x', kind: 'custom' });
+    expect(() => ctx.vaultCredentialsRepo.update(cred.id, { kind: 'banana' as never })).toThrow(/unknown credential kind/i);
+  });
 });

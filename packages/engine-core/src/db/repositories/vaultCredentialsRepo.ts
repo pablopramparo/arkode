@@ -81,7 +81,12 @@ export interface CreateVaultCredentialInput {
 
 export interface UpdateVaultCredentialInput {
   name?: string;
-  /** `kind` is immutable — it decides which connection kind the reuse bridge may link. */
+  /**
+   * `kind` decides which connection kind the reuse bridge may link, so it can
+   * only change while the credential is NOT linked to a transport / database
+   * connection. `update()` rejects a change on a linked credential.
+   */
+  kind?: VaultCredentialKind;
   environment?: string | null;
   tags?: string[];
   host?: string | null;
@@ -218,6 +223,17 @@ export function createVaultCredentialsRepo(db: Database): VaultCredentialsRepo {
         params[key] = value;
       };
       if (patch.name !== undefined) put('name', 'name', patch.name);
+      if (patch.kind !== undefined && patch.kind !== current.kind) {
+        if (!VAULT_CREDENTIAL_KINDS.includes(patch.kind)) {
+          throw new Error(`Unknown credential kind "${patch.kind}".`);
+        }
+        if (current.linked_transport_id || current.linked_database_connection_id) {
+          throw new Error(
+            "Unlink this credential from backups before changing its kind (the link depends on the kind)."
+          );
+        }
+        put('kind', 'kind', patch.kind);
+      }
       if (patch.environment !== undefined) put('environment', 'environment', patch.environment);
       if (patch.tags !== undefined) put('tags', 'tags', JSON.stringify(patch.tags));
       if (patch.host !== undefined) put('host', 'host', patch.host);
