@@ -119,6 +119,7 @@ export function UrlsTab({ clientId }: { clientId: string }) {
                     <IconButton
                       icon={<CopyIcon />}
                       label={copiedKey === u.id ? 'copiado' : 'Copiar URL'}
+                      confirmed={copiedKey === u.id}
                       onPress={() => void copy(u.url, u.id)}
                     />
                     <IconButton icon={<EditIcon />} label="Editar" onPress={() => setEditing(u)} />
@@ -487,6 +488,7 @@ export function ItemsTab({ clientId, type }: { clientId: string; type: VaultItem
                         <IconButton
                           icon={<CopyIcon />}
                           label={copiedKey === `${it.id}-${i}` ? 'copiado' : 'Copiar comando'}
+                          confirmed={copiedKey === `${it.id}-${i}`}
                           onPress={() => void copy(s.command!, `${it.id}-${i}`)}
                         />
                       </div>
@@ -561,6 +563,7 @@ export function ItemsTab({ clientId, type }: { clientId: string; type: VaultItem
                 <IconButton
                   icon={<CopyIcon />}
                   label={copiedKey === it.id ? 'copiado' : 'Copiar'}
+                  confirmed={copiedKey === it.id}
                   onPress={() => void copy(bodies[it.id], it.id)}
                 />
               </div>
