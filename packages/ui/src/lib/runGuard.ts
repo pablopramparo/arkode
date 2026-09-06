@@ -1,12 +1,15 @@
+import { isTauri } from '@tauri-apps/api/core';
 import { fetchDashboardStatus } from './statusClient';
-import { IN_PROGRESS_RUN_STATUSES } from './tasksClient';
+import { isLiveProgress } from './progress';
 
 /**
- * "Client · Task" labels for every task whose latest run is still in
- * progress, per `/status`. Returns `[]` if nothing is running OR the engine
- * isn't reachable — callers use this to warn before an action that would
- * kill a run (closing the window, installing an update). It is a warning
- * aid, never a hard gate.
+ * "Client · Task" labels for every task with a backup **genuinely running
+ * right now** — an in-progress status AND a fresh progress heartbeat
+ * (`isLiveProgress`), so a leftover `Producing` row from an earlier crash
+ * does NOT count. Returns `[]` if nothing is live or the engine isn't
+ * reachable. Callers use this to warn before an action that would kill a
+ * run (closing the window, installing an update); it's a warning aid,
+ * never a hard gate.
  */
 export async function inProgressRunLabels(): Promise<string[]> {
   try {
@@ -17,19 +20,36 @@ export async function inProgressRunLabels(): Promise<string[]> {
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
     ]);
     if (!rows) return [];
-    return rows
-      .filter((r) => (IN_PROGRESS_RUN_STATUSES as string[]).includes(r.status))
-      .map((r) => `${r.client} · ${r.task}`);
+    return rows.filter((r) => isLiveProgress(r.status, r.progress)).map((r) => `${r.client} · ${r.task}`);
   } catch {
     return [];
   }
 }
 
-/** A `window.confirm` naming the running backups; `true` = proceed anyway. */
-export function confirmInterruptRunningBackups(labels: string[], lead: string): boolean {
+/**
+ * "Proceed anyway?" confirmation naming the running backups. Uses Tauri's
+ * NATIVE dialog inside the desktop app — `window.confirm` is unreliable
+ * during a `close-requested` event (it can silently return false, which
+ * would trap the user). Resolves `true` to proceed. On any failure it
+ * resolves `true` (fail-open — never block the user).
+ */
+export async function confirmInterruptRunningBackups(labels: string[], lead: string): Promise<boolean> {
   const count = labels.length === 1 ? 'un backup en curso' : `${labels.length} backups en curso`;
-  return window.confirm(
-    `${lead} Hay ${count}:\n  ${labels.join('\n  ')}\n\n` +
-      'Si seguís ahora se interrumpe (queda como "Interrumpida" y se retoma en la próxima corrida). ¿Continuar igual?'
-  );
+  const message =
+    `${lead}\n\nHay ${count}:\n${labels.map((l) => `  • ${l}`).join('\n')}\n\n` +
+    'Si seguís ahora se interrumpe (queda como "Interrumpida" y se retoma en la próxima corrida).';
+  if (isTauri()) {
+    try {
+      const { ask } = await import('@tauri-apps/plugin-dialog');
+      return await ask(message, {
+        title: 'Backup en curso',
+        kind: 'warning',
+        okLabel: 'Continuar igual',
+        cancelLabel: 'Cancelar',
+      });
+    } catch {
+      return true; // dialog unavailable — don't trap the user
+    }
+  }
+  return window.confirm(`${message}\n\n¿Continuar igual?`);
 }

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { inProgressRunLabels, confirmInterruptRunningBackups } from './lib/runGuard';
 import { Dashboard } from './components/Dashboard';
 import { Clientes } from './components/Clientes';
@@ -19,22 +18,31 @@ function App() {
 
   // Closing the window kills the engine sidecar, which cuts any manual
   // "Ejecutar ahora" run (scheduled runs are safe — they live in the
-  // arkode-scheduler service, not the app). Warn before that happens.
+  // arkode-scheduler service, not the app). Warn before that happens —
+  // but NEVER trap the user: any failure in here lets the close through.
   useEffect(() => {
     if (!isTauri()) return;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    getCurrentWindow()
-      .onCloseRequested(async (event) => {
-        const running = await inProgressRunLabels();
-        if (running.length > 0 && !confirmInterruptRunningBackups(running, 'Vas a cerrar Arkode.')) {
-          event.preventDefault();
-        }
-      })
-      .then((fn) => {
+    (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const fn = await getCurrentWindow().onCloseRequested(async (event) => {
+          try {
+            const running = await inProgressRunLabels();
+            if (running.length === 0) return; // nothing running → let it close
+            const proceed = await confirmInterruptRunningBackups(running, 'Vas a cerrar Arkode.');
+            if (!proceed) event.preventDefault();
+          } catch {
+            /* anything goes wrong → allow the close */
+          }
+        });
         if (cancelled) fn();
         else unlisten = fn;
-      });
+      } catch {
+        /* Tauri window API unavailable — no guard */
+      }
+    })();
     return () => {
       cancelled = true;
       unlisten?.();

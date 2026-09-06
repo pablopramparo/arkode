@@ -514,7 +514,7 @@ export function Configuracion() {
     // before touching any file — so installing would interrupt anything running.
     // Warn (don't block: the user can still choose to proceed).
     const before = await inProgressRunLabels();
-    if (before.length > 0 && !confirmInterruptRunningBackups(before, 'Instalar la actualización va a interrumpir backups.')) {
+    if (before.length > 0 && !(await confirmInterruptRunningBackups(before, 'Instalar la actualización va a interrumpir backups.'))) {
       return;
     }
 
@@ -531,7 +531,7 @@ export function Configuracion() {
         downloadedUpdateRef.current = availableUpdate;
       }
       const after = await inProgressRunLabels();
-      if (after.length > 0 && !confirmInterruptRunningBackups(after, 'Empezó un backup mientras se descargaba la actualización.')) {
+      if (after.length > 0 && !(await confirmInterruptRunningBackups(after, 'Empezó un backup mientras se descargaba la actualización.'))) {
         setUpdateCheck('available'); // downloaded; install later from the same button
         return;
       }
