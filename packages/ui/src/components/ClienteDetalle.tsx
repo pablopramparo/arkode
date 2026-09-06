@@ -89,7 +89,7 @@ function TabRow<T extends string>({
   const primary = variant === 'primary';
   return (
     <div
-      className="flex items-stretch overflow-x-auto border-b"
+      className="flex items-stretch overflow-x-auto overflow-y-hidden border-b"
       style={{ borderColor: primary ? 'var(--border)' : 'var(--separator)' }}
     >
       {tabs.map((tab) => {
@@ -104,7 +104,6 @@ function TabRow<T extends string>({
             style={{
               color: isActive ? 'var(--foreground)' : 'var(--muted)',
               borderBottom: `${primary ? 2 : 1.5}px solid ${isActive ? 'var(--accent)' : 'transparent'}`,
-              marginBottom: primary ? undefined : '-1px',
             }}
           >
             {tab.label}
