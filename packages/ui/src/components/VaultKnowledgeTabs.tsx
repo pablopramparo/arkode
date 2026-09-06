@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@heroui/react';
-import type { VaultCredential, VaultItem, VaultItemType, VaultUrl } from 'engine-core';
+import type { VaultItem, VaultItemType, VaultUrl } from 'engine-core';
 import { Modal } from './Modal';
 import { IconButton } from './IconButton';
 import { CopyIcon, EditIcon, EyeIcon, TrashIcon } from './icons';
@@ -15,7 +15,6 @@ import {
   fetchClientItems,
   fetchClientUrls,
   revealItemBody,
-  searchVault,
   updateItem,
   updateUrl,
   type ItemInput,
@@ -549,68 +548,4 @@ function ItemFormModal({
   );
 }
 
-// ------------------------------------------------------------------- Resumen
-export function ResumenTab({
-  clientId,
-  onGoToTab,
-}: {
-  clientId: string;
-  onGoToTab: (tab: string) => void;
-}) {
-  const [data, setData] = useState<{ credentials: VaultCredential[]; urls: VaultUrl[]; items: VaultItem[] } | null>(null);
-
-  useEffect(() => {
-    void searchVault('', clientId).then((r) => setData({ credentials: r.credentials, urls: r.urls, items: r.items }));
-  }, [clientId]);
-
-  if (!data) return <p className="mt-3 text-sm" style={{ color: 'var(--muted)' }}>Cargando…</p>;
-
-  const favUrls = data.urls.filter((u) => u.favorite);
-  const favItems = data.items.filter((i) => i.favorite);
-  const count = (t: VaultItemType) => data.items.filter((i) => i.type === t).length;
-
-  const Card = ({ label, value, tab }: { label: string; value: number; tab: string }) => (
-    <button
-      type="button"
-      onClick={() => onGoToTab(tab)}
-      className="rounded-lg border px-4 py-3 text-left"
-      style={{ borderColor: 'var(--border)' }}
-    >
-      <div className="text-2xl font-semibold">{value}</div>
-      <div className="text-xs" style={{ color: 'var(--muted)' }}>
-        {label}
-      </div>
-    </button>
-  );
-
-  return (
-    <div className="mt-3 space-y-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Card label="Credenciales" value={data.credentials.length} tab="credenciales" />
-        <Card label="URLs" value={data.urls.length} tab="urls" />
-        <Card label="Snippets" value={count('snippet')} tab="snippets" />
-        <Card label="Procesos" value={count('process')} tab="procesos" />
-      </div>
-
-      {(favUrls.length > 0 || favItems.length > 0) && (
-        <div>
-          <h3 className="mb-2 text-sm font-medium">Fijados</h3>
-          <ul className="space-y-1 text-sm">
-            {favUrls.map((u) => (
-              <li key={u.id}>
-                <a href={u.url} target="_blank" rel="noreferrer" className="underline" style={{ color: 'var(--accent)' }}>
-                  {u.name}
-                </a>
-              </li>
-            ))}
-            {favItems.map((i) => (
-              <li key={i.id}>
-                <span style={{ color: 'var(--muted)' }}>[{i.type}]</span> {i.title}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
+// Resumen del cliente vive ahora en ./ClienteResumen (transversal a Backups + Proyecto).

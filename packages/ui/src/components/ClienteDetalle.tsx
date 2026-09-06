@@ -46,24 +46,19 @@ import { ReplicationPanel } from './ReplicationPanel';
 import { BackupSetsSection } from './BackupSetsSection';
 import { BackupSetBadge } from './BackupSetBadge';
 import { CredencialesTab } from './CredencialesTab';
-import { UrlsTab, ItemsTab, ResumenTab } from './VaultKnowledgeTabs';
+import { UrlsTab, ItemsTab } from './VaultKnowledgeTabs';
+import { ClienteResumen, type ResumenNavTarget } from './ClienteResumen';
 import type { ConnectionRow } from './Conexiones';
 
-type Tab =
-  | 'resumen'
-  | 'tareas'
-  | 'conexiones'
-  | 'credenciales'
-  | 'urls'
-  | 'snippets'
-  | 'procesos'
-  | 'notas'
-  | 'backups'
-  | 'historial'
-  | 'archivos'
-  | 'copia-externa';
+type MainTab = 'resumen' | 'backups' | 'proyecto';
+type BackupTab = 'tareas' | 'conexiones' | 'archivos' | 'backups' | 'historial' | 'copia-externa';
+type ProjectTab = 'credenciales' | 'urls' | 'snippets' | 'procesos' | 'notas';
+/** The one deterministic selector every content block switches on. */
+type Section = 'resumen' | BackupTab | ProjectTab;
 
 const BACKUPS_PAGE_SIZE = 20;
+/** Matches the Historial fetch limits in `refresh` — used only to show "N+" in the Resumen. */
+const HISTORIAL_CAP = 100;
 
 interface RowActionState {
   busy?: 'run' | 'test' | 'compatibility' | 'toggle' | 'scheduler' | 'unscheduler';
@@ -73,72 +68,74 @@ interface RowActionState {
   schedulerMessage?: string;
 }
 
-/** Tabs that belong to the "Backups / operación" domain (drives when BackupSetsSection shows). */
-const BACKUPS_TABS: Tab[] = ['tareas', 'conexiones', 'archivos', 'backups', 'historial', 'copia-externa'];
-
-function TabBar({ active, onChange, counts }: { active: Tab; onChange: (tab: Tab) => void; counts: Partial<Record<Tab, number>> }) {
-  // One flat row — a single click still reaches any section. The BACKUPS /
-  // PROYECTO labels are non-interactive separators, not a second nav level.
-  const groups: { header?: string; tabs: { id: Tab; label: string }[] }[] = [
-    { tabs: [{ id: 'resumen', label: 'Resumen' }] },
-    {
-      header: 'Backups',
-      tabs: [
-        { id: 'tareas', label: 'Tareas' },
-        { id: 'conexiones', label: 'Conexiones' },
-        { id: 'archivos', label: 'Repositorio' },
-        { id: 'backups', label: 'Backups' },
-        { id: 'historial', label: 'Historial' },
-        { id: 'copia-externa', label: 'Copia externa' },
-      ],
-    },
-    {
-      header: 'Proyecto',
-      tabs: [
-        { id: 'credenciales', label: 'Credenciales' },
-        { id: 'urls', label: 'URLs' },
-        { id: 'snippets', label: 'Snippets' },
-        { id: 'procesos', label: 'Procesos' },
-        { id: 'notas', label: 'Notas' },
-      ],
-    },
-  ];
+/**
+ * One horizontal tab row. `variant="primary"` is the three top-level tabs
+ * (bold, prominent); `variant="secondary"` is the sub-nav inside Backups /
+ * Proyecto (smaller, muted, visually subordinate). Counts render in parens.
+ */
+function TabRow<T extends string>({
+  variant,
+  tabs,
+  active,
+  onChange,
+  counts,
+}: {
+  variant: 'primary' | 'secondary';
+  tabs: readonly { id: T; label: string }[];
+  active: T;
+  onChange: (tab: T) => void;
+  counts?: Partial<Record<T, number>>;
+}) {
+  const primary = variant === 'primary';
   return (
-    <div className="flex flex-1 items-stretch overflow-x-auto" style={{ borderColor: 'var(--border)' }}>
-      {groups.map((group, i) => (
-        <div
-          key={group.header ?? 'resumen'}
-          className={`flex items-stretch gap-1 ${i > 0 ? 'ml-2 border-l pl-3' : ''}`}
-          style={{ borderColor: 'var(--border)' }}
-        >
-          {group.header && (
-            <span
-              className="flex select-none items-center pr-1 text-[10px] font-semibold uppercase tracking-wider"
-              style={{ color: 'var(--muted)' }}
-            >
-              {group.header}
-            </span>
-          )}
-          {group.tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => onChange(tab.id)}
-              className="whitespace-nowrap px-3 py-2 text-sm font-medium"
-              style={{
-                color: active === tab.id ? 'var(--foreground)' : 'var(--muted)',
-                borderBottom: active === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
-              }}
-            >
-              {tab.label}
-              {counts[tab.id] != null ? ` (${counts[tab.id]})` : ''}
-            </button>
-          ))}
-        </div>
-      ))}
+    <div
+      className="flex items-stretch overflow-x-auto border-b"
+      style={{ borderColor: primary ? 'var(--border)' : 'var(--separator)' }}
+    >
+      {tabs.map((tab) => {
+        const isActive = active === tab.id;
+        const count = counts?.[tab.id];
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onChange(tab.id)}
+            className={`whitespace-nowrap ${primary ? 'px-4 py-2.5 text-sm font-semibold' : 'px-3 py-2 text-xs font-medium'}`}
+            style={{
+              color: isActive ? 'var(--foreground)' : 'var(--muted)',
+              borderBottom: `${primary ? 2 : 1.5}px solid ${isActive ? 'var(--accent)' : 'transparent'}`,
+              marginBottom: primary ? undefined : '-1px',
+            }}
+          >
+            {tab.label}
+            {count != null ? ` (${count})` : ''}
+          </button>
+        );
+      })}
     </div>
   );
 }
+
+const MAIN_TABS: readonly { id: MainTab; label: string }[] = [
+  { id: 'resumen', label: 'Resumen' },
+  { id: 'backups', label: 'Backups' },
+  { id: 'proyecto', label: 'Proyecto' },
+];
+const BACKUP_TABS: readonly { id: BackupTab; label: string }[] = [
+  { id: 'tareas', label: 'Tareas' },
+  { id: 'conexiones', label: 'Conexiones' },
+  { id: 'archivos', label: 'Repositorio' },
+  { id: 'backups', label: 'Backups' },
+  { id: 'historial', label: 'Historial' },
+  { id: 'copia-externa', label: 'Copia externa' },
+];
+const PROJECT_TABS: readonly { id: ProjectTab; label: string }[] = [
+  { id: 'credenciales', label: 'Credenciales' },
+  { id: 'urls', label: 'URLs' },
+  { id: 'snippets', label: 'Snippets' },
+  { id: 'procesos', label: 'Procesos' },
+  { id: 'notas', label: 'Notas' },
+];
 
 export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack: () => void }) {
   const [client, setClient] = useState<ClientWithTaskCount | null>(null);
@@ -152,7 +149,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   const [backupsPage, setBackupsPage] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [actionState, setActionState] = useState<Record<string, RowActionState>>({});
-  const [activeTab, setActiveTab] = useState<Tab>('resumen');
+  const [mainTab, setMainTab] = useState<MainTab>('resumen');
+  // Sub-section per domain — remembered while ClienteDetalle stays mounted.
+  const [backupTab, setBackupTab] = useState<BackupTab>('tareas');
+  const [projectTab, setProjectTab] = useState<ProjectTab>('credenciales');
   const [showInactive, setShowInactive] = useState(false);
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [choosingKind, setChoosingKind] = useState(false);
@@ -344,7 +344,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   const visibleConnectionRows = connectionRows.filter((r) => showInactive || r.data.isActive);
 
   // Historial tab: DB attempts + file runs, newest first, capped.
-  const historialRows = runs && fileRuns ? mergeRuns(runs, fileRuns).slice(0, 100) : null;
+  const historialRows = runs && fileRuns ? mergeRuns(runs, fileRuns).slice(0, HISTORIAL_CAP) : null;
   // Backups tab: keep DB pagination; file snapshots (Success/Warning with a
   // real snapshot) all show on page 0, merged and re-sorted by date.
   const fileBackupRows = (fileRuns ?? [])
@@ -355,6 +355,29 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
         b.startedAt.localeCompare(a.startedAt)
       )
     : null;
+
+  // The active sub-section — one deterministic selector every content block below switches on.
+  const section: Section = mainTab === 'resumen' ? 'resumen' : mainTab === 'backups' ? backupTab : projectTab;
+
+  function goToSection(target: ResumenNavTarget) {
+    setMainTab(target.main);
+    if (target.main === 'backups') setBackupTab(target.sub);
+    else setProjectTab(target.sub);
+  }
+
+  // Resumen figures — all derived from data already loaded, no extra API.
+  const activeDbTasks = (tasks ?? []).filter((t) => t.isActive);
+  const activeFileTasks = (fileTasks ?? []).filter((t) => t.isActive);
+  const resumenStats = {
+    tasks: activeDbTasks.length + activeFileTasks.length,
+    connections: connectionRows.filter((r) => r.data.isActive).length,
+    storedBackups: backupsTotal,
+    runsShown: historialRows?.length ?? 0,
+    runsCapped: (runs?.length ?? 0) >= HISTORIAL_CAP || (fileRuns?.length ?? 0) >= HISTORIAL_CAP,
+    lastGoodBackupAt:
+      historialRows?.find((r) => r.status === 'Success' || r.status === 'Warning')?.startedAt ?? null,
+    failingTasks: [...activeDbTasks, ...activeFileTasks].filter((t) => t.latestRunStatus === 'Failed').length,
+  };
 
   return (
     <div className="max-w-[1600px] px-10 py-8">
@@ -404,20 +427,31 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             )}
           </header>
 
-          {BACKUPS_TABS.includes(activeTab) && <BackupSetsSection clientId={clientId} />}
-
           <div className="mb-4">
-            <div className="flex border-b" style={{ borderColor: 'var(--border)' }}>
-              <TabBar
-                active={activeTab}
-                onChange={setActiveTab}
-                counts={{ tareas: unifiedTaskRows?.length ?? 0, conexiones: visibleConnectionRows.length, backups: backupsTotal, historial: historialRows?.length ?? 0 }}
+            <TabRow variant="primary" tabs={MAIN_TABS} active={mainTab} onChange={setMainTab} />
+
+            {mainTab === 'backups' && (
+              <TabRow
+                variant="secondary"
+                tabs={BACKUP_TABS}
+                active={backupTab}
+                onChange={setBackupTab}
+                counts={{
+                  tareas: unifiedTaskRows?.length ?? 0,
+                  conexiones: visibleConnectionRows.length,
+                  backups: backupsTotal,
+                  historial: historialRows?.length ?? 0,
+                }}
               />
-            </div>
-            {(activeTab === 'tareas' || activeTab === 'conexiones') && (
+            )}
+            {mainTab === 'proyecto' && (
+              <TabRow variant="secondary" tabs={PROJECT_TABS} active={projectTab} onChange={setProjectTab} />
+            )}
+
+            {(section === 'tareas' || section === 'conexiones') && (
               <div className="mt-2.5 flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
                 <Switch checked={showInactive} onChange={() => setShowInactive((v) => !v)} label="Mostrar inactivas" />
-                {activeTab === 'tareas' && (
+                {section === 'tareas' && (
                   <>
                     <Button
                       size="sm"
@@ -443,7 +477,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
                     </Button>
                   </>
                 )}
-                {activeTab === 'conexiones' && (
+                {section === 'conexiones' && (
                   <Button size="sm" className="rounded-full px-4" style={primaryPillStyle} onPress={() => setShowCreateConnection(true)}>
                     + Nueva conexión
                   </Button>
@@ -452,7 +486,10 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             )}
           </div>
 
-          {activeTab === 'tareas' && importResult && (
+          {/* Backup sets belong to the Backups domain — visible across all its sub-sections, never in Resumen/Proyecto. */}
+          {mainTab === 'backups' && <BackupSetsSection clientId={clientId} />}
+
+          {section === 'tareas' && importResult && (
             <div
               className="mb-4 rounded-md border px-4 py-3 text-sm"
               style={{
@@ -473,7 +510,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             </div>
           )}
 
-          {activeTab === 'tareas' &&
+          {section === 'tareas' &&
             (unifiedTaskRows && unifiedTaskRows.length > 0 ? (
               <UnifiedTaskTable
                 rows={unifiedTaskRows}
@@ -486,7 +523,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
               </p>
             ))}
 
-          {activeTab === 'conexiones' &&
+          {section === 'conexiones' &&
             (visibleConnectionRows.length > 0 ? (
               <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
                 <table className="w-full border-collapse text-sm">
@@ -586,18 +623,20 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
               </p>
             ))}
 
-          {activeTab === 'resumen' && <ResumenTab clientId={clientId} onGoToTab={(t) => setActiveTab(t as Tab)} />}
-          {activeTab === 'credenciales' && <CredencialesTab clientId={clientId} />}
-          {activeTab === 'urls' && <UrlsTab clientId={clientId} />}
-          {activeTab === 'snippets' && <ItemsTab clientId={clientId} type="snippet" />}
-          {activeTab === 'procesos' && <ItemsTab clientId={clientId} type="process" />}
-          {activeTab === 'notas' && <ItemsTab clientId={clientId} type="note" />}
+          {section === 'resumen' && (
+            <ClienteResumen clientId={clientId} backups={resumenStats} onNavigate={goToSection} />
+          )}
+          {section === 'credenciales' && <CredencialesTab clientId={clientId} />}
+          {section === 'urls' && <UrlsTab clientId={clientId} />}
+          {section === 'snippets' && <ItemsTab clientId={clientId} type="snippet" />}
+          {section === 'procesos' && <ItemsTab clientId={clientId} type="process" />}
+          {section === 'notas' && <ItemsTab clientId={clientId} type="note" />}
 
-          {activeTab === 'archivos' && <FileBackupsPanel clientId={clientId} />}
+          {section === 'archivos' && <FileBackupsPanel clientId={clientId} />}
 
-          {activeTab === 'copia-externa' && <ReplicationPanel clientId={clientId} />}
+          {section === 'copia-externa' && <ReplicationPanel clientId={clientId} />}
 
-          {activeTab === 'backups' &&
+          {section === 'backups' &&
             (backupsRows && backupsRows.length > 0 ? (
               <>
                 <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
@@ -695,7 +734,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
               </p>
             ))}
 
-          {activeTab === 'historial' &&
+          {section === 'historial' &&
             (historialRows && historialRows.length > 0 ? (
               <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
                 <table className="w-full border-collapse text-sm">

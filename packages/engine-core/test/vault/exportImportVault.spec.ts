@@ -43,6 +43,7 @@ function backupDeps(ctx: TestContext): VaultBackupDeps {
     fileBackupRepositoriesRepo: ctx.fileBackupRepositoriesRepo,
     fileBackupTasksRepo: ctx.fileBackupTasksRepo,
     replicationTargetsRepo: ctx.replicationTargetsRepo,
+    vaultBackupTargetsRepo: ctx.vaultBackupTargetsRepo,
     vaultCredentialsRepo: ctx.vaultCredentialsRepo,
     vaultUrlsRepo: ctx.vaultUrlsRepo,
     vaultItemsRepo: ctx.vaultItemsRepo,
@@ -113,6 +114,11 @@ function seedFullSource(ctx: TestContext) {
   // tool registry
   ctx.settingsRepo.set('postgresToolRegistry', JSON.stringify({ '16': { pgDumpPath: 'C:/pg/pg_dump.exe', pgRestorePath: 'C:/pg/pg_restore.exe' } }));
 
+  // portable vault-backup destinations: a connected Google Drive one + a local one
+  const gdrive = ctx.vaultBackupTargetsRepo.createGoogleDrive({ remotePath: 'Arkode/Vault', label: 'pablo@gmail.com', retentionCount: 10 });
+  ctx.secretStore.set(gdrive.rcloneConfigSecretRef!, '{"token":"{vault-oauth-blob}"}');
+  ctx.vaultBackupTargetsRepo.create({ path: 'D:\\Backups\\Arkode', retentionCount: 5 });
+
   // a vault credential linked to the DB connection (reuse bridge)
   const credRef = newCredentialSecretRef();
   writeCredentialSecret(ctx.vaultSecretStore, credRef, { password: 'db-pw-1', notes: 'prod' });
@@ -129,7 +135,7 @@ function seedFullSource(ctx: TestContext) {
   ctx.vaultSecretStore.set(noteRef, 'root pw hunter2');
   ctx.vaultItemsRepo.create({ clientId: carena.id, type: 'note', title: 'Carena root', isSensitive: true, bodyBlobRef: noteRef });
 
-  return { rivera, carena, sshT, dbc, task, repo, cred };
+  return { rivera, carena, sshT, dbc, task, repo, cred, gdrive };
 }
 
 describe('exportVaultBuffer / importVaultBuffer — full disaster recovery (v2)', () => {
@@ -160,15 +166,28 @@ describe('exportVaultBuffer / importVaultBuffer — full disaster recovery (v2)'
       fileRepos: r.fileBackupRepositoriesCreated,
       fileTasks: r.fileBackupTasksCreated,
       replTargets: r.replicationTargetsCreated,
+      vaultBackupTargets: r.vaultBackupTargetsCreated,
       registries: r.toolRegistriesRestored,
       creds: r.credentialsCreated,
       urls: r.urlsCreated,
       items: r.itemsCreated,
     }).toEqual({
       clients: 2, sets: 1, transports: 2, dbConns: 1, tasks: 2,
-      fileRepos: 1, fileTasks: 1, replTargets: 1, registries: 1, creds: 1, urls: 1, items: 1,
+      fileRepos: 1, fileTasks: 1, replTargets: 1, vaultBackupTargets: 2, registries: 1, creds: 1, urls: 1, items: 1,
     });
     expect(dst.vaultState.isUnlocked()).toBe(true);
+
+    // --- portable vault-backup destinations: Drive restored ENABLED with its
+    //     OAuth token (no re-auth needed); local restored DISABLED + warned.
+    const vbts = dst.vaultBackupTargetsRepo.list();
+    const drive = vbts.find((t) => t.kind === 'google_drive')!;
+    expect(drive.remotePath).toBe('Arkode/Vault');
+    expect(drive.label).toBe('pablo@gmail.com');
+    expect(drive.enabled).toBe(true);
+    expect(JSON.parse(dst.secretStore.get(drive.rcloneConfigSecretRef!)!).token).toBe('{vault-oauth-blob}');
+    const localVbt = vbts.find((t) => t.kind === 'local_dir')!;
+    expect(localVbt.enabled).toBe(false);
+    expect(r.warnings.some((w) => /Local vault-backup destination/i.test(w))).toBe(true);
 
     const rivera = dst.clientsRepo.getByName('Rivera')!;
 
@@ -278,6 +297,7 @@ describe('importVaultBuffer — rejections & partial failure', () => {
     expect(() => importVaultBuffer(backupDeps(dst), buf, 'nope')).toThrow(WrongMasterPasswordError);
     expect(dst.vaultMetaRepo.get()).toBeNull();
     expect(dst.clientsRepo.listAll()).toHaveLength(0);
+    expect(dst.vaultBackupTargetsRepo.list()).toHaveLength(0);
     expect(readdirSync(keysDir).filter((f) => f.endsWith('.key'))).toHaveLength(1); // only the source seed's file
   });
 
@@ -354,18 +374,18 @@ describe('runVaultBackup — still writes/self-checks/retains at v2', () => {
     ctx = createTestContext();
     seedFullSource(ctx);
   });
-  const deps = () => ({ ...backupDeps(ctx), vaultBackupTargetsRepo: ctx.vaultBackupTargetsRepo });
+  const deps = () => backupDeps(ctx);
 
-  it('writes a valid v2 .arkvault, self-checks it, records Success', () => {
+  it('writes a valid v2 .arkvault, self-checks it, records Success', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'arkvault-bk-'));
-    const run = runVaultBackup(deps(), ctx.vaultBackupTargetsRepo.create({ path: dir }));
+    const run = await runVaultBackup(deps(), ctx.vaultBackupTargetsRepo.create({ path: dir }));
     expect(run.status).toBe('Success');
     expect(inspectVaultBuffer(readFileSync(run.filePath!)).formatVersion).toBe(2);
     expect(readdirSync(dir).some((f) => f.endsWith('.tmp'))).toBe(false);
   });
 
-  it('refuses a destination inside the app data directory', () => {
-    const run = runVaultBackup(deps(), ctx.vaultBackupTargetsRepo.create({ path: join(appDataDir(), 'x') }));
+  it('refuses a destination inside the app data directory', async () => {
+    const run = await runVaultBackup(deps(), ctx.vaultBackupTargetsRepo.create({ path: join(appDataDir(), 'x') }));
     expect(run.status).toBe('Failed');
     expect(run.errorMessage).toMatch(/data directory/i);
   });

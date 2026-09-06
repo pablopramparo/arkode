@@ -47,6 +47,7 @@ import {
   importVaultBuffer,
   inspectVaultBuffer,
   runAllVaultBackups,
+  runDueVaultBackups,
   ArkvaultParseError,
   type RunVaultBackupDeps,
   detectInstalledDbTools,
@@ -89,6 +90,7 @@ import {
   type ReplicationProvider,
   type RcloneDriveConfig,
   resticClient,
+  redactSecrets,
 } from 'engine-core';
 import { buildContext } from './context.js';
 import { confirmHostInteractively } from './confirmHost.js';
@@ -1748,6 +1750,78 @@ program
   });
 
 program
+  .command('vault:backup-target:add-drive')
+  .description('Add a Google Drive destination for the .arkvault backup. Authorize it with vault:backup-target:authorize.')
+  .requiredOption('--remote-path <path>', 'destination folder inside the Drive account, e.g. "Arkode/Vault"')
+  .option('--label <text>', 'display label, e.g. the account e-mail')
+  .option('--retention-count <n>', 'keep only the newest N .arkvault files there')
+  .option('--disabled', 'add it disabled', false)
+  .action((opts) => {
+    const ctx = buildContext();
+    const t = ctx.vaultBackupTargetsRepo.createGoogleDrive({
+      remotePath: opts.remotePath,
+      label: opts.label ?? null,
+      retentionCount: opts.retentionCount != null ? Number(opts.retentionCount) : null,
+      enabled: !opts.disabled,
+    });
+    console.log(JSON.stringify(t, null, 2));
+  });
+
+program
+  .command('vault:backup-target:authorize')
+  .description('Connect a Google account to a Drive vault-backup destination. Opens a browser, or pass --token from `rclone authorize "drive"` on another machine.')
+  .argument('<targetId>')
+  .option('--token <json>', 'the OAuth token blob from `rclone authorize "drive"` (headless fallback)')
+  .action(async (targetId: string, opts) => {
+    const ctx = buildContext();
+    const target = ctx.vaultBackupTargetsRepo.getById(targetId);
+    if (!target || target.kind !== 'google_drive' || !target.rcloneConfigSecretRef) {
+      console.error('Not a Google Drive vault-backup destination.');
+      process.exitCode = 1;
+      return;
+    }
+    const token = opts.token
+      ? (rcloneClient.extractTokenBlob(opts.token) ?? String(opts.token).trim())
+      : await rcloneClient.rcloneAuthorizeDrive({});
+    JSON.parse(token); // validate
+    ctx.secretStore.set(target.rcloneConfigSecretRef, JSON.stringify({ token } satisfies RcloneDriveConfig));
+    console.log('Connected.');
+  });
+
+program
+  .command('vault:backup-target:test')
+  .description('Check connectivity/auth for a Google Drive vault-backup destination.')
+  .argument('<targetId>')
+  .action(async (targetId: string) => {
+    const ctx = buildContext();
+    const target = ctx.vaultBackupTargetsRepo.getById(targetId);
+    if (!target || target.kind !== 'google_drive' || !target.rcloneConfigSecretRef) {
+      console.error('Not a Google Drive vault-backup destination.');
+      process.exitCode = 1;
+      return;
+    }
+    const raw = ctx.secretStore.get(target.rcloneConfigSecretRef);
+    if (!raw) {
+      console.error('Not connected — run vault:backup-target:authorize first.');
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const drive = JSON.parse(raw) as RcloneDriveConfig;
+      const out = await rcloneClient.withRcloneConfig(
+        { encryptWithCrypt: false },
+        { provider: 'rclone_drive', drive },
+        undefined,
+        (configPath, remoteSection) => rcloneClient.rcloneAbout({ configPath, remoteSection })
+      );
+      console.log(out);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command('vault:backup-target:rm')
   .argument('<targetId>')
   .action((targetId: string) => {
@@ -1772,7 +1846,7 @@ program
       console.log(`Wrote ${buf.length} bytes to ${opts.output}`);
       return;
     }
-    const result = runAllVaultBackups(buildVaultBackupDeps(ctx));
+    const result = await runAllVaultBackups(buildVaultBackupDeps(ctx));
     console.log(JSON.stringify(result, null, 2));
     if (!result.allOk) process.exitCode = 1;
   });
@@ -3492,6 +3566,13 @@ program
             ctx.vaultState.changePassword(body.currentPassword, body.newPassword);
           }
           sendJson(res, 200, getVaultStatus(ctx.vaultState));
+          // Unlocking (or first init) is a natural moment to catch up any
+          // .arkvault destination that has no recent-enough successful backup.
+          if (pathname !== '/vault/change-password' && ctx.vaultState.isUnlocked()) {
+            void runDueVaultBackups(buildVaultBackupDeps(ctx)).catch((err) =>
+              console.error(`Vault backup catch-up failed: ${err instanceof Error ? err.message : String(err)}`)
+            );
+          }
         } catch (err) {
           if (err instanceof WrongMasterPasswordError) {
             sendJson(res, 401, { error: err.message });
@@ -3866,12 +3947,33 @@ program
 
       // --- Portable vault backup (.arkvault) ------------------------------
       if (req.method === 'GET' && pathname === '/vault/backup-targets') {
-        sendJson(res, 200, ctx.vaultBackupTargetsRepo.list());
+        sendJson(
+          res,
+          200,
+          ctx.vaultBackupTargetsRepo.list().map((t) => ({
+            ...t,
+            // google_drive: whether an OAuth token is actually stored (mirrors replication_targets.authorized).
+            authorized: t.kind === 'google_drive' ? !!t.rcloneConfigSecretRef && !!ctx.secretStore.get(t.rcloneConfigSecretRef) : undefined,
+          }))
+        );
         return;
       }
       if (req.method === 'POST' && pathname === '/vault/backup-targets') {
         try {
           const body = await readJsonBody(req);
+          if (body.kind === 'google_drive') {
+            if (!body.remotePath) {
+              sendJson(res, 400, { error: 'remotePath is required for a Google Drive destination.' });
+              return;
+            }
+            sendJson(res, 201, ctx.vaultBackupTargetsRepo.createGoogleDrive({
+              remotePath: String(body.remotePath).trim(),
+              label: body.label ?? null,
+              retentionCount: body.retentionCount ?? null,
+              enabled: body.enabled !== false,
+            }));
+            return;
+          }
           if (!body.path) {
             sendJson(res, 400, { error: 'path is required.' });
             return;
@@ -3886,6 +3988,70 @@ program
         }
         return;
       }
+
+      const vbtAuthorizeMatch = req.method === 'POST' && pathname.match(/^\/vault\/backup-targets\/([^/]+)\/authorize$/);
+      if (vbtAuthorizeMatch) {
+        try {
+          const target = ctx.vaultBackupTargetsRepo.getById(vbtAuthorizeMatch[1]);
+          if (!target || target.kind !== 'google_drive' || !target.rcloneConfigSecretRef) {
+            sendJson(res, 400, { error: 'Not a Google Drive vault-backup destination.' });
+            return;
+          }
+          const body = await readJsonBody(req);
+          if (body.reuseFromReplicationTargetId) {
+            const src = ctx.replicationTargetsRepo.getById(String(body.reuseFromReplicationTargetId));
+            const raw = src?.rcloneConfigSecretRef ? ctx.secretStore.get(src.rcloneConfigSecretRef) : null;
+            if (!raw) {
+              sendJson(res, 400, { error: 'That replication target has no connected Google account to reuse.' });
+              return;
+            }
+            JSON.parse(raw); // validate
+            ctx.secretStore.set(target.rcloneConfigSecretRef, raw);
+            sendJson(res, 200, { ok: true });
+            return;
+          }
+          const token = rcloneClient.extractTokenBlob(String(body.token ?? '')) ?? String(body.token ?? '').trim();
+          JSON.parse(token); // validate
+          const config: RcloneDriveConfig = { token };
+          if (body.clientId && body.clientSecret) {
+            config.clientId = String(body.clientId);
+            config.clientSecret = String(body.clientSecret);
+          }
+          ctx.secretStore.set(target.rcloneConfigSecretRef, JSON.stringify(config));
+          sendJson(res, 200, { ok: true });
+        } catch (err) {
+          sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      const vbtTestMatch = req.method === 'POST' && pathname.match(/^\/vault\/backup-targets\/([^/]+)\/test$/);
+      if (vbtTestMatch) {
+        const target = ctx.vaultBackupTargetsRepo.getById(vbtTestMatch[1]);
+        if (!target || target.kind !== 'google_drive' || !target.rcloneConfigSecretRef) {
+          sendJson(res, 400, { error: 'Not a Google Drive vault-backup destination.' });
+          return;
+        }
+        const raw = ctx.secretStore.get(target.rcloneConfigSecretRef);
+        if (!raw) {
+          sendJson(res, 502, { ok: false, error: 'Google Drive is not connected for this destination.' });
+          return;
+        }
+        try {
+          const drive = JSON.parse(raw) as RcloneDriveConfig;
+          const detail = await rcloneClient.withRcloneConfig(
+            { encryptWithCrypt: false },
+            { provider: 'rclone_drive', drive },
+            undefined,
+            (configPath, remoteSection) => rcloneClient.rcloneAbout({ configPath, remoteSection })
+          );
+          sendJson(res, 200, { ok: true, detail });
+        } catch (err) {
+          sendJson(res, 502, { ok: false, error: redactSecrets(err instanceof Error ? err.message : String(err)) });
+        }
+        return;
+      }
+
       const vbtByIdMatch = pathname.match(/^\/vault\/backup-targets\/([^/]+)$/);
       if (vbtByIdMatch && req.method === 'PATCH') {
         try {
@@ -3912,7 +4078,7 @@ program
           return;
         }
         try {
-          const result = runAllVaultBackups(buildVaultBackupDeps(ctx));
+          const result = await runAllVaultBackups(buildVaultBackupDeps(ctx));
           sendJson(res, result.allOk ? 200 : 502, result);
         } catch (err) {
           sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
@@ -4831,20 +4997,27 @@ program
       console.log(`Serving dashboard status at http://127.0.0.1:${actualPort}/status (Ctrl+C to stop)`);
     });
 
-    // Best-effort portable vault backup: runs the configured .arkvault
-    // destinations shortly after start and once a day, but ONLY while the
-    // vault is unlocked (the scheduler service can't do this — no DEK).
-    const runVaultBackupsQuietly = () => {
+    // Best-effort portable vault backup, ONLY while the vault is unlocked
+    // (the LocalSystem scheduler can't do this — no DEK). Runs the targets
+    // that are DUE (no recent-enough successful backup — see isVaultBackupDue),
+    // so it doesn't depend on Arkode staying open for a full day and doesn't
+    // re-generate a backup on every open/close within the freshness window.
+    // The periodic re-check is just a safety net for a long-running session.
+    let vaultSweepRunning = false;
+    const runVaultBackupsQuietly = async () => {
+      if (vaultSweepRunning || !ctx.vaultState.isUnlocked()) return;
+      if (ctx.vaultBackupTargetsRepo.listEnabled().length === 0) return;
+      vaultSweepRunning = true;
       try {
-        if (ctx.vaultState.isUnlocked() && ctx.vaultBackupTargetsRepo.listEnabled().length > 0) {
-          runAllVaultBackups(buildVaultBackupDeps(ctx));
-        }
+        await runDueVaultBackups(buildVaultBackupDeps(ctx));
       } catch (err) {
         console.error(`Vault backup sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        vaultSweepRunning = false;
       }
     };
-    setTimeout(runVaultBackupsQuietly, 60_000).unref();
-    setInterval(runVaultBackupsQuietly, 24 * 60 * 60 * 1000).unref();
+    setTimeout(() => void runVaultBackupsQuietly(), 30_000).unref();
+    setInterval(() => void runVaultBackupsQuietly(), 3 * 60 * 60 * 1000).unref();
 
     server.listen(port, '127.0.0.1');
   });

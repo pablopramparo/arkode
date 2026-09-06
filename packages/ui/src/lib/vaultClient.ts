@@ -210,15 +210,25 @@ export async function resyncAllOperational(clientId?: string): Promise<{
 }
 
 // --- Portable backup (.arkvault) ---------------------------------------
+export type VaultBackupTargetKind = 'local_dir' | 'google_drive';
 export interface VaultBackupTarget {
   id: string;
-  kind: 'local_dir';
-  path: string;
+  kind: VaultBackupTargetKind;
+  /** local_dir only. */
+  path: string | null;
+  /** google_drive only. */
+  remotePath: string | null;
+  /** google_drive only — Tier-1 DPAPI ref; the secret is absent until connected. */
+  rcloneConfigSecretRef: string | null;
+  /** google_drive only — display label (connected account). */
+  label: string | null;
   retentionCount: number | null;
   enabled: boolean;
   lastRunAt: string | null;
   lastStatus: string | null;
   lastError: string | null;
+  /** google_drive only — whether an OAuth token is stored. */
+  authorized?: boolean;
 }
 export interface VaultBackupRun {
   id: string;
@@ -240,6 +250,46 @@ export async function createVaultBackupTarget(input: {
 }): Promise<VaultBackupTarget> {
   return handleJson(await post('/vault/backup-targets', input));
 }
+export async function createVaultBackupDriveTarget(input: {
+  remotePath: string;
+  label?: string | null;
+  retentionCount?: number | null;
+  enabled?: boolean;
+}): Promise<VaultBackupTarget> {
+  return handleJson(await post('/vault/backup-targets', { kind: 'google_drive', ...input }));
+}
+export async function updateVaultBackupTarget(
+  id: string,
+  patch: { path?: string; remotePath?: string; label?: string | null; retentionCount?: number | null; enabled?: boolean }
+): Promise<VaultBackupTarget> {
+  return handleJson(
+    await fetch(`${getApiBase()}/vault/backup-targets/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+  );
+}
+/** Stores a Google OAuth token, or copies one from an already-connected replication target. */
+export async function authorizeVaultBackupTarget(
+  id: string,
+  arg: string | { reuseFromReplicationTargetId: string }
+): Promise<void> {
+  const body = typeof arg === 'string' ? { token: arg } : arg;
+  await handleJson(await post(`/vault/backup-targets/${id}/authorize`, body));
+}
+export interface VaultBackupTestResult {
+  ok: boolean;
+  detail?: string;
+  error?: string;
+}
+export async function testVaultBackupTarget(id: string): Promise<VaultBackupTestResult> {
+  const res = await post(`/vault/backup-targets/${id}/test`);
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 502) return { ok: false, error: body.error };
+  if (!res.ok) throw new Error(body.error ?? `Request failed: ${res.status}`);
+  return body as VaultBackupTestResult;
+}
 export async function removeVaultBackupTarget(id: string): Promise<void> {
   await handleJson(await post(`/vault/backup-targets/${id}/remove`));
 }
@@ -249,13 +299,18 @@ export async function runVaultBackup(): Promise<{ runs: VaultBackupRun[]; allOk:
 export async function fetchVaultBackupRuns(limit = 20): Promise<VaultBackupRun[]> {
   return handleJson(await fetch(`${getApiBase()}/vault/backup-runs?limit=${limit}`));
 }
-export async function restoreVault(
-  fileBase64: string,
-  password: string
-): Promise<{ clientsCreated: number; credentialsCreated: number; urlsCreated: number; itemsCreated: number; clientErrors: { name: string; error: string }[] }> {
-  const s = await handleJson<{ clientsCreated: number; credentialsCreated: number; urlsCreated: number; itemsCreated: number; clientErrors: { name: string; error: string }[] }>(
-    await post('/vault/restore', { fileBase64, password })
-  );
+export interface RestoreVaultResult {
+  clientsCreated: number;
+  credentialsCreated: number;
+  urlsCreated: number;
+  itemsCreated: number;
+  replicationTargetsCreated: number;
+  vaultBackupTargetsCreated: number;
+  clientErrors: { name: string; error: string }[];
+  warnings: string[];
+}
+export async function restoreVault(fileBase64: string, password: string): Promise<RestoreVaultResult> {
+  const s = await handleJson<RestoreVaultResult>(await post('/vault/restore', { fileBase64, password }));
   notifyVaultStatusChanged();
   return s;
 }

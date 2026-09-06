@@ -226,6 +226,81 @@ export async function rcloneCopyDown(opts: {
   }
 }
 
+/**
+ * `rclone copyto <localFile> <remoteSection>:<remoteFile>` — uploads ONE
+ * file to an exact remote path (no mirror, no deletions). Used for the
+ * portable `.arkvault` vault backup.
+ */
+export async function rcloneCopyTo(opts: {
+  configPath: string;
+  remoteSection: string;
+  localFile: string;
+  /** Full destination path inside the remote, e.g. "Arkode/Vault/arkode-vault-2026-….arkvault". */
+  remoteFile: string;
+}): Promise<void> {
+  const args = [
+    'copyto',
+    opts.localFile,
+    `${opts.remoteSection}:${opts.remoteFile}`,
+    '--config',
+    opts.configPath,
+    '--checkers',
+    '4',
+  ];
+  try {
+    await execFileAsync(resolveRclonePath(), args, { windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+  } catch (err) {
+    throw new Error(rcloneErrorMessage(err, 'copyto'));
+  }
+}
+
+/**
+ * `rclone lsf <remoteSection>:<remotePath>` — lists file names (one per
+ * line, no paths) directly under a remote folder. Returns [] when the
+ * folder doesn't exist yet. Optional `include` is an rclone `--include` glob.
+ */
+export async function rcloneLsf(opts: {
+  configPath: string;
+  remoteSection: string;
+  remotePath: string;
+  include?: string;
+}): Promise<string[]> {
+  const args = [
+    'lsf',
+    `${opts.remoteSection}:${opts.remotePath}`,
+    '--config',
+    opts.configPath,
+    '--files-only',
+  ];
+  if (opts.include) args.push('--include', opts.include);
+  try {
+    const { stdout } = await execFileAsync(resolveRclonePath(), args, { windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+    return stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  } catch (err) {
+    const e = err as ExecErrorWithOutput;
+    // A not-yet-created destination folder is not an error for our purposes.
+    if (/directory not found|not found|doesn't exist/i.test(`${e.stderr ?? ''}${e.message ?? ''}`)) return [];
+    throw new Error(rcloneErrorMessage(err, 'lsf'));
+  }
+}
+
+/** `rclone deletefile <remoteSection>:<remoteFile>` — deletes one remote file (used for remote retention). */
+export async function rcloneDeleteFile(opts: {
+  configPath: string;
+  remoteSection: string;
+  remoteFile: string;
+}): Promise<void> {
+  try {
+    await execFileAsync(
+      resolveRclonePath(),
+      ['deletefile', `${opts.remoteSection}:${opts.remoteFile}`, '--config', opts.configPath],
+      { windowsHide: true }
+    );
+  } catch (err) {
+    throw new Error(rcloneErrorMessage(err, 'deletefile'));
+  }
+}
+
 /** `rclone about <remoteSection>:` — a cheap connectivity + auth check that returns the account's quota. */
 export async function rcloneAbout(opts: { configPath: string; remoteSection: string }): Promise<string> {
   try {

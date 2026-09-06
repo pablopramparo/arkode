@@ -1,10 +1,23 @@
 import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 
+export type VaultBackupTargetKind = 'local_dir' | 'google_drive';
+
 export interface VaultBackupTarget {
   id: string;
-  kind: 'local_dir';
-  path: string;
+  kind: VaultBackupTargetKind;
+  /** local_dir only — an absolute directory on this machine. */
+  path: string | null;
+  /** google_drive only — destination folder inside the Drive account, e.g. "Arkode/Vault". */
+  remotePath: string | null;
+  /**
+   * google_drive only — Tier-1 DPAPI SecretStore ref to the RcloneDriveConfig
+   * JSON. Present from creation; the secret itself is absent until the
+   * account is authorized (mirrors replication_targets' "NULL-authorized" state).
+   */
+  rcloneConfigSecretRef: string | null;
+  /** google_drive only — display label (e.g. the connected account e-mail). */
+  label: string | null;
   retentionCount: number | null;
   enabled: boolean;
   lastRunAt: string | null;
@@ -29,7 +42,10 @@ export interface VaultBackupRun {
 interface TargetRow {
   id: string;
   kind: string;
-  path: string;
+  path: string | null;
+  remote_path: string | null;
+  rclone_config_secret_ref: string | null;
+  label: string | null;
   retention_count: number | null;
   enabled: number;
   last_run_at: string | null;
@@ -52,8 +68,11 @@ interface RunRow {
 
 const toTarget = (r: TargetRow): VaultBackupTarget => ({
   id: r.id,
-  kind: r.kind as 'local_dir',
+  kind: r.kind as VaultBackupTargetKind,
   path: r.path,
+  remotePath: r.remote_path,
+  rcloneConfigSecretRef: r.rclone_config_secret_ref,
+  label: r.label,
   retentionCount: r.retention_count,
   enabled: r.enabled === 1,
   lastRunAt: r.last_run_at,
@@ -74,15 +93,31 @@ const toRun = (r: RunRow): VaultBackupRun => ({
   createdAt: r.created_at,
 });
 
-export interface CreateVaultBackupTargetInput {
+export interface CreateLocalDirTargetInput {
   path: string;
+  retentionCount?: number | null;
+  enabled?: boolean;
+}
+export interface CreateGoogleDriveTargetInput {
+  remotePath: string;
+  label?: string | null;
+  retentionCount?: number | null;
+  enabled?: boolean;
+}
+
+export interface UpdateVaultBackupTargetInput {
+  path?: string;
+  remotePath?: string;
+  label?: string | null;
   retentionCount?: number | null;
   enabled?: boolean;
 }
 
 export interface VaultBackupTargetsRepo {
-  create(input: CreateVaultBackupTargetInput): VaultBackupTarget;
-  update(id: string, patch: { path?: string; retentionCount?: number | null; enabled?: boolean }): VaultBackupTarget;
+  /** Back-compat: creates a local_dir target (the only kind before 0022). */
+  create(input: CreateLocalDirTargetInput): VaultBackupTarget;
+  createGoogleDrive(input: CreateGoogleDriveTargetInput): VaultBackupTarget;
+  update(id: string, patch: UpdateVaultBackupTargetInput): VaultBackupTarget;
   remove(id: string): void;
   getById(id: string): VaultBackupTarget | null;
   list(): VaultBackupTarget[];
@@ -92,10 +127,19 @@ export interface VaultBackupTargetsRepo {
   listRecentRuns(limit?: number): VaultBackupRun[];
 }
 
+/** Deterministic-from-id so re-authorizing a Drive target overwrites its token in place. */
+export function vaultBackupTargetConfigRef(id: string): string {
+  return `vault-backup-target:${id}:rclone-config`;
+}
+
 export function createVaultBackupTargetsRepo(db: Database): VaultBackupTargetsRepo {
-  const insertStmt = db.prepare(
+  const insertLocalStmt = db.prepare(
     `INSERT INTO vault_backup_targets (id, kind, path, retention_count, enabled)
      VALUES (@id, 'local_dir', @path, @retentionCount, @enabled)`
+  );
+  const insertDriveStmt = db.prepare(
+    `INSERT INTO vault_backup_targets (id, kind, remote_path, rclone_config_secret_ref, label, retention_count, enabled)
+     VALUES (@id, 'google_drive', @remotePath, @rcloneConfigSecretRef, @label, @retentionCount, @enabled)`
   );
   const getByIdStmt = db.prepare<[string], TargetRow>('SELECT * FROM vault_backup_targets WHERE id = ?');
   const listStmt = db.prepare<[], TargetRow>('SELECT * FROM vault_backup_targets ORDER BY created_at');
@@ -121,9 +165,21 @@ export function createVaultBackupTargetsRepo(db: Database): VaultBackupTargetsRe
   return {
     create(input) {
       const id = randomUUID();
-      insertStmt.run({
+      insertLocalStmt.run({
         id,
         path: input.path,
+        retentionCount: input.retentionCount ?? null,
+        enabled: input.enabled === false ? 0 : 1,
+      });
+      return toTarget(getByIdStmt.get(id)!);
+    },
+    createGoogleDrive(input) {
+      const id = randomUUID();
+      insertDriveStmt.run({
+        id,
+        remotePath: input.remotePath,
+        rcloneConfigSecretRef: vaultBackupTargetConfigRef(id),
+        label: input.label ?? null,
         retentionCount: input.retentionCount ?? null,
         enabled: input.enabled === false ? 0 : 1,
       });
@@ -137,6 +193,14 @@ export function createVaultBackupTargetsRepo(db: Database): VaultBackupTargetsRe
       if (patch.path !== undefined) {
         sets.push('path = @path');
         params.path = patch.path;
+      }
+      if (patch.remotePath !== undefined) {
+        sets.push('remote_path = @remotePath');
+        params.remotePath = patch.remotePath;
+      }
+      if (patch.label !== undefined) {
+        sets.push('label = @label');
+        params.label = patch.label;
       }
       if (patch.retentionCount !== undefined) {
         sets.push('retention_count = @retentionCount');

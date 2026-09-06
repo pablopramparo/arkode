@@ -25,6 +25,7 @@ import type { DatabaseConnectionsRepo } from '../db/repositories/databaseConnect
 import type { TasksRepo } from '../db/repositories/tasksRepo.js';
 import type { SettingsRepo } from '../db/repositories/settingsRepo.js';
 import type { ReplicationTargetsRepo } from '../db/repositories/replicationTargetsRepo.js';
+import type { VaultBackupTargetsRepo, VaultBackupTarget } from '../db/repositories/vaultBackupTargetsRepo.js';
 import type { FileBackupRepositoriesRepo } from '../fileBackup/db/repositories/fileBackupRepositoriesRepo.js';
 import type { FileBackupTasksRepo } from '../fileBackup/db/repositories/fileBackupTasksRepo.js';
 import type { VaultCredentialsRepo } from '../db/repositories/vaultCredentialsRepo.js';
@@ -70,6 +71,7 @@ export interface VaultBackupDeps {
   fileBackupRepositoriesRepo: FileBackupRepositoriesRepo;
   fileBackupTasksRepo: FileBackupTasksRepo;
   replicationTargetsRepo: ReplicationTargetsRepo;
+  vaultBackupTargetsRepo: VaultBackupTargetsRepo;
   vaultCredentialsRepo: VaultCredentialsRepo;
   vaultUrlsRepo: VaultUrlsRepo;
   vaultItemsRepo: VaultItemsRepo;
@@ -92,6 +94,10 @@ type ExportedReplicationTarget = ReplicationTarget & {
   rcloneConfig: string | null; // JSON string (OAuth token blob for drive)
   cryptPassword: string | null;
 };
+type ExportedVaultBackupTarget = VaultBackupTarget & {
+  /** google_drive only: the RcloneDriveConfig JSON (OAuth token) — so DR can resume remote backups with no re-auth. */
+  rcloneConfig: string | null;
+};
 
 interface InnerPayloadV1 {
   clients: Client[];
@@ -110,6 +116,14 @@ interface InnerPayloadV2 extends InnerPayloadV1 {
   fileBackupTasks: FileBackupTask[];
   replicationTargets: ExportedReplicationTarget[];
   toolRegistries: { postgres: string | null; mysql: string | null; mariadb: string | null };
+  /**
+   * Additive v2 extension (older readers ignore it, older files read as []).
+   * The portable `.arkvault` disaster-recovery destinations themselves —
+   * so a fresh restore can resume remote backups automatically. `local_dir`
+   * targets restore DISABLED (their path is machine-specific); `google_drive`
+   * targets restore ENABLED with their OAuth token, no re-authorization.
+   */
+  vaultBackupTargets?: ExportedVaultBackupTarget[];
 }
 
 interface ArkvaultFile {
@@ -198,6 +212,13 @@ export function exportVaultBuffer(deps: VaultBackupDeps): Buffer {
     }
   }
 
+  // Portable vault-backup destinations are global (not per-client). google_drive
+  // targets carry their OAuth token so DR resumes remote backups with no re-auth.
+  const vaultBackupTargets: ExportedVaultBackupTarget[] = deps.vaultBackupTargetsRepo.list().map((t) => ({
+    ...t,
+    rcloneConfig: t.kind === 'google_drive' ? t1(t.rcloneConfigSecretRef) : null,
+  }));
+
   const credentials = deps.vaultCredentialsRepo.listAll().map((c) => ({
     ...c,
     secret: c.secretBlobRef ? readCredentialSecret(deps.vaultSecretStore, c.secretBlobRef) : {},
@@ -218,6 +239,7 @@ export function exportVaultBuffer(deps: VaultBackupDeps): Buffer {
     fileBackupRepositories,
     fileBackupTasks,
     replicationTargets,
+    vaultBackupTargets,
     toolRegistries: {
       postgres: deps.settingsRepo.get(TOOL_REGISTRY_KEYS.postgres),
       mysql: deps.settingsRepo.get(TOOL_REGISTRY_KEYS.mysql),
@@ -301,6 +323,7 @@ export interface ImportVaultResult {
   fileBackupRepositoriesCreated: number;
   fileBackupTasksCreated: number;
   replicationTargetsCreated: number;
+  vaultBackupTargetsCreated: number;
   toolRegistriesRestored: number;
   clientErrors: { name: string; error: string }[];
   warnings: string[];
@@ -320,6 +343,7 @@ function emptyResult(formatVersion: number): ImportVaultResult {
     fileBackupRepositoriesCreated: 0,
     fileBackupTasksCreated: 0,
     replicationTargetsCreated: 0,
+    vaultBackupTargetsCreated: 0,
     toolRegistriesRestored: 0,
     clientErrors: [],
     warnings: [],
@@ -737,6 +761,39 @@ export function importVaultBuffer(deps: VaultBackupDeps, buf: Buffer, password: 
           }
           if (!rt.enabled) deps.replicationTargetsRepo.update(created.id, { enabled: false });
           result.replicationTargetsCreated++;
+        }
+
+        // 8b. portable vault-backup destinations (additive v2 extension)
+        for (const vbt of v2.vaultBackupTargets ?? []) {
+          if (vbt.kind === 'google_drive') {
+            if (!vbt.remotePath) continue;
+            const created = deps.vaultBackupTargetsRepo.createGoogleDrive({
+              remotePath: vbt.remotePath,
+              label: vbt.label,
+              retentionCount: vbt.retentionCount,
+              enabled: vbt.enabled,
+            });
+            if (vbt.rcloneConfig && created.rcloneConfigSecretRef) {
+              deps.secretStore.set(created.rcloneConfigSecretRef, vbt.rcloneConfig);
+            } else {
+              result.warnings.push(
+                `Google Drive vault-backup destination "${vbt.remotePath}" was restored but its account token was not in the backup — reconnect Google Drive.`
+              );
+            }
+            result.vaultBackupTargetsCreated++;
+          } else if (vbt.path) {
+            // A local path is machine-specific — restore it DISABLED so the
+            // user reviews/re-points it before it runs on the new machine.
+            deps.vaultBackupTargetsRepo.create({
+              path: vbt.path,
+              retentionCount: vbt.retentionCount,
+              enabled: false,
+            });
+            result.vaultBackupTargetsCreated++;
+            result.warnings.push(
+              `Local vault-backup destination "${vbt.path}" was restored DISABLED — check the path exists on this machine, then re-enable it.`
+            );
+          }
         }
 
         // 9. tool registries

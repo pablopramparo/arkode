@@ -214,12 +214,15 @@ export {
   syncOperationalCopy,
   resyncOperationalCopies,
 } from './vault/syncOperationalCopy.js';
-export { createVaultBackupTargetsRepo } from './db/repositories/vaultBackupTargetsRepo.js';
+export { createVaultBackupTargetsRepo, vaultBackupTargetConfigRef } from './db/repositories/vaultBackupTargetsRepo.js';
 export type {
   VaultBackupTargetsRepo,
   VaultBackupTarget,
+  VaultBackupTargetKind,
   VaultBackupRun,
-  CreateVaultBackupTargetInput,
+  CreateLocalDirTargetInput,
+  CreateGoogleDriveTargetInput,
+  UpdateVaultBackupTargetInput,
 } from './db/repositories/vaultBackupTargetsRepo.js';
 export {
   exportVaultBuffer,
@@ -229,7 +232,13 @@ export {
   ARKVAULT_FORMAT_VERSION,
 } from './vault/exportVault.js';
 export type { VaultBackupDeps, ImportVaultResult } from './vault/exportVault.js';
-export { runVaultBackup, runAllVaultBackups } from './vault/runVaultBackup.js';
+export {
+  runVaultBackup,
+  runAllVaultBackups,
+  runDueVaultBackups,
+  isVaultBackupDue,
+  VAULT_BACKUP_FRESH_MS,
+} from './vault/runVaultBackup.js';
 export type { RunVaultBackupDeps, RunAllVaultBackupsResult } from './vault/runVaultBackup.js';
 export type {
   SyncOperationalCopyDeps,

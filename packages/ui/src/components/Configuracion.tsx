@@ -26,7 +26,7 @@ import { IN_PROGRESS_RUN_STATUSES } from '../lib/tasksClient';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { Switch } from './Switch';
 import { SchedulerStatusBanner } from './SchedulerStatusBanner';
-import { VaultBackupSection } from './VaultBackupSection';
+import { VaultRecoverySection } from './VaultRecoverySection';
 import arkodeIsotipo from '../assets/arkode-isotipo.png';
 
 const inputStyle: React.CSSProperties = {
@@ -694,7 +694,7 @@ export function Configuracion() {
           )}
 
           <section className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
-            <VaultBackupSection />
+            <VaultRecoverySection />
           </section>
         </div>
       )}

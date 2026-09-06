@@ -7,7 +7,6 @@ import {
   removeReplicationTarget,
   authorizeReplicationTarget,
   authorizeDriveInApp,
-  onRcloneAuthUrl,
   canAuthorizeInApp,
   testReplicationTarget,
   runReplicationTarget,
@@ -27,6 +26,7 @@ import { Spinner } from './Spinner';
 import { inputStyle } from './TaskCreateWizard';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { formatDateTime, formatSize } from '../lib/format';
+import { PasteTokenModal, CopyLinkAuthModal } from './DriveAuthControls';
 
 const CONTENT_LABEL: Record<ReplicationContent, string> = {
   restic_repo: 'Archivos (repositorio restic)',
@@ -566,138 +566,6 @@ function ConfigureModal({
           }}
         >
           {busy ? 'Creando…' : 'Crear'}
-        </Button>
-      </div>
-    </Modal>
-  );
-}
-
-function PasteTokenModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (token: string) => Promise<void> }) {
-  const [token, setToken] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  return (
-    <Modal title="Pegar token de rclone" onClose={onClose}>
-      <p className="mb-2 text-sm" style={{ color: 'var(--muted)' }}>
-        En una PC con navegador, ejecutá <code>rclone authorize "drive"</code>, aprobá el acceso y pegá acá el bloque
-        <code> {'{'}"access_token"...{'}'}</code> que imprime.
-      </p>
-      <textarea
-        className="mb-3 h-28 w-full rounded-md border px-3 py-2 font-mono text-xs"
-        style={inputStyle}
-        value={token}
-        onChange={(e) => setToken(e.target.value)}
-      />
-      {err && (
-        <p className="mb-2 text-sm" style={{ color: 'var(--danger)' }}>
-          {err}
-        </p>
-      )}
-      <div className="flex justify-end gap-2">
-        <Button size="sm" variant="ghost" className="rounded-full px-4" onPress={onClose}>
-          Cancelar
-        </Button>
-        <Button
-          size="sm"
-          className="rounded-full px-4"
-          style={primaryPillStyle}
-          isDisabled={busy || !token.trim()}
-          onPress={async () => {
-            setBusy(true);
-            setErr(null);
-            try {
-              await onSubmit(token.trim());
-            } catch (e) {
-              setErr(e instanceof Error ? e.message : String(e));
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {busy ? 'Guardando…' : 'Guardar'}
-        </Button>
-      </div>
-    </Modal>
-  );
-}
-
-function CopyLinkAuthModal({
-  onClose,
-  onAuthorized,
-}: {
-  onClose: () => void;
-  onAuthorized: (token: string) => Promise<void>;
-}) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    let unlisten: (() => void) | undefined;
-    onRcloneAuthUrl((u) => {
-      if (alive) setUrl(u);
-    }).then((fn) => {
-      if (alive) unlisten = fn;
-      else fn();
-    });
-    authorizeDriveInApp({ noOpenBrowser: true })
-      .then((token) => {
-        if (alive) void onAuthorized(token);
-      })
-      .catch((e) => {
-        if (alive) setErr(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      alive = false;
-      unlisten?.();
-    };
-  }, [onAuthorized]);
-
-  return (
-    <Modal title="Autorizar con Google — copiar enlace" onClose={onClose}>
-      <p className="mb-3 text-sm" style={{ color: 'var(--muted)' }}>
-        Abrí este enlace en el navegador que quieras <strong>de esta misma PC</strong>, iniciá sesión y aprobá el acceso.
-        Al terminar, la cuenta se conecta sola — no cierres esta ventana.
-      </p>
-      {err ? (
-        <p className="mb-2 text-sm" style={{ color: 'var(--danger)' }}>
-          {err}
-        </p>
-      ) : url ? (
-        <>
-          <div
-            className="mb-2 select-all rounded-md border px-3 py-2 font-mono text-xs break-all"
-            style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface-secondary)' }}
-          >
-            {url}
-          </div>
-          <div className="mb-3 flex items-center gap-3">
-            <Button
-              size="sm"
-              variant="ghost"
-              className="rounded-full px-3"
-              onPress={async () => {
-                await navigator.clipboard.writeText(url);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }}
-            >
-              {copied ? 'Copiado ✓' : 'Copiar enlace'}
-            </Button>
-            <span className="flex items-center gap-2 text-xs" style={{ color: 'var(--muted)' }}>
-              <Spinner /> Esperando la autorización…
-            </span>
-          </div>
-        </>
-      ) : (
-        <p className="mb-3 flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
-          <Spinner /> Generando el enlace…
-        </p>
-      )}
-      <div className="flex justify-end">
-        <Button size="sm" variant="ghost" className="rounded-full px-4" onPress={onClose}>
-          Cancelar
         </Button>
       </div>
     </Modal>
