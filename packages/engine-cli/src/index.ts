@@ -35,6 +35,7 @@ import {
   VaultAlreadyInitializedError,
   WrongMasterPasswordError,
   VaultLockedError,
+  VaultAutoUnlockUnavailableError,
   VaultCryptoError,
   newCredentialSecretRef,
   normalizeCredentialSecret,
@@ -3538,6 +3539,56 @@ program
         return;
       }
 
+      // Explicit "unlock with Windows" — recover the DEK via this machine's
+      // DPAPI-CurrentUser-sealed KEK, no master password. Works even after a
+      // manual lock (that only blocks the *automatic* startup path).
+      if (req.method === 'POST' && pathname === '/vault/unlock-with-windows') {
+        try {
+          ctx.vaultState.unlockWithWindows();
+          sendJson(res, 200, getVaultStatus(ctx.vaultState));
+          if (ctx.vaultState.isUnlocked()) {
+            void runDueVaultBackups(buildVaultBackupDeps(ctx)).catch((err) =>
+              console.error(`Vault backup catch-up failed: ${err instanceof Error ? err.message : String(err)}`)
+            );
+          }
+        } catch (err) {
+          if (err instanceof VaultAutoUnlockUnavailableError) {
+            sendJson(res, 409, { error: err.message });
+          } else if (err instanceof VaultNotInitializedError) {
+            sendJson(res, 409, { error: err.message });
+          } else {
+            sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        return;
+      }
+
+      // Enable/disable the per-machine auto-unlock material.
+      if (req.method === 'POST' && (pathname === '/vault/auto-unlock/enable' || pathname === '/vault/auto-unlock/disable')) {
+        try {
+          if (pathname === '/vault/auto-unlock/enable') {
+            const body = await readJsonBody(req).catch(() => ({}));
+            if (typeof body.password !== 'string' || body.password.length < 1) {
+              sendJson(res, 400, { error: 'password is required to enable auto-unlock.' });
+              return;
+            }
+            ctx.vaultState.enableAutoUnlock(body.password);
+          } else {
+            ctx.vaultState.disableAutoUnlock();
+          }
+          sendJson(res, 200, getVaultStatus(ctx.vaultState));
+        } catch (err) {
+          if (err instanceof WrongMasterPasswordError) {
+            sendJson(res, 401, { error: err.message });
+          } else if (err instanceof VaultAutoUnlockUnavailableError || err instanceof VaultNotInitializedError) {
+            sendJson(res, 409, { error: err.message });
+          } else {
+            sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        return;
+      }
+
       if (
         req.method === 'POST' &&
         (pathname === '/vault/init' || pathname === '/vault/unlock' || pathname === '/vault/change-password')
@@ -3555,7 +3606,9 @@ program
               sendJson(res, 400, { error: 'password is required.' });
               return;
             }
-            ctx.vaultState.unlock(body.password);
+            // `enableAutoUnlock` is best-effort inside unlock(): a sealing
+            // failure never fails the unlock. The client re-reads status.
+            ctx.vaultState.unlock(body.password, { enableAutoUnlock: body.enableAutoUnlock === true });
           } else {
             if (
               typeof body.currentPassword !== 'string' ||
@@ -5052,6 +5105,20 @@ program
     };
     setTimeout(() => void runVaultBackupsQuietly(), 30_000).unref();
     setInterval(() => void runVaultBackupsQuietly(), 3 * 60 * 60 * 1000).unref();
+
+    // Per-machine auto-unlock: if the user enabled it on this machine, open
+    // the vault now with the DPAPI-CurrentUser-sealed KEK — no master
+    // password. Stale/foreign material is deleted inside here and we fall
+    // through to the normal locked state. Never blocks startup.
+    try {
+      if (ctx.vaultState.attemptStartupAutoUnlock()) {
+        void runDueVaultBackups(buildVaultBackupDeps(ctx)).catch((err) =>
+          console.error(`Vault backup catch-up failed: ${err instanceof Error ? err.message : String(err)}`)
+        );
+      }
+    } catch (err) {
+      console.error(`Vault auto-unlock at startup failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     server.listen(port, '127.0.0.1');
   });

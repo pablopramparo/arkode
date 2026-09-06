@@ -49,6 +49,18 @@ export function keysDir(): string {
   return join(appDataDir(), 'keys');
 }
 
+/**
+ * Local, per-machine material for the OPTIONAL vault auto-unlock (a
+ * DPAPI-CurrentUser-wrapped copy of the KEK). Deliberately a standalone
+ * file, not a row in data.sqlite3: it must never ride along in a copied
+ * database, never appear in a `.arkvault` or a `config:export`, and
+ * "disable" is a plain file delete. A fresh install / `.arkvault` restore
+ * never creates it, so a new machine can never inherit auto-unlock.
+ */
+export function vaultAutoUnlockFilePath(): string {
+  return join(appDataDir(), 'vault-auto-unlock.bin');
+}
+
 export function migrationsSourceDir(): string {
   return join(import.meta.dirname, 'db', 'migrations');
 }

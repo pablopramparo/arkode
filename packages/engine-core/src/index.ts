@@ -164,8 +164,17 @@ export {
   VaultNotInitializedError,
   VaultAlreadyInitializedError,
   WrongMasterPasswordError,
+  VaultAutoUnlockUnavailableError,
 } from './vault/vaultState.js';
 export type { VaultState, VaultStateDeps } from './vault/vaultState.js';
+export { createVaultAutoUnlock, currentUserDpapiProvider } from './vault/autoUnlock.js';
+export type {
+  VaultAutoUnlock,
+  VaultAutoUnlockDeps,
+  VaultAutoUnlockState,
+  VaultAutoUnlockStatus,
+  DpapiProvider,
+} from './vault/autoUnlock.js';
 export { createVaultSecretStore } from './vault/vaultSecretStore.js';
 export type { VaultSecretStore } from './vault/vaultSecretStore.js';
 export { createVaultCredentialsRepo } from './db/repositories/vaultCredentialsRepo.js';

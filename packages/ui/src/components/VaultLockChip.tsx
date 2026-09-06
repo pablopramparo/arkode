@@ -2,8 +2,15 @@ import { useState } from 'react';
 import { Button } from '@heroui/react';
 import { Modal } from './Modal';
 import { LockIcon, LockOpenIcon } from './icons';
+import type { VaultStatus } from 'engine-core';
 import { useVaultStatus } from '../lib/useVaultStatus';
-import { changeMasterPassword, initVault, lockVault, unlockVault } from '../lib/vaultClient';
+import {
+  changeMasterPassword,
+  initVault,
+  lockVault,
+  unlockVault,
+  unlockVaultWithWindows,
+} from '../lib/vaultClient';
 
 const inputCls =
   'w-full rounded-md border px-3 py-2 text-sm outline-none';
@@ -51,26 +58,47 @@ export function VaultLockChip() {
 
       {open === 'init' && <SetPasswordModal mode="init" onClose={() => setOpen(null)} />}
       {open === 'change' && <SetPasswordModal mode="change" onClose={() => setOpen(null)} />}
-      {open === 'unlock' && <UnlockModal onClose={() => setOpen(null)} />}
+      {open === 'unlock' && <UnlockModal status={status} onClose={() => setOpen(null)} />}
     </>
   );
 }
 
-function UnlockModal({ onClose }: { onClose: () => void }) {
+function UnlockModal({ status, onClose }: { status: VaultStatus; onClose: () => void }) {
   const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [rememberOnThisMachine, setRememberOnThisMachine] = useState(false);
+  const [busy, setBusy] = useState<null | 'password' | 'windows'>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const autoUnlockSupported = status.autoUnlock !== 'unsupported';
+  const canUnlockWithWindows = status.autoUnlock === 'enabled';
+
   const submit = async () => {
-    setBusy(true);
+    setBusy('password');
     setError(null);
     try {
-      await unlockVault(password);
+      const next = await unlockVault(password, rememberOnThisMachine && autoUnlockSupported);
+      if (rememberOnThisMachine && autoUnlockSupported && next.autoUnlock !== 'enabled') {
+        setError('La bóveda se abrió, pero no se pudo activar el auto-desbloqueo en este equipo.');
+        return;
+      }
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setBusy(null);
+    }
+  };
+
+  const withWindows = async () => {
+    setBusy('windows');
+    setError(null);
+    try {
+      await unlockVaultWithWindows();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -83,6 +111,21 @@ function UnlockModal({ onClose }: { onClose: () => void }) {
         }}
         className="space-y-3"
       >
+        {canUnlockWithWindows && (
+          <div className="space-y-2 rounded-md border p-2" style={{ borderColor: 'var(--border)' }}>
+            <p className="text-xs" style={{ color: 'var(--muted)' }}>
+              El auto-desbloqueo está activo en este equipo.
+            </p>
+            <Button
+              size="sm"
+              className="w-full"
+              isDisabled={busy !== null}
+              onPress={() => void withWindows()}
+            >
+              {busy === 'windows' ? 'Abriendo…' : 'Desbloquear con Windows'}
+            </Button>
+          </div>
+        )}
         <input
           type="password"
           autoFocus
@@ -92,6 +135,20 @@ function UnlockModal({ onClose }: { onClose: () => void }) {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
+        {autoUnlockSupported && !canUnlockWithWindows && (
+          <label className="flex items-start gap-2 text-xs" style={{ color: 'var(--muted)' }}>
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={rememberOnThisMachine}
+              onChange={(e) => setRememberOnThisMachine(e.target.checked)}
+            />
+            <span>
+              Desbloquear automáticamente en este equipo. Guarda una llave protegida con tu cuenta de Windows; la
+              contraseña maestra sigue siendo necesaria para recuperar Arkode en otra computadora.
+            </span>
+          </label>
+        )}
         {error && (
           <p className="text-xs" style={{ color: 'var(--danger)' }}>
             {error}
@@ -101,8 +158,8 @@ function UnlockModal({ onClose }: { onClose: () => void }) {
           <Button size="sm" variant="ghost" onPress={onClose}>
             Cancelar
           </Button>
-          <Button size="sm" type="submit" isDisabled={busy || password.length === 0}>
-            {busy ? 'Abriendo…' : 'Desbloquear'}
+          <Button size="sm" type="submit" isDisabled={busy !== null || password.length === 0}>
+            {busy === 'password' ? 'Abriendo…' : 'Desbloquear'}
           </Button>
         </div>
       </form>

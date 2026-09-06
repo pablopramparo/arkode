@@ -45,13 +45,32 @@ export async function initVault(password: string): Promise<VaultStatus> {
   notifyVaultStatusChanged();
   return s;
 }
-export async function unlockVault(password: string): Promise<VaultStatus> {
-  const s = await handleJson<VaultStatus>(await post('/vault/unlock', { password }));
+export async function unlockVault(password: string, enableAutoUnlock = false): Promise<VaultStatus> {
+  const s = await handleJson<VaultStatus>(await post('/vault/unlock', { password, enableAutoUnlock }));
   notifyVaultStatusChanged();
   return s;
 }
 export async function lockVault(): Promise<VaultStatus> {
   const s = await handleJson<VaultStatus>(await post('/vault/lock'));
+  notifyVaultStatusChanged();
+  return s;
+}
+
+/** Open the vault via this machine's Windows-sealed KEK — no master password. */
+export async function unlockVaultWithWindows(): Promise<VaultStatus> {
+  const s = await handleJson<VaultStatus>(await post('/vault/unlock-with-windows'));
+  notifyVaultStatusChanged();
+  return s;
+}
+/** Seal the KEK for this machine (needs the master password to derive it). */
+export async function enableVaultAutoUnlock(password: string): Promise<VaultStatus> {
+  const s = await handleJson<VaultStatus>(await post('/vault/auto-unlock/enable', { password }));
+  notifyVaultStatusChanged();
+  return s;
+}
+/** Delete this machine's auto-unlock material. No master password needed. */
+export async function disableVaultAutoUnlock(): Promise<VaultStatus> {
+  const s = await handleJson<VaultStatus>(await post('/vault/auto-unlock/disable'));
   notifyVaultStatusChanged();
   return s;
 }

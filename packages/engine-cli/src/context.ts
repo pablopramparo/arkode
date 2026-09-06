@@ -22,7 +22,9 @@ import {
   createReplicationRunsRepo,
   createVaultMetaRepo,
   createVaultState,
+  createVaultAutoUnlock,
   createVaultSecretStore,
+  vaultAutoUnlockFilePath,
   createVaultCredentialsRepo,
   createVaultUrlsRepo,
   createVaultItemsRepo,
@@ -65,9 +67,17 @@ export function buildContext() {
   // service never unlocks it (it reads Tier 1 DPAPI secrets instead).
   const vaultMetaRepo = createVaultMetaRepo(db);
   const autoLockMinutes = Number.parseInt(settingsRepo.get('vaultAutoLockMinutes') ?? '', 10);
+  // OPTIONAL per-machine auto-unlock: a DPAPI-CurrentUser-sealed copy of the
+  // KEK in a standalone file (never in data.sqlite3 / .arkvault / exports).
+  // Constructed for every context (harmless — pure object), but only the
+  // `serve` command ever calls attemptStartupAutoUnlock()/unlockWithWindows();
+  // the LocalSystem scheduler never does, and a CurrentUser blob is inert to it.
+  const vaultAutoUnlock = createVaultAutoUnlock({ filePath: vaultAutoUnlockFilePath() });
   const vaultState = createVaultState({
     vaultMetaRepo,
     autoLockMs: Number.isFinite(autoLockMinutes) && autoLockMinutes > 0 ? autoLockMinutes * 60_000 : undefined,
+    autoUnlock: vaultAutoUnlock,
+    onAutoUnlocked: () => console.log('[vault] auto-unlocked with the Windows account on this machine'),
   });
   const vaultSecretStore = createVaultSecretStore(db, vaultState);
   const vaultCredentialsRepo = createVaultCredentialsRepo(db);
@@ -107,6 +117,7 @@ export function buildContext() {
     replicationRunsRepo,
     vaultMetaRepo,
     vaultState,
+    vaultAutoUnlock,
     vaultSecretStore,
     vaultCredentialsRepo,
     vaultUrlsRepo,

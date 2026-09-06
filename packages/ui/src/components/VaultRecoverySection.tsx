@@ -5,6 +5,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { openPath } from '@tauri-apps/plugin-opener';
 import { IconButton } from './IconButton';
 import { EditIcon, FolderIcon, PulseIcon, TrashIcon } from './icons';
+import { MasterPasswordModal } from './MasterPasswordModal';
 import { Spinner } from './Spinner';
 import { Switch } from './Switch';
 import { DriveConnectButtons } from './DriveAuthControls';
@@ -17,6 +18,8 @@ import {
   authorizeVaultBackupTarget,
   createVaultBackupDriveTarget,
   createVaultBackupTarget,
+  disableVaultAutoUnlock,
+  enableVaultAutoUnlock,
   fetchVaultBackupRuns,
   fetchVaultBackupTargets,
   fetchVaultSettings,
@@ -93,6 +96,93 @@ function AutoLockControl() {
         </Button>
       )}
     </label>
+  );
+}
+
+/** Per-machine auto-unlock (DPAPI CurrentUser). Opt-in, off by default. */
+function AutoUnlockControl() {
+  const { status, refresh } = useVaultStatus();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [enabling, setEnabling] = useState(false);
+
+  if (!status || status.autoUnlock === 'unsupported') return null;
+
+  const enabled = status.autoUnlock === 'enabled';
+  const broken = status.autoUnlock === 'stale' || status.autoUnlock === 'error';
+
+  const toggle = async () => {
+    setErr(null);
+    if (!enabled) {
+      setEnabling(true);
+      return;
+    }
+    if (
+      !window.confirm(
+        '¿Desactivar el auto-desbloqueo en este equipo? Se elimina la llave local y volverá a pedir la contraseña maestra al iniciar.'
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      await disableVaultAutoUnlock();
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doEnable = async (password: string) => {
+    const next = await enableVaultAutoUnlock(password);
+    await refresh();
+    if (next.autoUnlock !== 'enabled') {
+      throw new Error('No se pudo activar el auto-desbloqueo en este equipo.');
+    }
+    setEnabling(false);
+  };
+
+  return (
+    <div className="space-y-1.5">
+      {enabling && (
+        <MasterPasswordModal
+          title="Activar auto-desbloqueo"
+          description="Se usa una vez para sellar la llave con tu cuenta de Windows en este equipo."
+          confirmLabel="Activar"
+          onSubmit={doEnable}
+          onClose={() => setEnabling(false)}
+        />
+      )}
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-sm">Auto-desbloqueo en este equipo</span>
+        <Switch checked={enabled} onChange={toggle} label={enabled ? 'Activado' : 'Desactivado'} />
+        {busy && <span className="text-xs" style={{ color: 'var(--muted)' }}>Guardando…</span>}
+        {broken && (
+          <span className="text-xs" style={{ color: 'var(--warning)' }}>
+            Material inválido — volvé a activarlo.
+          </span>
+        )}
+      </div>
+      <p className="text-xs" style={{ color: 'var(--muted)' }}>
+        Permite abrir la bóveda automáticamente usando tu cuenta de Windows en este equipo. La contraseña maestra seguirá
+        siendo necesaria para recuperar Arkode en otra computadora.
+        {enabled && ' Mientras esté activo, el bloqueo por inactividad queda desactivado.'}
+      </p>
+      <details className="text-xs" style={{ color: 'var(--muted)' }}>
+        <summary className="cursor-pointer">Saber más</summary>
+        <p className="mt-1">
+          Mientras esté activado, cualquier proceso que se ejecute con tu usuario de Windows en esta computadora puede
+          abrir la bóveda sin la contraseña maestra. Conviene tener BitLocker y una contraseña de Windows fuerte. Se
+          desactiva por máquina y borra la llave local; una instalación nueva o una restauración nunca lo heredan.
+        </p>
+      </details>
+      {err && (
+        <p className="text-xs" style={{ color: 'var(--danger)' }}>
+          {err}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -229,7 +319,12 @@ export function VaultRecoverySection() {
         )}
       </div>
 
-      {initialized && <AutoLockControl />}
+      {initialized && (
+        <div className="space-y-3 border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+          <AutoUnlockControl />
+          <AutoLockControl />
+        </div>
+      )}
       <p className="text-xs" style={{ color: 'var(--muted)' }}>
         Nota: el Historial del portapapeles de Windows (Win+V) guarda lo que copiás y queda fuera del control de Arkode —
         conviene tenerlo desactivado si copiás secretos.
