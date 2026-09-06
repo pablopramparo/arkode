@@ -1,4 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { inProgressRunLabels, confirmInterruptRunningBackups } from './lib/runGuard';
 import { Dashboard } from './components/Dashboard';
 import { Clientes } from './components/Clientes';
 import { ClienteDetalle } from './components/ClienteDetalle';
@@ -13,6 +16,30 @@ import { AppShell, type Screen } from './components/AppShell';
 function App() {
   const [screen, setScreen] = useState<Screen>('dashboard');
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+
+  // Closing the window kills the engine sidecar, which cuts any manual
+  // "Ejecutar ahora" run (scheduled runs are safe — they live in the
+  // arkode-scheduler service, not the app). Warn before that happens.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    getCurrentWindow()
+      .onCloseRequested(async (event) => {
+        const running = await inProgressRunLabels();
+        if (running.length > 0 && !confirmInterruptRunningBackups(running, 'Vas a cerrar Arkode.')) {
+          event.preventDefault();
+        }
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   function navigate(next: Screen) {
     setScreen(next);

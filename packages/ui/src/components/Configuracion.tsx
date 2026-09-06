@@ -21,8 +21,7 @@ import {
   type DetectedTool,
 } from '../lib/configClient';
 import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
-import { fetchDashboardStatus } from '../lib/statusClient';
-import { IN_PROGRESS_RUN_STATUSES } from '../lib/tasksClient';
+import { inProgressRunLabels, confirmInterruptRunningBackups } from '../lib/runGuard';
 import { primaryPillStyle } from '../lib/pillStyles';
 import { Switch } from './Switch';
 import { SchedulerStatusBanner } from './SchedulerStatusBanner';
@@ -451,6 +450,8 @@ export function Configuracion() {
   const [autostartBusy, setAutostartBusy] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'ready'>('idle');
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  /** The Update instance whose bytes are already downloaded (so a re-try doesn't re-download). */
+  const downloadedUpdateRef = useRef<Update | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ConfigTab>('general');
@@ -510,27 +511,31 @@ export function Configuracion() {
     if (!availableUpdate) return;
 
     // The installer stops the scheduler service and force-kills engine-cli.exe
-    // before touching any file — so installing now would interrupt anything
-    // running. Warn (don't block: the user can still choose to proceed).
-    try {
-      const rows = await fetchDashboardStatus();
-      const running = rows.filter((r) => (IN_PROGRESS_RUN_STATUSES as string[]).includes(r.status));
-      if (running.length > 0) {
-        const names = running.map((r) => `${r.client} · ${r.task}`).join('\n  ');
-        const proceed = window.confirm(
-          `Hay ${running.length === 1 ? 'un backup' : `${running.length} backups`} en curso:\n  ${names}\n\n` +
-            'Instalar la actualización ahora lo va a interrumpir (queda como "Interrumpida" y se reintenta en la próxima corrida). ¿Instalar igual?'
-        );
-        if (!proceed) return;
-      }
-    } catch {
-      // If /status isn't reachable, don't get in the way of the update.
+    // before touching any file — so installing would interrupt anything running.
+    // Warn (don't block: the user can still choose to proceed).
+    const before = await inProgressRunLabels();
+    if (before.length > 0 && !confirmInterruptRunningBackups(before, 'Instalar la actualización va a interrumpir backups.')) {
+      return;
     }
 
     setUpdateCheck('downloading');
     setUpdateError(null);
     try {
-      await availableUpdate.downloadAndInstall();
+      // Split download from install: the download can take a while, and a
+      // scheduled backup may kick off during it. Re-check right before the
+      // installer actually runs so the warning isn't stale. Don't re-download
+      // if the user already downloaded this update and only backed out of the
+      // second warning.
+      if (downloadedUpdateRef.current !== availableUpdate) {
+        await availableUpdate.download();
+        downloadedUpdateRef.current = availableUpdate;
+      }
+      const after = await inProgressRunLabels();
+      if (after.length > 0 && !confirmInterruptRunningBackups(after, 'Empezó un backup mientras se descargaba la actualización.')) {
+        setUpdateCheck('available'); // downloaded; install later from the same button
+        return;
+      }
+      await availableUpdate.install();
       setUpdateCheck('ready');
     } catch (err) {
       setUpdateError(err instanceof Error ? err.message : String(err));
