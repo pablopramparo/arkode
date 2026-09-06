@@ -1,7 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "arkode",
-  "version": "0.5.9",
+  "mainBinaryName": "arkode",
+  "version": "0.6.0",
   "identifier": "com.codebius.arkode",
   "build": {
     "frontendDist": "../../ui/dist",

@@ -45,16 +45,26 @@
 !macro STOP_ARKODE_PROCESSES CTX
   nsExec::ExecToLog 'sc stop arkode-scheduler'
   nsExec::ExecToLog 'sc delete arkode-scheduler'
+  ; The main binary was renamed app.exe -> arkode.exe (mainBinaryName in
+  ; tauri.conf.json). Kill BOTH names for a while: an update running over a
+  ; pre-rename install still has the old app.exe holding its .exe locked.
+  nsExec::ExecToLog 'taskkill /F /IM arkode.exe'
   nsExec::ExecToLog 'taskkill /F /IM app.exe'
   nsExec::ExecToLog 'taskkill /F /IM engine-cli.exe'
   nsExec::ExecToLog 'taskkill /F /IM arkode-scheduler.exe'
+  !insertmacro WAIT_PROCESS_GONE "arkode.exe" "arkode_${CTX}"
   !insertmacro WAIT_PROCESS_GONE "app.exe" "app_${CTX}"
   !insertmacro WAIT_PROCESS_GONE "engine-cli.exe" "enginecli_${CTX}"
   !insertmacro WAIT_PROCESS_GONE "arkode-scheduler.exe" "svc_${CTX}"
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
-  CreateShortcut "$DESKTOP\arkode.lnk" "$INSTDIR\app.exe"
+  ; Old installs left a stale $INSTDIR\app.exe next to the new arkode.exe
+  ; (the previous uninstaller runs first, but be defensive) and a Desktop
+  ; shortcut pointing at it — clear both so only arkode.exe remains.
+  Delete "$INSTDIR\app.exe"
+  Delete "$DESKTOP\arkode.lnk"
+  CreateShortcut "$DESKTOP\arkode.lnk" "$INSTDIR\arkode.exe"
 
   ; Recreate the service from scratch every install/update so binPath is
   ; always current (PREINSTALL already stopped+deleted any prior copy).
