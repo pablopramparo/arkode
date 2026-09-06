@@ -61,6 +61,19 @@ export async function changeMasterPassword(currentPassword: string, newPassword:
   return s;
 }
 
+export async function fetchVaultSettings(): Promise<{ autoLockMinutes: number }> {
+  return handleJson(await fetch(`${getApiBase()}/vault/settings`));
+}
+export async function updateVaultSettings(patch: { autoLockMinutes: number }): Promise<{ autoLockMinutes: number }> {
+  return handleJson(
+    await fetch(`${getApiBase()}/vault/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+  );
+}
+
 // --- Credentials -----------------------------------------------------------
 export interface CredentialInput {
   clientId?: string;

@@ -3566,12 +3566,19 @@ program
             ctx.vaultState.changePassword(body.currentPassword, body.newPassword);
           }
           sendJson(res, 200, getVaultStatus(ctx.vaultState));
-          // Unlocking (or first init) is a natural moment to catch up any
-          // .arkvault destination that has no recent-enough successful backup.
-          if (pathname !== '/vault/change-password' && ctx.vaultState.isUnlocked()) {
-            void runDueVaultBackups(buildVaultBackupDeps(ctx)).catch((err) =>
-              console.error(`Vault backup catch-up failed: ${err instanceof Error ? err.message : String(err)}`)
-            );
+          if (ctx.vaultState.isUnlocked()) {
+            if (pathname === '/vault/change-password') {
+              // Old .arkvault files still need the OLD password — force a fresh
+              // one now so recovery isn't stuck on a password the user replaced.
+              void runAllVaultBackups(buildVaultBackupDeps(ctx)).catch((err) =>
+                console.error(`Vault backup after password change failed: ${err instanceof Error ? err.message : String(err)}`)
+              );
+            } else {
+              // Unlock / first init: catch up any destination with no recent-enough backup.
+              void runDueVaultBackups(buildVaultBackupDeps(ctx)).catch((err) =>
+                console.error(`Vault backup catch-up failed: ${err instanceof Error ? err.message : String(err)}`)
+              );
+            }
           }
         } catch (err) {
           if (err instanceof WrongMasterPasswordError) {
@@ -3583,6 +3590,31 @@ program
           }
         }
         return;
+      }
+
+      // --- Vault settings (auto-lock) ------------------------------------
+      if (pathname === '/vault/settings') {
+        if (req.method === 'GET') {
+          const raw = Number.parseInt(ctx.settingsRepo.get('vaultAutoLockMinutes') ?? '', 10);
+          sendJson(res, 200, { autoLockMinutes: Number.isFinite(raw) && raw > 0 ? raw : 15 });
+          return;
+        }
+        if (req.method === 'PATCH') {
+          try {
+            const body = await readJsonBody(req);
+            const n = Number(body.autoLockMinutes);
+            if (!Number.isFinite(n) || n < 0 || n > 1440) {
+              sendJson(res, 400, { error: 'autoLockMinutes must be 0–1440 (0 = never).' });
+              return;
+            }
+            ctx.settingsRepo.set('vaultAutoLockMinutes', String(Math.round(n)));
+            ctx.vaultState.setAutoLockMs(n > 0 ? Math.round(n) * 60_000 : null);
+            sendJson(res, 200, { autoLockMinutes: Math.round(n) });
+          } catch (err) {
+            sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          }
+          return;
+        }
       }
 
       // --- Vault credentials (Tier 2) --------------------------------------

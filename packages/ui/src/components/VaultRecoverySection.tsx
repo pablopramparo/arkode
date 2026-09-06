@@ -19,11 +19,13 @@ import {
   createVaultBackupTarget,
   fetchVaultBackupRuns,
   fetchVaultBackupTargets,
+  fetchVaultSettings,
   removeVaultBackupTarget,
   runVaultBackup,
   restoreVault,
   testVaultBackupTarget,
   updateVaultBackupTarget,
+  updateVaultSettings,
   type VaultBackupRun,
   type VaultBackupTarget,
 } from '../lib/vaultClient';
@@ -40,6 +42,58 @@ function targetStatusTone(t: VaultBackupTarget): string {
   if (t.lastStatus === 'Success') return 'var(--success)';
   if (t.lastStatus === 'Failed') return 'var(--danger)';
   return 'var(--muted)';
+}
+
+/** Configured idle auto-lock timeout (0 = never), editable inline. */
+function AutoLockControl() {
+  const [minutes, setMinutes] = useState<string>('');
+  const [saved, setSaved] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void fetchVaultSettings()
+      .then((s) => {
+        setSaved(s.autoLockMinutes);
+        setMinutes(String(s.autoLockMinutes));
+      })
+      .catch(() => {});
+  }, []);
+
+  const dirty = saved != null && minutes !== '' && Number(minutes) !== saved;
+
+  const save = async () => {
+    const n = Number(minutes);
+    if (!Number.isFinite(n) || n < 0 || n > 1440) return;
+    setBusy(true);
+    try {
+      const s = await updateVaultSettings({ autoLockMinutes: Math.round(n) });
+      setSaved(s.autoLockMinutes);
+      setMinutes(String(s.autoLockMinutes));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <label className="flex flex-wrap items-center gap-2 text-xs" style={{ color: 'var(--muted)' }}>
+      Se bloquea sola tras
+      <input
+        type="number"
+        min={0}
+        max={1440}
+        className={`${inputCls} w-16`}
+        style={inputStyle}
+        value={minutes}
+        onChange={(e) => setMinutes(e.target.value)}
+      />
+      minutos de inactividad (0 = nunca).
+      {dirty && (
+        <Button size="sm" variant="ghost" className="rounded-full px-3" isDisabled={busy} onPress={save}>
+          {busy ? 'Guardando…' : 'Guardar'}
+        </Button>
+      )}
+    </label>
+  );
 }
 
 export function VaultRecoverySection() {
@@ -174,6 +228,12 @@ export function VaultRecoverySection() {
           </span>
         )}
       </div>
+
+      {initialized && <AutoLockControl />}
+      <p className="text-xs" style={{ color: 'var(--muted)' }}>
+        Nota: el Historial del portapapeles de Windows (Win+V) guarda lo que copiás y queda fuera del control de Arkode —
+        conviene tenerlo desactivado si copiás secretos.
+      </p>
 
       {/* ── Destinos ─────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
