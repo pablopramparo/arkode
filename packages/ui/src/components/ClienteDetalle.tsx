@@ -445,7 +445,7 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
               />
             )}
             {mainTab === 'proyecto' && (
-              <div className="space-y-2">
+              <div className="mt-3 space-y-3">
                 <ClientVaultSearch clientId={clientId} onJump={setProjectTab} />
                 <TabRow variant="secondary" tabs={PROJECT_TABS} active={projectTab} onChange={setProjectTab} />
               </div>
