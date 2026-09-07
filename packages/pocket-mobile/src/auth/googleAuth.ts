@@ -20,12 +20,24 @@ import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-si
  * no backend to hold one. `getGoogleAccessToken()` relies on the native SDK
  * itself to silently refresh the access token from the OS-level Google
  * session, which is exactly the "no servidor propio" model this app needs.
+ *
+ * `webClientId` is genuinely OPTIONAL here, confirmed by reading the
+ * installed library's own Android source (`Utils.getSignInOptions`): it is
+ * only ever used to call `requestIdToken()` / `requestServerAuthCode()` —
+ * neither of which this app needs (no server, `offlineAccess: false`).
+ * Android's own `getTokens()` (`GoogleAuthUtil.getToken()`) only needs the
+ * signed-in account + the requested scope, independent of any web client
+ * ID. This means Android-only testing needs ONLY the Android OAuth client
+ * (package name + SHA-1) registered in Google Cloud Console — the "Web
+ * application" client can be added later if offline/server access is ever
+ * needed. `configure()` itself, however, IS mandatory before `signIn()`
+ * (the native module throws otherwise) even with no webClientId at all.
  */
 const DRIVE_READONLY_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
 
-export function configureGoogleSignIn(webClientId: string): void {
+export function configureGoogleSignIn(webClientId?: string): void {
   GoogleSignin.configure({
-    webClientId,
+    ...(webClientId ? { webClientId } : {}),
     scopes: [DRIVE_READONLY_SCOPE],
     offlineAccess: false,
   });

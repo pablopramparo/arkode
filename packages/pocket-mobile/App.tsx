@@ -87,10 +87,15 @@ function PrivacyCurtain() {
 
 export default function App() {
   useEffect(() => {
+    // configure() is mandatory before signIn() regardless of whether a real
+    // web client ID is configured — see googleAuth.ts's own doc comment for
+    // why webClientId itself is optional for this app's Android-only,
+    // offlineAccess:false configuration. Skipping this call entirely
+    // whenever the placeholder hadn't been replaced was a real gap: it
+    // silently left Google Sign-In unusable even for a plain Android test
+    // that never needed a web client ID at all.
     const webClientId = (Constants.expoConfig?.extra as { googleWebClientId?: string } | undefined)?.googleWebClientId;
-    if (webClientId && !webClientId.startsWith('REPLACE_WITH_')) {
-      configureGoogleSignIn(webClientId);
-    }
+    configureGoogleSignIn(webClientId && !webClientId.startsWith('REPLACE_WITH_') ? webClientId : undefined);
     // Global, for the app's whole lifetime — see docs/pocket.md's
     // screenshots section for why this is a deliberate "global for
     // simplicity" choice rather than trying to scope it per-screen.
