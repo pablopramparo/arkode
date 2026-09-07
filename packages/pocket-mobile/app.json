@@ -2,7 +2,7 @@
   "expo": {
     "name": "Arkode Pocket",
     "slug": "arkode-pocket",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "arkodepocket",
@@ -21,6 +21,7 @@
     },
     "android": {
       "package": "com.codebius.arkodepocket",
+      "versionCode": 2,
       "backgroundColor": "#060d1a",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon-foreground.png",
