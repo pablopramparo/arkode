@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "Arkode Pocket",
+    "slug": "arkode-pocket",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "arkodepocket",
+    "backgroundColor": "#060d1a",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.codebius.arkodepocket",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Arkode Pocket usa Face ID para proteger el acceso a tus credenciales.",
+        "NSCameraUsageDescription": "La cámara se usa una sola vez, para escanear el código de vinculación que muestra Arkode Desktop."
+      }
+    },
+    "android": {
+      "package": "com.codebius.arkodepocket",
+      "backgroundColor": "#060d1a",
+      "permissions": ["USE_BIOMETRIC", "USE_FINGERPRINT", "CAMERA"],
+      "allowBackup": false
+    },
+    "plugins": [
+      "expo-camera",
+      "expo-local-authentication",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.REPLACE_WITH_IOS_CLIENT_ID"
+        }
+      ]
+    ],
+    "extra": {
+      "googleWebClientId": "REPLACE_WITH_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com",
+      "eas": {
+        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+      }
+    }
+  }
+}
