@@ -110,10 +110,10 @@ export function PocketSection() {
           <span style={{ color: 'var(--muted)' }}>Revisión</span>
           <span>{status.lastConfirmedRevision ?? '—'}</span>
 
-          <span style={{ color: 'var(--muted)' }}>Dispositivo</span>
+          <span style={{ color: 'var(--muted)' }}>Último código</span>
           <span>
             {status.pairedAt
-              ? `Código de vinculación generado el ${formatDateTime(status.pairedAt)}`
+              ? `Generado el ${formatDateTime(status.pairedAt)}`
               : 'Todavía no se generó un código de vinculación'}
           </span>
           {status.revokedAt && (
@@ -123,6 +123,22 @@ export function PocketSection() {
             </>
           )}
         </div>
+      )}
+
+      {status.configured && status.dirty && (
+        // The dirty state most people actually hit this while looking at
+        // is right after "Revocar dispositivo" (which rotates the key and
+        // forces dirty on purpose) — without this note, generating a new
+        // pairing code right then looks unrelated to "Pendiente de
+        // publicar" above it, even though it's the same underlying wait.
+        // "Vincular dispositivo"/pocket:pair now publish first automatically
+        // whenever dirty, precisely to close that gap — this just explains
+        // why that happens instead of leaving it invisible.
+        <p className="text-sm" style={{ color: 'var(--muted)' }}>
+          Hay cambios sin publicar (por ejemplo, una revocación reciente rota la clave de cifrado). Generar un nuevo
+          código de vinculación va a publicar primero automáticamente, para que el código siempre coincida con lo que
+          hay en Drive.
+        </p>
       )}
 
       {status.lastError && (

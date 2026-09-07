@@ -1991,9 +1991,20 @@ program
   .command('pocket:pair')
   .description('Print the pairing payload for "Vincular dispositivo" — encode this JSON as a QR in the UI. Does NOT mark any device as connected (Desktop cannot know that — see docs/pocket.md).')
   .option('--label <name>', 'an optional label for your own reference, e.g. "Pablo Pixel"')
-  .action((opts) => {
+  .action(async (opts) => {
     const ctx = buildContext();
     try {
+      // See the matching comment on POST /pocket/pairing: publish first
+      // whenever dirty (e.g. right after pocket:revoke) so the DEK this
+      // payload carries always matches what's actually live on Drive.
+      if (ctx.pocketStateRepo.get()?.dirty) {
+        const publishResult = await runPocketPublish(buildPocketPublishDeps(ctx));
+        if (publishResult.status === 'failed') {
+          console.error(`Could not publish the current state before pairing (${publishResult.error ?? 'unknown error'}). Fix that first.`);
+          process.exitCode = 1;
+          return;
+        }
+      }
       const payload = generatePocketPairingPayload({ pocketStateRepo: ctx.pocketStateRepo, secretStore: ctx.secretStore }, opts.label);
       console.log(JSON.stringify(payload));
       console.error('\nThis payload grants read access to every Arkode Pocket snapshot published from now on. Treat it like a password — do not log or share it beyond the pairing QR.');
@@ -4474,6 +4485,26 @@ program
       if (req.method === 'POST' && pathname === '/pocket/pairing') {
         try {
           const body = await readJsonBody(req).catch(() => ({}));
+          // A pairing QR bakes in the CURRENT Pocket DEK. Right after a
+          // revoke, `dirty` is forced true precisely because the DEK just
+          // rotated and the file on Drive is still encrypted under the OLD
+          // one — generating a QR in that window hands out a key that
+          // doesn't match anything actually downloadable yet, which a
+          // device pairing in that gap experiences as a raw decrypt/parse
+          // failure, not a clear "try again" message. Publishing first
+          // (whenever dirty) closes that window structurally instead of
+          // just wording the error better after the fact.
+          if (ctx.pocketStateRepo.get()?.dirty) {
+            const publishResult = await runPocketPublish(buildPocketPublishDeps(ctx));
+            if (publishResult.status === 'failed') {
+              sendJson(res, 409, {
+                error:
+                  `No se pudo publicar el estado actual antes de generar el código de vinculación (${publishResult.error ?? 'error desconocido'}). ` +
+                  'Solucioná eso primero — un código generado ahora podría no coincidir con el archivo publicado en Drive.',
+              });
+              return;
+            }
+          }
           const payload = generatePocketPairingPayload(
             { pocketStateRepo: ctx.pocketStateRepo, secretStore: ctx.secretStore },
             typeof body.deviceLabel === 'string' ? body.deviceLabel : undefined
