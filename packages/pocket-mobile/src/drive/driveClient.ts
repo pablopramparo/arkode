@@ -51,6 +51,21 @@ export async function downloadDriveFile(accessToken: string, fileId: string): Pr
  * fall back to searching by name if that id no longer resolves (Desktop
  * republished into a differently-provisioned file, or the hint was absent
  * because this device was paired before Desktop's first-ever publish).
+ *
+ * Critically, a hint that resolves but is TRASHED must be treated the same
+ * as one that doesn't resolve at all. Desktop's publish flow (rclone
+ * renaming a fresh temp upload over the previous file) sends the outgoing
+ * file to Google Drive's Trash rather than hard-deleting it — Drive still
+ * serves a trashed file's content via `files.get`/`alt=media` with no
+ * error, so without this check, a device paired before Desktop's SECOND
+ * publish would silently and permanently re-download the stale, trashed
+ * revision 1 forever: the fast path here would never fail, so the
+ * name-search fallback (which already filters `trashed = false`, see
+ * `findPocketFileByName`) would never get a chance to run. Confirmed
+ * against a real production case: a paired device stuck on hours-old data
+ * despite three successful publishes, because Drive genuinely still held
+ * the original file — trashed, not deleted — under the exact id this
+ * device's pairing had cached.
  */
 export async function resolvePocketFileId(
   accessToken: string,
@@ -58,8 +73,11 @@ export async function resolvePocketFileId(
 ): Promise<string> {
   if (hint.fileId) {
     try {
-      await driveFetch(accessToken, `/files/${encodeURIComponent(hint.fileId)}?fields=id`);
-      return hint.fileId;
+      const res = await driveFetch(accessToken, `/files/${encodeURIComponent(hint.fileId)}?fields=id,trashed`);
+      const body = (await res.json()) as { trashed?: boolean };
+      if (!body.trashed) return hint.fileId;
+      // Trashed — the file this device knows about was superseded and its
+      // predecessor was never really deleted. Fall through to search by name.
     } catch {
       // fall through to search by name
     }
