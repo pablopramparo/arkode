@@ -1,0 +1,25 @@
+{
+  "name": "pocket-shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/nodeCryptoAdapter.d.ts",
+      "default": "./dist/nodeCryptoAdapter.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "2.1.9"
+  }
+}
