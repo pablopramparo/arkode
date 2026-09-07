@@ -4502,9 +4502,13 @@ program
         try {
           const body = await readJsonBody(req).catch(() => ({}));
           const result = await runPocketPublish(buildPocketPublishDeps(ctx), { force: body.force === true });
+          // `result.status` is the publish outcome ('published'/'failed'/...);
+          // `pocketStatus` is the full current state snapshot — kept as two
+          // distinct fields since both are genuinely named "status" in their
+          // own domain and must not clobber each other.
           sendJson(res, result.status === 'published' || result.status === 'skipped_not_dirty' ? 200 : 502, {
             ...result,
-            status: pocketStatusJson(ctx),
+            pocketStatus: pocketStatusJson(ctx),
           });
         } catch (err) {
           sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });

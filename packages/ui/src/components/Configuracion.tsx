@@ -26,6 +26,7 @@ import { primaryPillStyle } from '../lib/pillStyles';
 import { Switch } from './Switch';
 import { SchedulerStatusBanner } from './SchedulerStatusBanner';
 import { VaultRecoverySection } from './VaultRecoverySection';
+import { PocketSection } from './PocketSection';
 import arkodeIsotipo from '../assets/arkode-isotipo.png';
 
 const inputStyle: React.CSSProperties = {
@@ -700,6 +701,10 @@ export function Configuracion() {
 
           <section className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
             <VaultRecoverySection />
+          </section>
+
+          <section className="rounded-xl border p-4" style={{ borderColor: 'var(--border)' }}>
+            <PocketSection />
           </section>
         </div>
       )}
