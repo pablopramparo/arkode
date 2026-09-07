@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@heroui/react';
 import { Modal } from './Modal';
 import { Spinner } from './Spinner';
@@ -73,6 +73,22 @@ export function CopyLinkAuthModal({
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // `onAuthorized` is re-created on every render by every caller (it's an
+  // inline lambda, e.g. DriveConnectButtons below) — depending on it in the
+  // effect's array below used to re-run this effect on every parent
+  // re-render (a status-polling tick, for instance), which spawns a SECOND
+  // `rclone authorize` process fighting the first one for the same fixed
+  // port 53682. The effect's own cleanup only flips a local `alive` flag;
+  // it can't kill the already-spawned OS process, so the real bug wasn't
+  // "duplicate calls" in the abstract — it was two live rclone.exe
+  // processes racing for one port, with the FIRST one (which the user
+  // actually completed the Google consent against) silently discarded and
+  // the SECOND one's "port already in use" error shown instead. A ref
+  // sidesteps this: the effect body always reads the latest callback, but
+  // never re-runs because of it.
+  const onAuthorizedRef = useRef(onAuthorized);
+  onAuthorizedRef.current = onAuthorized;
+
   useEffect(() => {
     let alive = true;
     let unlisten: (() => void) | undefined;
@@ -84,7 +100,7 @@ export function CopyLinkAuthModal({
     });
     authorizeDriveInApp({ noOpenBrowser: true })
       .then((token) => {
-        if (alive) void onAuthorized(token);
+        if (alive) void onAuthorizedRef.current(token);
       })
       .catch((e) => {
         if (alive) setErr(e instanceof Error ? e.message : String(e));
@@ -93,7 +109,9 @@ export function CopyLinkAuthModal({
       alive = false;
       unlisten?.();
     };
-  }, [onAuthorized]);
+    // Intentionally run once per mount only — see the comment above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <Modal title="Autorizar con Google — copiar enlace" onClose={onClose}>
