@@ -35,6 +35,7 @@ function backupDeps(ctx: TestContext): VaultBackupDeps {
     vaultCredentialsRepo: ctx.vaultCredentialsRepo,
     vaultUrlsRepo: ctx.vaultUrlsRepo,
     vaultItemsRepo: ctx.vaultItemsRepo,
+    pocketStateRepo: ctx.pocketStateRepo,
     keysDirOverride: mkdtempSync(join(tmpdir(), 'arkvault-keys-')),
     hardenKeyFile: () => {},
   };

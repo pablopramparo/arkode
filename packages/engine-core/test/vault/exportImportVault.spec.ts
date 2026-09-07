@@ -17,6 +17,8 @@ import {
 import { runVaultBackup } from '../../src/vault/runVaultBackup.js';
 import { WrongMasterPasswordError } from '../../src/vault/vaultState.js';
 import { appDataDir } from '../../src/paths.js';
+import { POCKET_DEK_SECRET_REF } from '../../src/vault/pocket/pocketDek.js';
+import { POCKET_RCLONE_CONFIG_SECRET_REF } from '../../src/vault/pocket/pocketDriveAuth.js';
 
 const FAST = { ...DEFAULT_SCRYPT_PARAMS, N: 2 ** 12 };
 const PW = 'master-pass-1';
@@ -47,6 +49,7 @@ function backupDeps(ctx: TestContext): VaultBackupDeps {
     vaultCredentialsRepo: ctx.vaultCredentialsRepo,
     vaultUrlsRepo: ctx.vaultUrlsRepo,
     vaultItemsRepo: ctx.vaultItemsRepo,
+    pocketStateRepo: ctx.pocketStateRepo,
     keysDirOverride: keysDir,
     hardenKeyFile: () => {},
   };
@@ -281,6 +284,92 @@ describe('exportVaultBuffer / importVaultBuffer — full disaster recovery (v2)'
     expect(() => dst.vaultState.unlock('wrong')).toThrow(WrongMasterPasswordError);
     dst.vaultState.unlock(PW);
     expect(inspectVaultBuffer(exportVaultBuffer(backupDeps(dst))).formatVersion).toBe(2);
+  });
+});
+
+describe('Arkode Pocket (additive v2 extension)', () => {
+  it('a v2 export with Pocket never configured restores fine, with no pocketSync at all (backward compat)', () => {
+    const src = createTestContext();
+    seedFullSource(src); // never touches Pocket
+    const buf = exportVaultBuffer(backupDeps(src));
+
+    const dst = createTestContext();
+    const r = importVaultBuffer(backupDeps(dst), buf, PW);
+
+    expect(r.pocketRestored).toBe(false);
+    expect(dst.pocketStateRepo.get()).toBeNull();
+  });
+
+  it('restores the SAME pocketId + DEK + Drive account, so an already-paired phone keeps working with no re-pairing', () => {
+    const src = createTestContext();
+    seedFullSource(src);
+    src.pocketStateRepo.configure({ driveRemotePath: 'Arkode/Pocket' });
+    src.secretStore.set(POCKET_DEK_SECRET_REF, 'ZmFrZS1kZWstMzItYnl0ZXMtYmFzZTY0LWVuY29kZWQhISE='); // fixture-only fake DEK
+    src.secretStore.set(POCKET_RCLONE_CONFIG_SECRET_REF, JSON.stringify({ token: '{pocket-oauth-blob}' }));
+    src.pocketStateRepo.recordPairing('Pablo Pixel');
+
+    const buf = exportVaultBuffer(backupDeps(src));
+    const dst = createTestContext();
+    const r = importVaultBuffer(backupDeps(dst), buf, PW);
+
+    expect(r.pocketRestored).toBe(true);
+    expect(r.warnings.some((w) => /Pocket/i.test(w))).toBe(false); // no Pocket-specific warning (unrelated path-not-found warnings from seedFullSource are expected)
+    const restored = dst.pocketStateRepo.get()!;
+    expect(restored.pocketId).toBe(src.pocketStateRepo.get()!.pocketId);
+    expect(restored.driveRemotePath).toBe('Arkode/Pocket');
+    expect(restored.deviceLabel).toBe('Pablo Pixel');
+    expect(dst.secretStore.get(POCKET_DEK_SECRET_REF)).toBe('ZmFrZS1kZWstMzItYnl0ZXMtYmFzZTY0LWVuY29kZWQhISE=');
+    expect(JSON.parse(dst.secretStore.get(POCKET_RCLONE_CONFIG_SECRET_REF)!).token).toBe('{pocket-oauth-blob}');
+  });
+
+  it('continues the revision sequence instead of resetting to 1 — an already-ahead phone must never see a restored publish as "older"', () => {
+    const src = createTestContext();
+    seedFullSource(src);
+    src.pocketStateRepo.configure({ driveRemotePath: 'Arkode/Pocket' });
+    src.secretStore.set(POCKET_DEK_SECRET_REF, 'ZmFrZS1kZWstMzItYnl0ZXMtYmFzZTY0LWVuY29kZWQhISE=');
+    // Simulate 57 real confirmed publishes having already happened on the source machine.
+    src.db.prepare('UPDATE pocket_state SET last_confirmed_revision = 57 WHERE id = 1').run();
+
+    const buf = exportVaultBuffer(backupDeps(src));
+    const dst = createTestContext();
+    importVaultBuffer(backupDeps(dst), buf, PW);
+
+    expect(dst.pocketStateRepo.get()!.lastConfirmedRevision).toBe(57);
+    expect(dst.pocketStateRepo.get()!.dirty).toBe(false); // nothing is assumed to have changed by the restore itself
+    const nextAttempt = dst.pocketStateRepo.beginPublishAttempt();
+    expect(nextAttempt.targetRevision).toBe(58); // continues on, never resets to 1
+  });
+
+  it('warns (but still restores) when the Pocket DEK or Drive account was missing at export time', () => {
+    const src = createTestContext();
+    seedFullSource(src);
+    src.pocketStateRepo.configure({ driveRemotePath: 'Arkode/Pocket' });
+    // Deliberately no DEK, no Drive token set — simulates a Tier-1 secret gone missing.
+    const buf = exportVaultBuffer(backupDeps(src));
+
+    const dst = createTestContext();
+    const r = importVaultBuffer(backupDeps(dst), buf, PW);
+
+    expect(r.pocketRestored).toBe(true);
+    expect(r.warnings.some((w) => /clave de dispositivo/i.test(w))).toBe(true);
+    expect(r.warnings.some((w) => /Google Drive/i.test(w))).toBe(true);
+    expect(dst.secretStore.get(POCKET_DEK_SECRET_REF)).toBeNull();
+  });
+
+  it('a restore into a machine where Pocket is ALREADY configured is refused, matching the vault-wide restore invariant', () => {
+    const src = createTestContext();
+    seedFullSource(src);
+    src.pocketStateRepo.configure({ driveRemotePath: 'Arkode/Pocket' });
+    src.secretStore.set(POCKET_DEK_SECRET_REF, 'ZmFrZS1kZWstMzItYnl0ZXMtYmFzZTY0LWVuY29kZWQhISE=');
+    const buf = exportVaultBuffer(backupDeps(src));
+
+    // importVaultBuffer itself already refuses a non-fresh vault before
+    // touching pocket_state at all — confirms Pocket restore doesn't bypass
+    // that guard via some separate path.
+    const dst = createTestContext();
+    dst.vaultState.init('other', FAST);
+    expect(() => importVaultBuffer(backupDeps(dst), buf, PW)).toThrow(/already has a vault/i);
+    expect(dst.pocketStateRepo.get()).toBeNull();
   });
 });
 

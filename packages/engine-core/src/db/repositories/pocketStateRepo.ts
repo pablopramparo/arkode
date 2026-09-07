@@ -100,6 +100,28 @@ export interface PocketStateRepo {
   /** Forces `dirty` (even with no content change) so the next publish uses the freshly rotated DEK. */
   recordRevocation(): PocketState;
   reset(): void;
+  /**
+   * Disaster-recovery restore ONLY (see vault/exportVault.ts's `pocketSync`
+   * field) — recreates the row with an EXPLICIT pocketId (not a fresh
+   * random one — an already-paired phone must keep working against the
+   * exact same pocketId/DEK after a restore) and, critically,
+   * `lastConfirmedRevision` continuing from whatever was last actually
+   * published. Deliberately NOT marked dirty: `published_seq` is set equal
+   * to a fresh `change_seq` (both 0) so nothing is assumed to have changed
+   * since the export — an unrelated republish right after a DR restore
+   * would otherwise waste a real revision number on identical content.
+   * Fails if a pocket_state row already exists (restore is fresh-install only).
+   */
+  restore(input: {
+    pocketId: string;
+    driveRemotePath: string | null;
+    driveFileId: string | null;
+    enabled: boolean;
+    deviceLabel: string | null;
+    pairedAt: string | null;
+    revokedAt: string | null;
+    lastConfirmedRevision: number | null;
+  }): PocketState;
 }
 
 const POCKET_ROW_ID = 1;
@@ -224,6 +246,30 @@ export function createPocketStateRepo(db: Database): PocketStateRepo {
 
     reset() {
       db.prepare('DELETE FROM pocket_state WHERE id = ?').run(POCKET_ROW_ID);
+    },
+
+    restore(input) {
+      const existing = getStmt.get(POCKET_ROW_ID);
+      if (existing) throw new Error('Arkode Pocket is already configured on this machine — restore is only supported into a fresh install.');
+      db.prepare(
+        `INSERT INTO pocket_state
+           (id, pocket_id, configured, enabled, drive_remote_path, drive_file_id,
+            change_seq, published_seq, last_confirmed_revision, device_label, paired_at, revoked_at)
+         VALUES
+           (@id, @pocketId, 1, @enabled, @driveRemotePath, @driveFileId,
+            0, 0, @lastConfirmedRevision, @deviceLabel, @pairedAt, @revokedAt)`
+      ).run({
+        id: POCKET_ROW_ID,
+        pocketId: input.pocketId,
+        enabled: input.enabled ? 1 : 0,
+        driveRemotePath: input.driveRemotePath,
+        driveFileId: input.driveFileId,
+        lastConfirmedRevision: input.lastConfirmedRevision,
+        deviceLabel: input.deviceLabel,
+        pairedAt: input.pairedAt,
+        revokedAt: input.revokedAt,
+      });
+      return toDomain(getStmt.get(POCKET_ROW_ID)!);
     },
   };
 }

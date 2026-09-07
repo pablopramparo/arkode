@@ -42,6 +42,9 @@ import type {
 import type { FileBackupRepository, FileBackupTask } from '../fileBackup/types.js';
 import type { ReplicationTarget } from '../replication/types.js';
 import type { Database } from 'better-sqlite3';
+import type { PocketStateRepo } from '../db/repositories/pocketStateRepo.js';
+import { POCKET_DEK_SECRET_REF } from './pocket/pocketDek.js';
+import { POCKET_RCLONE_CONFIG_SECRET_REF } from './pocket/pocketDriveAuth.js';
 
 /**
  * .arkvault *container* version.
@@ -75,6 +78,7 @@ export interface VaultBackupDeps {
   vaultCredentialsRepo: VaultCredentialsRepo;
   vaultUrlsRepo: VaultUrlsRepo;
   vaultItemsRepo: VaultItemsRepo;
+  pocketStateRepo: PocketStateRepo;
   /** Test override for where operational key files are written on restore. */
   keysDirOverride?: string;
   /** Test override for the ACL-harden step on restore. */
@@ -96,6 +100,47 @@ type ExportedReplicationTarget = ReplicationTarget & {
 };
 type ExportedVaultBackupTarget = VaultBackupTarget & {
   /** google_drive only: the RcloneDriveConfig JSON (OAuth token) — so DR can resume remote backups with no re-auth. */
+  rcloneConfig: string | null;
+};
+
+/**
+ * Arkode Pocket's state, IF it was ever configured. Carries the Pocket DEK
+ * itself (`dek`, base64) and Pocket's own Drive account token
+ * (`rcloneConfig`) so a phone already paired against this pocketId keeps
+ * working, unattended, after a fresh restore — the whole point of DR is
+ * that nothing about "which physical PC" should matter to it. See
+ * pocketStateRepo.restore()'s own doc comment for exactly how revision
+ * numbering continues correctly instead of resetting to 1 and being
+ * rejected by an already-ahead phone. `lastConfirmedRevision` is
+ * deliberately the only publish-bookkeeping field carried over — the
+ * internal change_seq/published_seq race-detection counters have no
+ * meaning across machines and are reset to a clean (non-dirty) baseline on
+ * restore instead.
+ *
+ * IMPORTANT, and inherent to point-in-time recovery, not a bug: restoring
+ * an OLDER `.arkvault` restores whatever Pocket DEK was current AT THAT
+ * TIME. If a device was revoked (DEK rotated) after that export was taken,
+ * restoring it brings back the PRE-revocation key, which the revoked
+ * device could open again. There is no way around this within a
+ * point-in-time-snapshot model — it is the same "restoring an old backup
+ * undoes anything you did after that backup" behavior every other secret
+ * in `.arkvault` already has (a restored DB password is likewise whatever
+ * was current at export time). The practical mitigation, not enforced by
+ * code: take a fresh `.arkvault` backup right after revoking a device (the
+ * UI's revoke flow nudges exactly this — see engine-cli's /pocket/revoke).
+ */
+type ExportedPocketState = {
+  pocketId: string;
+  enabled: boolean;
+  driveRemotePath: string | null;
+  driveFileId: string | null;
+  deviceLabel: string | null;
+  pairedAt: string | null;
+  revokedAt: string | null;
+  lastConfirmedRevision: number | null;
+  /** base64, from Tier-1 SecretStore — null only if the row exists but the secret was somehow missing. */
+  dek: string | null;
+  /** Pocket's OWN Drive account token JSON — null if never connected. */
   rcloneConfig: string | null;
 };
 
@@ -124,6 +169,8 @@ interface InnerPayloadV2 extends InnerPayloadV1 {
    * targets restore ENABLED with their OAuth token, no re-authorization.
    */
   vaultBackupTargets?: ExportedVaultBackupTarget[];
+  /** Additive v2 extension, same as vaultBackupTargets above — see ExportedPocketState's own doc comment. Absent entirely if Pocket was never configured. */
+  pocketSync?: ExportedPocketState;
 }
 
 interface ArkvaultFile {
@@ -229,6 +276,22 @@ export function exportVaultBuffer(deps: VaultBackupDeps): Buffer {
     return { ...it, body };
   });
 
+  const pocketState = deps.pocketStateRepo.get();
+  const pocketSync: ExportedPocketState | undefined = pocketState
+    ? {
+        pocketId: pocketState.pocketId,
+        enabled: pocketState.enabled,
+        driveRemotePath: pocketState.driveRemotePath,
+        driveFileId: pocketState.driveFileId,
+        deviceLabel: pocketState.deviceLabel,
+        pairedAt: pocketState.pairedAt,
+        revokedAt: pocketState.revokedAt,
+        lastConfirmedRevision: pocketState.lastConfirmedRevision,
+        dek: t1(POCKET_DEK_SECRET_REF),
+        rcloneConfig: t1(POCKET_RCLONE_CONFIG_SECRET_REF),
+      }
+    : undefined;
+
   const inner: InnerPayloadV2 = {
     version: 2,
     clients,
@@ -240,6 +303,7 @@ export function exportVaultBuffer(deps: VaultBackupDeps): Buffer {
     fileBackupTasks,
     replicationTargets,
     vaultBackupTargets,
+    pocketSync,
     toolRegistries: {
       postgres: deps.settingsRepo.get(TOOL_REGISTRY_KEYS.postgres),
       mysql: deps.settingsRepo.get(TOOL_REGISTRY_KEYS.mysql),
@@ -325,6 +389,7 @@ export interface ImportVaultResult {
   replicationTargetsCreated: number;
   vaultBackupTargetsCreated: number;
   toolRegistriesRestored: number;
+  pocketRestored: boolean;
   clientErrors: { name: string; error: string }[];
   warnings: string[];
 }
@@ -345,6 +410,7 @@ function emptyResult(formatVersion: number): ImportVaultResult {
     replicationTargetsCreated: 0,
     vaultBackupTargetsCreated: 0,
     toolRegistriesRestored: 0,
+    pocketRestored: false,
     clientErrors: [],
     warnings: [],
   };
@@ -804,6 +870,7 @@ export function importVaultBuffer(deps: VaultBackupDeps, buf: Buffer, password: 
             result.toolRegistriesRestored++;
           }
         }
+
       }
 
       // 10. vault credentials (all versions)
@@ -884,6 +951,43 @@ export function importVaultBuffer(deps: VaultBackupDeps, buf: Buffer, password: 
           metadata: it.metadata,
         });
         result.itemsCreated++;
+      }
+
+      // 13. Arkode Pocket (additive v2 extension) — deliberately LAST, after
+      // every client/credential/URL is already restored: pocket_state's own
+      // dirty-tracking triggers (see its migration) fire on those inserts,
+      // and creating pocket_state before them would immediately re-dirty
+      // the clean baseline restore() just established. Restores the SAME
+      // pocketId + DEK so an already-paired phone keeps working with no
+      // re-pairing, and continues the revision sequence it already trusts
+      // (see pocketStateRepo.restore()'s own doc comment for why that
+      // specifically matters). Absent entirely on a v1 file, or if Pocket
+      // was never configured on the source machine.
+      if (isV2 && (inner as InnerPayloadV2).pocketSync) {
+        const ps = (inner as InnerPayloadV2).pocketSync!;
+        deps.pocketStateRepo.restore({
+          pocketId: ps.pocketId,
+          driveRemotePath: ps.driveRemotePath,
+          driveFileId: ps.driveFileId,
+          enabled: ps.enabled,
+          deviceLabel: ps.deviceLabel,
+          pairedAt: ps.pairedAt,
+          revokedAt: ps.revokedAt,
+          lastConfirmedRevision: ps.lastConfirmedRevision,
+        });
+        if (ps.dek) {
+          deps.secretStore.set(POCKET_DEK_SECRET_REF, ps.dek);
+        } else {
+          result.warnings.push(
+            'Arkode Pocket estaba configurado pero su clave de dispositivo no estaba en esta copia — cualquier teléfono ya vinculado necesitará un nuevo código de vinculación.'
+          );
+        }
+        if (ps.rcloneConfig) {
+          deps.secretStore.set(POCKET_RCLONE_CONFIG_SECRET_REF, ps.rcloneConfig);
+        } else {
+          result.warnings.push('Arkode Pocket estaba configurado pero su cuenta de Google Drive no estaba conectada en esta copia — reconectala en Configuración → Arkode Pocket.');
+        }
+        result.pocketRestored = true;
       }
     })();
   } catch (err) {

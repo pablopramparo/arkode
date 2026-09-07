@@ -2281,6 +2281,7 @@ function buildVaultBackupDeps(ctx: ReturnType<typeof buildContext>): RunVaultBac
     vaultUrlsRepo: ctx.vaultUrlsRepo,
     vaultItemsRepo: ctx.vaultItemsRepo,
     vaultBackupTargetsRepo: ctx.vaultBackupTargetsRepo,
+    pocketStateRepo: ctx.pocketStateRepo,
   };
 }
 
