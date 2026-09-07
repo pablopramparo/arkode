@@ -255,6 +255,36 @@ export async function rcloneCopyTo(opts: {
 }
 
 /**
+ * `rclone moveto <src> <dest>` within the SAME remote section. For the
+ * Google Drive backend this is a metadata-only rename (`files.update` with
+ * just a new name/parent — no re-upload of content) and overwrites the
+ * destination if one already exists — the closest thing Drive's API offers
+ * to a POSIX atomic rename. Used by the Pocket publisher to upload to a
+ * temporary name, verify it, and only then "commit" by renaming it over the
+ * real file — see runPocketPublish.ts for why plain copyto-in-place isn't
+ * treated as good enough on its own.
+ */
+export async function rcloneMoveTo(opts: {
+  configPath: string;
+  remoteSection: string;
+  sourceFile: string;
+  destFile: string;
+}): Promise<void> {
+  const args = [
+    'moveto',
+    `${opts.remoteSection}:${opts.sourceFile}`,
+    `${opts.remoteSection}:${opts.destFile}`,
+    '--config',
+    opts.configPath,
+  ];
+  try {
+    await execFileAsync(resolveRclonePath(), args, { windowsHide: true });
+  } catch (err) {
+    throw new Error(rcloneErrorMessage(err, 'moveto'));
+  }
+}
+
+/**
  * `rclone lsf <remoteSection>:<remotePath>` — lists file names (one per
  * line, no paths) directly under a remote folder. Returns [] when the
  * folder doesn't exist yet. Optional `include` is an rclone `--include` glob.
@@ -264,6 +294,8 @@ export async function rcloneLsf(opts: {
   remoteSection: string;
   remotePath: string;
   include?: string;
+  /** rclone --format string, e.g. "i" for the backend's file ID. Defaults to rclone's own default (path/name). */
+  format?: string;
 }): Promise<string[]> {
   const args = [
     'lsf',
@@ -273,6 +305,7 @@ export async function rcloneLsf(opts: {
     '--files-only',
   ];
   if (opts.include) args.push('--include', opts.include);
+  if (opts.format) args.push('--format', opts.format);
   try {
     const { stdout } = await execFileAsync(resolveRclonePath(), args, { windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
     return stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);

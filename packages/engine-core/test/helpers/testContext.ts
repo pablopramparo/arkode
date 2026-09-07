@@ -26,6 +26,7 @@ import { createVaultCredentialsRepo } from '../../src/db/repositories/vaultCrede
 import { createVaultUrlsRepo } from '../../src/db/repositories/vaultUrlsRepo.js';
 import { createVaultItemsRepo } from '../../src/db/repositories/vaultItemsRepo.js';
 import { createVaultBackupTargetsRepo } from '../../src/db/repositories/vaultBackupTargetsRepo.js';
+import { createPocketStateRepo } from '../../src/db/repositories/pocketStateRepo.js';
 import type { SecretStore } from '../../src/secrets/types.js';
 
 /** In-memory Map-based SecretStore — never touches the real Windows Credential Manager in tests. */
@@ -77,6 +78,7 @@ export function createTestContext() {
   const vaultUrlsRepo = createVaultUrlsRepo(db);
   const vaultItemsRepo = createVaultItemsRepo(db);
   const vaultBackupTargetsRepo = createVaultBackupTargetsRepo(db);
+  const pocketStateRepo = createPocketStateRepo(db);
 
   return {
     db,
@@ -106,6 +108,7 @@ export function createTestContext() {
     vaultUrlsRepo,
     vaultItemsRepo,
     vaultBackupTargetsRepo,
+    pocketStateRepo,
   };
 }
 

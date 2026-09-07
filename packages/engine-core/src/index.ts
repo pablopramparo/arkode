@@ -256,6 +256,30 @@ export type {
   ResyncResult,
 } from './vault/syncOperationalCopy.js';
 
+// --- Arkode Pocket (read-only mobile credential viewer) --------------------
+// See docs/pocket.md. Deliberately its own small surface, independent of
+// the vault/.arkvault crypto above — the Pocket DEK is not the vault DEK.
+export { createPocketStateRepo } from './db/repositories/pocketStateRepo.js';
+export type { PocketState, PocketStateRepo, PocketPublishAttempt } from './db/repositories/pocketStateRepo.js';
+export { buildPocketSnapshotPayload } from './vault/pocket/pocketSnapshot.js';
+export type { BuildPocketSnapshotDeps } from './vault/pocket/pocketSnapshot.js';
+export { POCKET_DEK_SECRET_REF, hasPocketDek, getPocketDek, generatePocketDek, rotatePocketDek } from './vault/pocket/pocketDek.js';
+export {
+  POCKET_RCLONE_CONFIG_SECRET_REF,
+  isPocketDriveConnected,
+  getPocketDriveConfig,
+  setPocketDriveToken,
+  reusePocketDriveTokenFrom,
+  disconnectPocketDrive,
+} from './vault/pocket/pocketDriveAuth.js';
+export { configurePocket, setPocketEnabled } from './vault/pocket/pocketSetup.js';
+export type { PocketSetupDeps } from './vault/pocket/pocketSetup.js';
+export { generatePocketPairingPayload, revokePocketDevice } from './vault/pocket/pocketPairing.js';
+export type { PocketPairingDeps } from './vault/pocket/pocketPairing.js';
+export { runPocketPublish } from './vault/pocket/runPocketPublish.js';
+export type { RunPocketPublishDeps, PocketPublishResult, PocketPublishStatus, RcloneePocketOps } from './vault/pocket/runPocketPublish.js';
+export { withPocketLock } from './vault/pocket/pocketPublishLock.js';
+
 export { runBackupTask } from './orchestrator/runBackupTask.js';
 export type { RunBackupTaskDeps, RunBackupTaskResult } from './orchestrator/runBackupTask.js';
 
