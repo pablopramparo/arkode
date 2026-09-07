@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
-import { Alert, Pressable, ScrollView, Text } from 'react-native';
+import { Alert, Pressable, Text } from 'react-native';
 import * as ScreenCapture from 'expo-screen-capture';
 import type { PocketSnapshotPayload } from 'pocket-shared';
 import { theme } from '../lib/theme';
 import { FieldRow } from '../components/FieldRow';
-import { Muted } from '../components/ui';
+import { Muted, Screen } from '../components/ui';
+import { credentialKindLabel } from '../lib/credentialKindLabels';
 
 /**
  * Read-only viewer/copy surface — this is the whole point of Pocket. A
@@ -13,6 +14,11 @@ import { Muted } from '../components/ui';
  * inclusion, not an oversight), but this screen never writes it to a file,
  * never offers to "connect" or "import" it anywhere, and never shells out
  * to anything — copy-and-paste is the only action available.
+ *
+ * Uses the shared `Screen` (scroll mode) instead of a hand-rolled
+ * ScrollView so it gets the same safe-area insets as every other screen —
+ * this one previously had none, which is why the back link/title could sit
+ * flush against the status bar.
  */
 export function CredentialDetailScreen({ payload, credentialId, onBack }: { payload: PocketSnapshotPayload; credentialId: string; onBack: () => void }) {
   const credential = payload.credentials.find((c) => c.id === credentialId);
@@ -29,12 +35,12 @@ export function CredentialDetailScreen({ payload, credentialId, onBack }: { payl
 
   if (!credential) {
     return (
-      <ScrollView style={{ flex: 1, backgroundColor: theme.background, padding: 16 }}>
-        <Pressable onPress={onBack}>
+      <Screen scroll>
+        <Pressable onPress={onBack} hitSlop={12}>
           <Text style={{ color: theme.accent }}>‹ Volver</Text>
         </Pressable>
         <Muted>Esta credencial ya no está disponible en la última publicación.</Muted>
-      </ScrollView>
+      </Screen>
     );
   }
 
@@ -42,12 +48,12 @@ export function CredentialDetailScreen({ payload, credentialId, onBack }: { payl
   const hasCustom = secret.custom && Object.keys(secret.custom).length > 0;
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.background, padding: 16 }}>
-      <Pressable onPress={onBack} style={{ marginBottom: 8 }}>
+    <Screen scroll>
+      <Pressable onPress={onBack} style={{ marginBottom: 8 }} hitSlop={12}>
         <Text style={{ color: theme.accent }}>‹ {client?.name ?? 'Volver'}</Text>
       </Pressable>
       <Text style={{ color: theme.text, fontSize: 22, fontWeight: '700', marginBottom: 4 }}>{credential.name}</Text>
-      <Muted>{[credential.kind, credential.environment].filter(Boolean).join(' · ')}</Muted>
+      <Muted>{[credentialKindLabel(credential.kind), credential.environment].filter(Boolean).join(' · ')}</Muted>
 
       <FieldRow label="Host" value={credential.host} />
       <FieldRow label="Puerto" value={credential.port} />
@@ -69,6 +75,6 @@ export function CredentialDetailScreen({ payload, credentialId, onBack }: { payl
           <Muted>{credential.tags.join(' · ')}</Muted>
         </Pressable>
       )}
-    </ScrollView>
+    </Screen>
   );
 }

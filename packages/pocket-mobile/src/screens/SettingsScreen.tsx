@@ -16,8 +16,8 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
   }, []);
 
   return (
-    <Screen>
-      <Pressable onPress={onBack} style={{ marginBottom: 8 }}>
+    <Screen scroll>
+      <Pressable onPress={onBack} style={{ marginBottom: 8 }} hitSlop={12}>
         <Text style={{ color: theme.accent }}>‹ Volver</Text>
       </Pressable>
       <Title>Configuración</Title>

@@ -7,6 +7,7 @@
     "userInterfaceStyle": "dark",
     "scheme": "arkodepocket",
     "backgroundColor": "#060d1a",
+    "icon": "./assets/icon.png",
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -21,6 +22,10 @@
     "android": {
       "package": "com.codebius.arkodepocket",
       "backgroundColor": "#060d1a",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon-foreground.png",
+        "backgroundColor": "#060d1a"
+      },
       "permissions": [
         "USE_BIOMETRIC",
         "USE_FINGERPRINT",
@@ -47,6 +52,15 @@
           "android": {
             "kotlinVersion": "1.9.24"
           }
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#060d1a"
         }
       ]
     ],

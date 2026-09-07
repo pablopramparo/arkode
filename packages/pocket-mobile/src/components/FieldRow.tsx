@@ -5,8 +5,16 @@ import { copyWithAutoClear } from '../lib/clipboardAutoClear';
 
 /**
  * One labeled value with a copy action. `secret` fields render masked by
- * default with an explicit "mostrar" toggle — never shown automatically,
+ * default with an explicit "reveal" toggle — never shown automatically,
  * never logged either way (this component performs no logging of any kind).
+ * Copying never requires revealing first.
+ *
+ * Icons over repeated "Copiar"/"Mostrar" text per the UX pass — these two
+ * actions are universally recognizable, so a clipboard glyph + an eye glyph
+ * carry the same meaning with far less visual noise across a long list of
+ * fields. The eye toggle intentionally uses 👁/🔒 rather than a
+ * conventional "eye-off" glyph (no clean monochrome equivalent exists) —
+ * 👁 = hidden, tap to reveal; 🔒 = currently shown, tap to hide again.
  */
 export function FieldRow({ label, value, secret = false }: { label: string; value: string | number | null; secret?: boolean }) {
   const [revealed, setRevealed] = useState(false);
@@ -22,10 +30,15 @@ export function FieldRow({ label, value, secret = false }: { label: string; valu
         <Text style={{ color: theme.text, fontSize: 15, flex: 1, marginRight: 8 }} selectable={!secret || revealed}>
           {display}
         </Text>
-        <View style={{ flexDirection: 'row', gap: 12 }}>
+        <View style={{ flexDirection: 'row', gap: 4 }}>
           {secret && (
-            <Pressable onPress={() => setRevealed((r) => !r)}>
-              <Text style={{ color: theme.accent, fontSize: 13 }}>{revealed ? 'Ocultar' : 'Mostrar'}</Text>
+            <Pressable
+              onPress={() => setRevealed((r) => !r)}
+              hitSlop={10}
+              style={{ paddingHorizontal: 8, paddingVertical: 6 }}
+              accessibilityLabel={revealed ? 'Ocultar' : 'Mostrar'}
+            >
+              <Text style={{ fontSize: 17 }}>{revealed ? '🔒' : '👁'}</Text>
             </Pressable>
           )}
           <Pressable
@@ -34,8 +47,11 @@ export function FieldRow({ label, value, secret = false }: { label: string; valu
               setCopied(true);
               setTimeout(() => setCopied(false), 1500);
             }}
+            hitSlop={10}
+            style={{ paddingHorizontal: 8, paddingVertical: 6 }}
+            accessibilityLabel="Copiar"
           >
-            <Text style={{ color: theme.accent, fontSize: 13 }}>{copied ? 'Copiado ✓' : 'Copiar'}</Text>
+            <Text style={{ fontSize: 17 }}>{copied ? '✅' : '📋'}</Text>
           </Pressable>
         </View>
       </View>

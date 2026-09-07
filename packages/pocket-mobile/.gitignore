@@ -4,6 +4,7 @@
 # machine too. Never commit it.
 /android
 /ios
+.expo/
 
 # Machine-specific local Android build environment (JDK/SDK paths for
 # this dev machine) — not portable, not a project convention.

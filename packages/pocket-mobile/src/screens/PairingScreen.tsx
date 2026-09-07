@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { parseScannedPairingQr } from '../pairing/parsePairingQr';
 import { signInToGoogle, isUserCancelledSignIn } from '../auth/googleAuth';
@@ -16,6 +17,7 @@ import { theme } from '../lib/theme';
  */
 export function PairingScreen() {
   const { completePairing } = usePocketSession();
+  const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState<{ pocketId: string; dek: Uint8Array; driveRemotePath: string; driveFileId: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +88,7 @@ export function PairingScreen() {
         barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
         onBarcodeScanned={({ data }) => handleScan(data)}
       />
-      <View style={{ position: 'absolute', bottom: 40, left: 16, right: 16 }}>
+      <View style={{ position: 'absolute', bottom: insets.bottom + 24, left: 16, right: 16 }}>
         <Card>
           <Text style={{ color: theme.text, fontWeight: '600', marginBottom: 4 }}>Escaneá el código de Arkode Desktop</Text>
           <Muted>Configuración → Arkode Pocket → Vincular dispositivo</Muted>

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { AppState, StyleSheet, View, type AppStateStatus } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
 import * as ScreenCapture from 'expo-screen-capture';
+import * as SplashScreen from 'expo-splash-screen';
 import { PocketSessionProvider, usePocketSession } from './src/state/PocketSessionProvider';
 import { configureGoogleSignIn } from './src/auth/googleAuth';
 import { PairingScreen } from './src/screens/PairingScreen';
@@ -14,10 +16,17 @@ import { SettingsScreen } from './src/screens/SettingsScreen';
 import { theme } from './src/lib/theme';
 import type { Route } from './src/navigation';
 
+// Keep the native splash screen up until the very first real phase decision
+// (paired vs. not) is known — `hasStoredPairing()` is fast (a local
+// Keychain existence check, no biometric prompt), so this only covers that
+// genuinely-brief real initialization, never used as a decorative delay.
+void SplashScreen.preventAutoHideAsync().catch(() => {});
+
 /**
  * Root screen switch, driven entirely by `usePocketSession().phase` — see
  * PocketSessionProvider for the actual state machine (pairing → locked →
- * unlocking → unlocked, with backgrounding always dropping back to locked).
+ * unlocking → unlocked, with a grace period before backgrounding drops back
+ * to locked).
  */
 function RootNavigator() {
   const { phase } = usePocketSession();
@@ -30,6 +39,13 @@ function RootNavigator() {
   useEffect(() => {
     if (phase.kind === 'unlocked') setRoute({ name: 'home' });
   }, [phase.kind === 'unlocked']);
+
+  // The native splash covers 'loading'; hide it the instant we know whether
+  // this device is paired, handing off to whichever real screen comes next
+  // (pairing camera, or the biometric gate — never a blank frame in between).
+  useEffect(() => {
+    if (phase.kind !== 'loading') void SplashScreen.hideAsync().catch(() => {});
+  }, [phase.kind]);
 
   if (phase.kind === 'loading') return null;
   if (phase.kind === 'needs_pairing') return <PairingScreen />;
@@ -103,12 +119,14 @@ export default function App() {
   }, []);
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.background }}>
-      <StatusBar style="light" />
-      <PocketSessionProvider>
-        <RootNavigator />
-      </PocketSessionProvider>
-      <PrivacyCurtain />
-    </View>
+    <SafeAreaProvider>
+      <View style={{ flex: 1, backgroundColor: theme.background }}>
+        <StatusBar style="light" />
+        <PocketSessionProvider>
+          <RootNavigator />
+        </PocketSessionProvider>
+        <PrivacyCurtain />
+      </View>
+    </SafeAreaProvider>
   );
 }

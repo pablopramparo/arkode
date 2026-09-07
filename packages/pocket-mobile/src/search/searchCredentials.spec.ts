@@ -53,4 +53,14 @@ describe('searchPocketSnapshot', () => {
     expect(results.credentials).toHaveLength(0);
     expect(results.urls).toHaveLength(0);
   });
+
+  it('empty query also returns every client', () => {
+    const results = searchPocketSnapshot(SAMPLE_POCKET_SNAPSHOT, '');
+    expect(results.clients.length).toBe(SAMPLE_POCKET_SNAPSHOT.clients.length);
+  });
+
+  it('matches a client by name directly, enabling "jump straight to it" from search', () => {
+    const results = searchPocketSnapshot(SAMPLE_POCKET_SNAPSHOT, 'acme');
+    expect(results.clients.map((c) => c.name.toLowerCase())).toEqual(['acme test']);
+  });
 });
