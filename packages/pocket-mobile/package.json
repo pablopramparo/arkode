@@ -23,6 +23,7 @@
     "expo-dev-client": "~5.0.20",
     "expo-file-system": "~18.0.0",
     "expo-local-authentication": "~15.0.0",
+    "expo-modules-autolinking": "~2.0.8",
     "expo-screen-capture": "~7.0.0",
     "expo-status-bar": "~2.0.0",
     "jail-monkey": "^2.8.0",

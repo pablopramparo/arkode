@@ -32,4 +32,23 @@ config.resolver.nodeModulesPaths = [
 // -> ../../pocket-shared) — Metro must be told to follow them.
 config.resolver.unstable_enableSymlinks = true;
 
+// getDefaultConfig() auto-detects this is a monorepo (via getMetroServerRoot)
+// and sets server.unstable_serverRoot to the WORKSPACE root instead of this
+// project's own root. That's an intentional Expo default for the live dev
+// server's HTTP asset-serving path, but it has a real side effect for
+// `expo export:embed` (the command a native Gradle/Xcode build invokes):
+// Metro's own Server._resolveRelativePath resolves the bundle's relative
+// --entry-file argument against this same "server root" — so with it left
+// at the workspace root, an entry-file of "index.js" resolves against
+// "<workspaceRoot>/." instead of this project's own directory, and fails
+// with "Unable to resolve module ./index.js from <workspaceRoot>/.".
+// Forcing it back to this project's own root fixes that, and does not
+// affect module resolution for cross-package imports (e.g. pocket-shared)
+// at all — that's handled separately by resolver.nodeModulesPaths/
+// watchFolders/unstable_enableSymlinks above.
+config.server = {
+  ...config.server,
+  unstable_serverRoot: projectRoot,
+};
+
 module.exports = config;
