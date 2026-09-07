@@ -4,8 +4,9 @@ import * as ScreenCapture from 'expo-screen-capture';
 import type { PocketSnapshotPayload } from 'pocket-shared';
 import { theme } from '../lib/theme';
 import { FieldRow } from '../components/FieldRow';
-import { Muted, Screen } from '../components/ui';
+import { BackLink, Muted, Screen } from '../components/ui';
 import { credentialKindLabel } from '../lib/credentialKindLabels';
+import { DEV_ALLOW_SCREEN_CAPTURE } from '../lib/devFlags';
 
 /**
  * Read-only viewer/copy surface — this is the whole point of Pocket. A
@@ -30,15 +31,13 @@ export function CredentialDetailScreen({ payload, credentialId, onBack }: { payl
   // no-op for screenshots (Apple provides no API to block them) but does
   // let us detect an active screen recording if ever needed later.
   useEffect(() => {
-    void ScreenCapture.preventScreenCaptureAsync();
+    if (!DEV_ALLOW_SCREEN_CAPTURE) void ScreenCapture.preventScreenCaptureAsync();
   }, []);
 
   if (!credential) {
     return (
       <Screen scroll>
-        <Pressable onPress={onBack} hitSlop={12}>
-          <Text style={{ color: theme.accent }}>‹ Volver</Text>
-        </Pressable>
+        <BackLink label="Volver" onPress={onBack} />
         <Muted>Esta credencial ya no está disponible en la última publicación.</Muted>
       </Screen>
     );
@@ -49,9 +48,7 @@ export function CredentialDetailScreen({ payload, credentialId, onBack }: { payl
 
   return (
     <Screen scroll>
-      <Pressable onPress={onBack} style={{ marginBottom: 8 }} hitSlop={12}>
-        <Text style={{ color: theme.accent }}>‹ {client?.name ?? 'Volver'}</Text>
-      </Pressable>
+      <BackLink label={client?.name ?? 'Volver'} onPress={onBack} />
       <Text style={{ color: theme.text, fontSize: 22, fontWeight: '700', marginBottom: 4 }}>{credential.name}</Text>
       <Muted>{[credentialKindLabel(credential.kind), credential.environment].filter(Boolean).join(' · ')}</Muted>
 

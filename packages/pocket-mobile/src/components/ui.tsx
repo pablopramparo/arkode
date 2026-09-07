@@ -1,5 +1,7 @@
+import type { ComponentProps } from 'react';
 import { Pressable, ScrollView, Text, View, type ScrollViewProps, type ViewProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../lib/theme';
 
 /** A handful of tiny, dependency-free UI primitives — deliberately no component library, this app is small on purpose. */
@@ -99,14 +101,21 @@ export function Title({ children }: { children: React.ReactNode }) {
   return <Text style={{ color: theme.text, fontSize: 20, fontWeight: '700', marginBottom: 12 }}>{children}</Text>;
 }
 
-/** A comfortable, fully-tappable row for a navigable item (client, credential, URL) — icon, title/subtitle, and a trailing chevron. */
+/**
+ * A comfortable, fully-tappable row for a navigable item (client,
+ * credential, URL) — icon, title/subtitle, and a trailing chevron. Icons
+ * are Ionicons (outline family), always rendered in `theme.muted` —
+ * deliberately ONE neutral color regardless of which icon it is, so the
+ * row's own text hierarchy (bold title vs. muted subtitle) stays the only
+ * thing carrying visual weight, not a rainbow of per-type icon colors.
+ */
 export function NavRow({
   icon,
   title,
   subtitle,
   onPress,
 }: {
-  icon: string;
+  icon: ComponentProps<typeof Ionicons>['name'];
   title: string;
   subtitle?: string;
   onPress: () => void;
@@ -128,7 +137,7 @@ export function NavRow({
         opacity: pressed ? 0.7 : 1,
       })}
     >
-      <Text style={{ fontSize: 20, marginRight: 12 }}>{icon}</Text>
+      <Ionicons name={icon} size={22} color={theme.muted} style={{ marginRight: 12 }} />
       <View style={{ flex: 1 }}>
         <Text style={{ color: theme.text, fontWeight: '600', fontSize: 15 }} numberOfLines={1}>
           {title}
@@ -139,7 +148,17 @@ export function NavRow({
           </Text>
         ) : null}
       </View>
-      <Text style={{ color: theme.muted, fontSize: 18, marginLeft: 8 }}>›</Text>
+      <Ionicons name="chevron-forward" size={18} color={theme.muted} style={{ marginLeft: 8 }} />
+    </Pressable>
+  );
+}
+
+/** The "‹ Volver"/"‹ Clientes"-style back link every screen but Home has — chevron-back + a label, one shared place instead of four copies. */
+export function BackLink({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} hitSlop={12} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, alignSelf: 'flex-start' }}>
+      <Ionicons name="chevron-back" size={20} color={theme.accent} />
+      <Text style={{ color: theme.accent, fontSize: 16 }}>{label}</Text>
     </Pressable>
   );
 }

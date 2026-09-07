@@ -63,4 +63,17 @@ describe('searchPocketSnapshot', () => {
     const results = searchPocketSnapshot(SAMPLE_POCKET_SNAPSHOT, 'acme');
     expect(results.clients.map((c) => c.name.toLowerCase())).toEqual(['acme test']);
   });
+
+  it('a client with no credentials and no URLs never appears — nothing to view, and Pocket can\'t create anything for it', () => {
+    const payload = {
+      ...SAMPLE_POCKET_SNAPSHOT,
+      clients: [...SAMPLE_POCKET_SNAPSHOT.clients, { id: 'client-empty', name: 'Empty Test' }],
+    };
+    const empty = searchPocketSnapshot(payload, '');
+    expect(empty.clients.map((c) => c.id)).not.toContain('client-empty');
+    expect(empty.clients).toHaveLength(SAMPLE_POCKET_SNAPSHOT.clients.length);
+
+    const matched = searchPocketSnapshot(payload, 'empty');
+    expect(matched.clients).toHaveLength(0);
+  });
 });

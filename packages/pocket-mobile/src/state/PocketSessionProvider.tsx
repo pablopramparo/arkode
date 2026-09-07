@@ -8,6 +8,7 @@ import { refreshSnapshot, type RefreshOutcome } from '../sync/refreshSnapshot';
 import { resolvePocketFileId, downloadDriveFile } from '../drive/driveClient';
 import { getGoogleAccessToken, isSignedInToGoogle, signInToGoogle } from '../auth/googleAuth';
 import { clearClipboardNow } from '../lib/clipboardAutoClear';
+import { classifyAuthError, type AuthFailureReason } from '../lib/biometricErrors';
 import { POCKET_SYNC_FILE_NAME } from 'pocket-shared';
 
 export type SessionPhase =
@@ -23,7 +24,7 @@ export type SessionPhase =
       lastOutcome: RefreshOutcome | null;
       refreshing: boolean;
     }
-  | { kind: 'auth_failed'; message: string };
+  | { kind: 'auth_failed'; reason: AuthFailureReason; message: string };
 
 interface PocketSessionApi {
   phase: SessionPhase;
@@ -218,11 +219,19 @@ export function PocketSessionProvider({ children }: { children: ReactNode }) {
         try {
           pairing = await loadPairing('Desbloqueá Arkode Pocket');
         } catch (retryErr) {
-          setPhase({ kind: 'auth_failed', message: retryErr instanceof Error ? retryErr.message : String(retryErr) });
+          // Raw Keychain/BiometricPrompt errors (e.g. "code: 10, msg: ...")
+          // must never reach the UI verbatim — classify into a human bucket
+          // first. Technical detail still goes to the dev console for
+          // debugging, never to the screen. See biometricErrors.ts.
+          const classified = classifyAuthError(retryErr);
+          if (__DEV__) console.warn('[Pocket] auth error (retry)', classified.reason, retryErr);
+          setPhase({ kind: 'auth_failed', reason: classified.reason, message: classified.message });
           return;
         }
       } else {
-        setPhase({ kind: 'auth_failed', message: err instanceof Error ? err.message : String(err) });
+        const classified = classifyAuthError(err);
+        if (__DEV__) console.warn('[Pocket] auth error', classified.reason, err);
+        setPhase({ kind: 'auth_failed', reason: classified.reason, message: classified.message });
         return;
       }
     }
@@ -263,7 +272,9 @@ export function PocketSessionProvider({ children }: { children: ReactNode }) {
         'message' in result.outcome
           ? result.outcome.message
           : 'No se pudo descargar la primera actualización de Arkode Pocket.';
-      setPhase({ kind: 'auth_failed', message });
+      // Not a biometric error (the Keychain read already succeeded at this
+      // point) — a Drive/network failure, already phrased in human terms.
+      setPhase({ kind: 'auth_failed', reason: 'technical_error', message });
     }
   }, [applyRefreshResult, doRefresh, loadAndDecryptCache]);
 
@@ -296,7 +307,9 @@ export function PocketSessionProvider({ children }: { children: ReactNode }) {
       });
     } else {
       const message = 'message' in result.outcome ? result.outcome.message : 'No se pudo descargar el primer snapshot de Arkode Pocket.';
-      setPhase({ kind: 'auth_failed', message });
+      // Not a biometric error either (pairing just finished) — a Drive/
+      // network failure, already phrased in human terms.
+      setPhase({ kind: 'auth_failed', reason: 'technical_error', message });
     }
   }, [doRefresh]);
 

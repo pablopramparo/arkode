@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Alert, Pressable, Text } from 'react-native';
+import { Alert, Text } from 'react-native';
 import Constants from 'expo-constants';
 import { deviceLooksCompromised } from '../lib/rootDetection';
 import { usePocketSession } from '../state/PocketSessionProvider';
 import { signOutOfGoogle } from '../auth/googleAuth';
-import { Screen, Title, Muted, AppButton, Card } from '../components/ui';
+import { AppButton, BackLink, Card, Muted, Screen, Title } from '../components/ui';
 import { theme } from '../lib/theme';
 
 export function SettingsScreen({ onBack }: { onBack: () => void }) {
@@ -17,9 +17,7 @@ export function SettingsScreen({ onBack }: { onBack: () => void }) {
 
   return (
     <Screen scroll>
-      <Pressable onPress={onBack} style={{ marginBottom: 8 }} hitSlop={12}>
-        <Text style={{ color: theme.accent }}>‹ Volver</Text>
-      </Pressable>
+      <BackLink label="Volver" onPress={onBack} />
       <Title>Configuración</Title>
 
       {compromised && (

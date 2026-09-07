@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Linking, Pressable, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, Text, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import type { PocketSnapshotPayload } from 'pocket-shared';
 import { searchPocketSnapshot } from '../search/searchCredentials';
 import { credentialKindIcon, credentialKindLabel } from '../lib/credentialKindLabels';
@@ -58,9 +59,18 @@ export function HomeScreen({
   return (
     <Screen scroll contentContainerStyle={{ flexGrow: 1 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <Text style={{ color: theme.text, fontSize: 22, fontWeight: '700' }}>Arkode Pocket</Text>
+        {/* The real Arkode lockup (same asset Desktop's own sidebar uses) —
+            preferred over a plain "Arkode Pocket" text label, per direct
+            request. Home is the only screen carrying the brand mark; every
+            other screen keeps its own plain back-link/title. */}
+        <Image
+          source={require('../../assets/arkode-logo-completo.png')}
+          style={{ width: 120, height: 28 }}
+          resizeMode="contain"
+          accessibilityLabel="Arkode"
+        />
         <Pressable onPress={() => onNavigate({ name: 'settings' })} hitSlop={12}>
-          <Text style={{ color: theme.muted, fontSize: 22 }}>⚙︎</Text>
+          <Ionicons name="settings-outline" size={24} color={theme.muted} />
         </Pressable>
       </View>
 
@@ -90,12 +100,12 @@ export function HomeScreen({
 
       {!searching && (
         <>
-          <SectionHeader title="CLIENTES" count={payload.clients.length} />
-          {payload.clients.length === 0 && <Muted>No hay clientes en esta publicación.</Muted>}
-          {payload.clients.map((c) => (
+          <SectionHeader title="CLIENTES" count={results.clients.length} />
+          {results.clients.length === 0 && <Muted>No hay clientes con contenido en esta publicación.</Muted>}
+          {results.clients.map((c) => (
             <NavRow
               key={c.id}
-              icon="🏢"
+              icon="business-outline"
               title={c.name}
               subtitle={`${credentialCountByClient.get(c.id) ?? 0} credenciales · ${urlCountByClient.get(c.id) ?? 0} URLs`}
               onPress={() => onNavigate({ name: 'client', clientId: c.id })}
@@ -110,7 +120,7 @@ export function HomeScreen({
             <>
               <SectionHeader title="CLIENTES" />
               {results.clients.map((c) => (
-                <NavRow key={c.id} icon="🏢" title={c.name} onPress={() => onNavigate({ name: 'client', clientId: c.id })} />
+                <NavRow key={c.id} icon="business-outline" title={c.name} onPress={() => onNavigate({ name: 'client', clientId: c.id })} />
               ))}
             </>
           )}
@@ -134,7 +144,7 @@ export function HomeScreen({
             <>
               <SectionHeader title="URLs" />
               {results.urls.map(({ url, clientName }) => (
-                <NavRow key={url.id} icon="🔗" title={url.name} subtitle={clientName} onPress={() => void Linking.openURL(url.url)} />
+                <NavRow key={url.id} icon="link-outline" title={url.name} subtitle={clientName} onPress={() => onNavigate({ name: 'url', urlId: url.id })} />
               ))}
             </>
           )}

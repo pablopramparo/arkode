@@ -1,8 +1,8 @@
-import { Linking, Pressable, Text } from 'react-native';
+import { Text } from 'react-native';
 import type { PocketSnapshotPayload } from 'pocket-shared';
-import { theme } from '../lib/theme';
-import { Screen, Muted, NavRow, SectionHeader } from '../components/ui';
+import { BackLink, Muted, NavRow, Screen, SectionHeader } from '../components/ui';
 import { credentialKindIcon, credentialKindLabel } from '../lib/credentialKindLabels';
+import { theme } from '../lib/theme';
 import type { Route } from '../navigation';
 
 /**
@@ -28,9 +28,7 @@ export function ClientDetailScreen({
 
   return (
     <Screen scroll>
-      <Pressable onPress={onBack} style={{ marginBottom: 8 }} hitSlop={12}>
-        <Text style={{ color: theme.accent }}>‹ Clientes</Text>
-      </Pressable>
+      <BackLink label="Clientes" onPress={onBack} />
       <Text style={{ color: theme.text, fontSize: 22, fontWeight: '700', marginBottom: 4 }}>{client?.name ?? 'Cliente'}</Text>
 
       <SectionHeader title="CREDENCIALES" count={credentials.length} />
@@ -49,7 +47,7 @@ export function ClientDetailScreen({
         <>
           <SectionHeader title="URLs" count={urls.length} />
           {urls.map((item) => (
-            <NavRow key={item.id} icon="🔗" title={item.name} subtitle={item.url} onPress={() => void Linking.openURL(item.url)} />
+            <NavRow key={item.id} icon="link-outline" title={item.name} subtitle={item.url} onPress={() => onNavigate({ name: 'url', urlId: item.id })} />
           ))}
         </>
       )}
