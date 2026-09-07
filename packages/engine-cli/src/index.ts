@@ -92,6 +92,20 @@ import {
   type RcloneDriveConfig,
   resticClient,
   redactSecrets,
+  configurePocket,
+  setPocketEnabled,
+  generatePocketPairingPayload,
+  revokePocketDevice,
+  runPocketPublish,
+  isPocketDriveConnected,
+  getPocketDriveConfig,
+  setPocketDriveToken,
+  reusePocketDriveTokenFrom,
+  disconnectPocketDrive,
+  POCKET_RCLONE_CONFIG_SECRET_REF,
+  vaultBackupTargetConfigRef,
+  type RunPocketPublishDeps,
+  type PocketState,
 } from 'engine-core';
 import { buildContext } from './context.js';
 import { confirmHostInteractively } from './confirmHost.js';
@@ -1892,6 +1906,128 @@ program
     }
   });
 
+// --- Arkode Pocket (read-only mobile credential viewer) ---------------------
+// See docs/pocket.md. Deliberately a small, separate command surface —
+// mirrors the vault:backup-target:* commands' shape (configure once, connect
+// Drive, then publish/pair/revoke), never touching any backup-domain code.
+
+program
+  .command('pocket:configure')
+  .description('Configure (or reconfigure) Arkode Pocket: the Google Drive folder its snapshot is published to. Generates the Pocket device key on first use.')
+  .requiredOption('--drive-remote-path <path>', 'e.g. "Arkode/Pocket"')
+  .action((opts) => {
+    const ctx = buildContext();
+    const state = configurePocket({ pocketStateRepo: ctx.pocketStateRepo, secretStore: ctx.secretStore }, { driveRemotePath: opts.driveRemotePath });
+    console.log(JSON.stringify(state, null, 2));
+  });
+
+program
+  .command('pocket:status')
+  .description('Show Arkode Pocket configuration/publish status.')
+  .action(() => {
+    const ctx = buildContext();
+    const state = ctx.pocketStateRepo.get();
+    console.log(
+      JSON.stringify(
+        { ...state, driveConnected: isPocketDriveConnected(ctx.secretStore), vaultUnlocked: ctx.vaultState.isUnlocked() },
+        null,
+        2
+      )
+    );
+  });
+
+program
+  .command('pocket:enable')
+  .action(() => {
+    const ctx = buildContext();
+    console.log(JSON.stringify(setPocketEnabled({ pocketStateRepo: ctx.pocketStateRepo, secretStore: ctx.secretStore }, true), null, 2));
+  });
+
+program
+  .command('pocket:disable')
+  .action(() => {
+    const ctx = buildContext();
+    console.log(JSON.stringify(setPocketEnabled({ pocketStateRepo: ctx.pocketStateRepo, secretStore: ctx.secretStore }, false), null, 2));
+  });
+
+program
+  .command('pocket:connect-drive')
+  .description('Connect a Google account for Arkode Pocket to publish to. Opens a browser, or pass --token from `rclone authorize "drive"` on another machine.')
+  .option('--token <json>', 'the OAuth token blob from `rclone authorize "drive"` (headless fallback)')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    const token = opts.token ? (rcloneClient.extractTokenBlob(opts.token) ?? String(opts.token).trim()) : await rcloneClient.rcloneAuthorizeDrive({});
+    JSON.parse(token); // validate
+    setPocketDriveToken(ctx.secretStore, JSON.stringify({ token } satisfies RcloneDriveConfig));
+    console.log('Connected.');
+  });
+
+program
+  .command('pocket:test-drive')
+  .description('Check connectivity/auth for Arkode Pocket\'s Google Drive account.')
+  .action(async () => {
+    const ctx = buildContext();
+    const drive = getPocketDriveConfig(ctx.secretStore);
+    if (!drive) {
+      console.error('Not connected — run pocket:connect-drive first.');
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const out = await rcloneClient.withRcloneConfig(
+        { encryptWithCrypt: false },
+        { provider: 'rclone_drive', drive },
+        undefined,
+        (configPath, remoteSection) => rcloneClient.rcloneAbout({ configPath, remoteSection })
+      );
+      console.log(out);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('pocket:pair')
+  .description('Print the pairing payload for "Vincular dispositivo" — encode this JSON as a QR in the UI. Does NOT mark any device as connected (Desktop cannot know that — see docs/pocket.md).')
+  .option('--label <name>', 'an optional label for your own reference, e.g. "Pablo Pixel"')
+  .action((opts) => {
+    const ctx = buildContext();
+    try {
+      const payload = generatePocketPairingPayload({ pocketStateRepo: ctx.pocketStateRepo, secretStore: ctx.secretStore }, opts.label);
+      console.log(JSON.stringify(payload));
+      console.error('\nThis payload grants read access to every Arkode Pocket snapshot published from now on. Treat it like a password — do not log or share it beyond the pairing QR.');
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('pocket:publish')
+  .description('Publish the current Pocket snapshot now (requires the vault unlocked).')
+  .option('--force', 'publish even if not dirty')
+  .action(async (opts) => {
+    const ctx = buildContext();
+    if (!(await unlockVaultForCli(ctx))) {
+      process.exitCode = 1;
+      return;
+    }
+    const result = await runPocketPublish(buildPocketPublishDeps(ctx), { force: opts.force === true });
+    console.log(JSON.stringify(result, null, 2));
+    if (result.status === 'failed') process.exitCode = 1;
+  });
+
+program
+  .command('pocket:revoke')
+  .description('Revoke the current Pocket pairing: rotates the device key so no snapshot published from now on can be opened by whatever device holds the old key. Does NOT erase data the device already downloaded, sign it out of Google, or invalidate passwords it already saw.')
+  .action(async () => {
+    const ctx = buildContext();
+    const state = await revokePocketDevice({ pocketStateRepo: ctx.pocketStateRepo, secretStore: ctx.secretStore });
+    console.log(JSON.stringify(state, null, 2));
+    console.log('\nRevoked. Run pocket:pair to generate a new pairing code for the next device.');
+  });
+
 program
   .command('db-tools:detect')
   .description('Scan the usual Windows install locations (Program Files, WAMP/XAMPP/Laragon) for pg_dump/psql/mysqldump/mysql/mariadb-dump/mariadb and print what was found, with versions.')
@@ -2087,6 +2223,40 @@ function buildVaultSyncDeps(ctx: ReturnType<typeof buildContext>): SyncOperation
     transportsRepo: ctx.transportsRepo,
     databaseConnectionsRepo: ctx.databaseConnectionsRepo,
     secretStore: ctx.secretStore,
+  };
+}
+
+/** Deps for Arkode Pocket's publish pipeline. */
+function buildPocketPublishDeps(ctx: ReturnType<typeof buildContext>): RunPocketPublishDeps {
+  return {
+    pocketStateRepo: ctx.pocketStateRepo,
+    secretStore: ctx.secretStore,
+    vaultState: ctx.vaultState,
+    clientsRepo: ctx.clientsRepo,
+    vaultCredentialsRepo: ctx.vaultCredentialsRepo,
+    vaultUrlsRepo: ctx.vaultUrlsRepo,
+    vaultSecretStore: ctx.vaultSecretStore,
+  };
+}
+
+/** JSON shape for GET /pocket/status and every mutating Pocket endpoint's response. */
+function pocketStatusJson(ctx: ReturnType<typeof buildContext>) {
+  const state: PocketState | null = ctx.pocketStateRepo.get();
+  return {
+    configured: state?.configured ?? false,
+    enabled: state?.enabled ?? true,
+    driveConnected: isPocketDriveConnected(ctx.secretStore),
+    driveRemotePath: state?.driveRemotePath ?? null,
+    dirty: state?.dirty ?? false,
+    lastAttemptedRevision: state?.lastAttemptedRevision ?? null,
+    lastConfirmedRevision: state?.lastConfirmedRevision ?? null,
+    lastAttemptAt: state?.lastAttemptAt ?? null,
+    lastSuccessfulPublishAt: state?.lastSuccessfulPublishAt ?? null,
+    lastError: state?.lastError ?? null,
+    deviceLabel: state?.deviceLabel ?? null,
+    pairedAt: state?.pairedAt ?? null,
+    revokedAt: state?.revokedAt ?? null,
+    vaultUnlocked: ctx.vaultState.isUnlocked(),
   };
 }
 
@@ -3550,6 +3720,9 @@ program
             void runDueVaultBackups(buildVaultBackupDeps(ctx)).catch((err) =>
               console.error(`Vault backup catch-up failed: ${err instanceof Error ? err.message : String(err)}`)
             );
+            void runPocketPublish(buildPocketPublishDeps(ctx)).catch((err) =>
+              console.error(`Pocket publish catch-up failed: ${err instanceof Error ? err.message : String(err)}`)
+            );
           }
         } catch (err) {
           if (err instanceof VaultAutoUnlockUnavailableError) {
@@ -3632,6 +3805,13 @@ program
               // Unlock / first init: catch up any destination with no recent-enough backup.
               void runDueVaultBackups(buildVaultBackupDeps(ctx)).catch((err) =>
                 console.error(`Vault backup catch-up failed: ${err instanceof Error ? err.message : String(err)}`)
+              );
+              // Same for Pocket: a change made while the vault was locked (or
+              // a change right before Arkode was closed, before the debounce
+              // fired) must not stay stuck — see docs/pocket.md's "catch-up"
+              // behavior. runPocketPublish() itself no-ops if not configured/dirty.
+              void runPocketPublish(buildPocketPublishDeps(ctx)).catch((err) =>
+                console.error(`Pocket publish catch-up failed: ${err instanceof Error ? err.message : String(err)}`)
               );
             }
           }
@@ -4187,6 +4367,147 @@ program
           else if (err instanceof ArkvaultParseError) sendJson(res, 400, { error: err.message });
           else if (err instanceof Error && /already has a vault/i.test(err.message)) sendJson(res, 409, { error: err.message });
           else sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // --- Arkode Pocket (read-only mobile credential viewer) -------------
+      // See docs/pocket.md. Deliberately its own tiny surface: status,
+      // configure, Drive account (own connection, reusable from an existing
+      // one), pairing (QR payload), manual publish, and revoke. No device
+      // list/management beyond the single v1 device.
+      if (req.method === 'GET' && pathname === '/pocket/status') {
+        sendJson(res, 200, pocketStatusJson(ctx));
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/pocket/configure') {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.driveRemotePath || typeof body.driveRemotePath !== 'string') {
+            sendJson(res, 400, { error: 'driveRemotePath is required.' });
+            return;
+          }
+          configurePocket({ pocketStateRepo: ctx.pocketStateRepo, secretStore: ctx.secretStore }, { driveRemotePath: body.driveRemotePath.trim() });
+          // A first-time configure is always "dirty" (nothing published yet)
+          // — try right away rather than waiting for the debounce sweep,
+          // which deliberately never fires for a state that has never been
+          // published (see runPocketPublishQuietly's dirtySince guard). A
+          // no-op if Drive isn't connected yet (fails into last_error, same
+          // as any other publish attempt) — the user still sees a clear
+          // "Google Drive is not connected" status rather than nothing.
+          void runPocketPublish(buildPocketPublishDeps(ctx)).catch(() => {});
+          sendJson(res, 200, pocketStatusJson(ctx));
+        } catch (err) {
+          sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && (pathname === '/pocket/enable' || pathname === '/pocket/disable')) {
+        try {
+          setPocketEnabled({ pocketStateRepo: ctx.pocketStateRepo, secretStore: ctx.secretStore }, pathname === '/pocket/enable');
+          sendJson(res, 200, pocketStatusJson(ctx));
+        } catch (err) {
+          sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/pocket/drive/connect') {
+        try {
+          const body = await readJsonBody(req).catch(() => ({}));
+          if (body.reuse) {
+            // body.reuse = { source: 'vault-backup' | 'replication', id: string }
+            let sourceRef: string | null = null;
+            if (body.reuse.source === 'vault-backup') {
+              sourceRef = vaultBackupTargetConfigRef(String(body.reuse.id));
+            } else if (body.reuse.source === 'replication') {
+              const src = ctx.replicationTargetsRepo.getById(String(body.reuse.id));
+              sourceRef = src?.rcloneConfigSecretRef ?? null;
+            }
+            if (!sourceRef) {
+              sendJson(res, 400, { error: 'Unknown or unsupported account to reuse.' });
+              return;
+            }
+            reusePocketDriveTokenFrom(ctx.secretStore, sourceRef);
+            sendJson(res, 200, pocketStatusJson(ctx));
+            return;
+          }
+          const token = rcloneClient.extractTokenBlob(String(body.token ?? '')) ?? String(body.token ?? '').trim();
+          JSON.parse(token); // validate the INNER oauth blob itself, not just the outer wrapper — same as vault-backup-target's own authorize route
+          setPocketDriveToken(ctx.secretStore, JSON.stringify({ token } satisfies RcloneDriveConfig));
+          sendJson(res, 200, pocketStatusJson(ctx));
+        } catch (err) {
+          sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/pocket/drive/disconnect') {
+        disconnectPocketDrive(ctx.secretStore);
+        sendJson(res, 200, pocketStatusJson(ctx));
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/pocket/drive/test') {
+        const drive = getPocketDriveConfig(ctx.secretStore);
+        if (!drive) {
+          sendJson(res, 502, { ok: false, error: 'Google Drive is not connected for Arkode Pocket.' });
+          return;
+        }
+        try {
+          const detail = await rcloneClient.withRcloneConfig(
+            { encryptWithCrypt: false },
+            { provider: 'rclone_drive', drive },
+            undefined,
+            (configPath, remoteSection) => rcloneClient.rcloneAbout({ configPath, remoteSection })
+          );
+          sendJson(res, 200, { ok: true, detail });
+        } catch (err) {
+          sendJson(res, 502, { ok: false, error: redactSecrets(err instanceof Error ? err.message : String(err)) });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/pocket/pairing') {
+        try {
+          const body = await readJsonBody(req).catch(() => ({}));
+          const payload = generatePocketPairingPayload(
+            { pocketStateRepo: ctx.pocketStateRepo, secretStore: ctx.secretStore },
+            typeof body.deviceLabel === 'string' ? body.deviceLabel : undefined
+          );
+          sendJson(res, 200, { payload, status: pocketStatusJson(ctx) });
+        } catch (err) {
+          sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/pocket/revoke') {
+        try {
+          await revokePocketDevice({ pocketStateRepo: ctx.pocketStateRepo, secretStore: ctx.secretStore });
+          // A revoked key should be reflected in the next .arkvault backup soon
+          // (see docs/pocket.md) — nudge the same "due" sweep vault backups
+          // already use, best-effort, never blocking the response.
+          void runDueVaultBackups(buildVaultBackupDeps(ctx)).catch(() => {});
+          sendJson(res, 200, pocketStatusJson(ctx));
+        } catch (err) {
+          sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/pocket/publish') {
+        try {
+          const body = await readJsonBody(req).catch(() => ({}));
+          const result = await runPocketPublish(buildPocketPublishDeps(ctx), { force: body.force === true });
+          sendJson(res, result.status === 'published' || result.status === 'skipped_not_dirty' ? 200 : 502, {
+            ...result,
+            status: pocketStatusJson(ctx),
+          });
+        } catch (err) {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
         }
         return;
       }
@@ -5106,6 +5427,35 @@ program
     setTimeout(() => void runVaultBackupsQuietly(), 30_000).unref();
     setInterval(() => void runVaultBackupsQuietly(), 3 * 60 * 60 * 1000).unref();
 
+    // Arkode Pocket auto-publish: dirty is flipped instantly by SQL triggers
+    // the moment a credential/URL changes (see pocket_state's migration),
+    // but publishing on every single change would spam Drive on every edit
+    // in an active editing session — so this only publishes once a pending
+    // change has been sitting dirty for at least POCKET_DEBOUNCE_MS. This is
+    // a bounded-STALENESS window (published within ~debounce minutes of the
+    // FIRST unpublished change), not a sliding "wait for a quiet period"
+    // debounce — deliberately, so a long active-editing session still gets
+    // synced periodically instead of never publishing until it's over.
+    // Checked every 60s; each check is one cheap DB read when not due.
+    const POCKET_DEBOUNCE_MS = 3 * 60 * 1000;
+    let pocketPublishRunning = false;
+    const runPocketPublishQuietly = async () => {
+      if (pocketPublishRunning || !ctx.vaultState.isUnlocked()) return;
+      const state = ctx.pocketStateRepo.get();
+      if (!state || !state.configured || !state.enabled || !state.dirty || !state.dirtySince) return;
+      if (Date.now() - Date.parse(state.dirtySince) < POCKET_DEBOUNCE_MS) return;
+      pocketPublishRunning = true;
+      try {
+        await runPocketPublish(buildPocketPublishDeps(ctx));
+      } catch (err) {
+        console.error(`Pocket publish sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        pocketPublishRunning = false;
+      }
+    };
+    setTimeout(() => void runPocketPublishQuietly(), 30_000).unref();
+    setInterval(() => void runPocketPublishQuietly(), 60_000).unref();
+
     // Per-machine auto-unlock: if the user enabled it on this machine, open
     // the vault now with the DPAPI-CurrentUser-sealed KEK — no master
     // password. Stale/foreign material is deleted inside here and we fall
@@ -5114,6 +5464,9 @@ program
       if (ctx.vaultState.attemptStartupAutoUnlock()) {
         void runDueVaultBackups(buildVaultBackupDeps(ctx)).catch((err) =>
           console.error(`Vault backup catch-up failed: ${err instanceof Error ? err.message : String(err)}`)
+        );
+        void runPocketPublish(buildPocketPublishDeps(ctx)).catch((err) =>
+          console.error(`Pocket publish catch-up failed: ${err instanceof Error ? err.message : String(err)}`)
         );
       }
     } catch (err) {

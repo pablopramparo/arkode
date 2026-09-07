@@ -29,6 +29,7 @@ import {
   createVaultUrlsRepo,
   createVaultItemsRepo,
   createVaultBackupTargetsRepo,
+  createPocketStateRepo,
   throttleProgressSink,
   type ProgressSink,
 } from 'engine-core';
@@ -85,6 +86,10 @@ export function buildContext() {
   const vaultItemsRepo = createVaultItemsRepo(db);
   const vaultBackupTargetsRepo = createVaultBackupTargetsRepo(db);
 
+  // Arkode Pocket (read-only mobile credential viewer) -- see docs/pocket.md.
+  // Its own tiny state, independent of the vault/.arkvault crypto above.
+  const pocketStateRepo = createPocketStateRepo(db);
+
   // Live-progress sinks: the orchestrators call onProgress(runId, progress)
   // repeatedly during a run; these throttle the writes (~1/s or on a real
   // change) and persist them to the run row, where the UI polls them. One
@@ -123,6 +128,7 @@ export function buildContext() {
     vaultUrlsRepo,
     vaultItemsRepo,
     vaultBackupTargetsRepo,
+    pocketStateRepo,
     dbProgressSink,
     fileProgressSink,
   };

@@ -113,8 +113,8 @@ export function createPocketStateRepo(db: Database): PocketStateRepo {
   // to update), so without this a first-time configure with pre-existing
   // vault data would incorrectly read as "up to date" with nothing to sync.
   const insertStmt = db.prepare(
-    `INSERT INTO pocket_state (id, pocket_id, configured, drive_remote_path, published_seq)
-     VALUES (@id, @pocketId, 1, @driveRemotePath, -1)`
+    `INSERT INTO pocket_state (id, pocket_id, configured, drive_remote_path, published_seq, dirty_since)
+     VALUES (@id, @pocketId, 1, @driveRemotePath, -1, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
   );
 
   function requireRow(): PocketStateRow {

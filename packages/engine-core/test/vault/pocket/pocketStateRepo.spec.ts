@@ -30,6 +30,7 @@ describe('pocketStateRepo', () => {
     // also correctly covers pre-existing vault data created before Pocket
     // was ever configured (see the migration/repo comment on published_seq).
     expect(state.dirty).toBe(true);
+    expect(state.dirtySince).not.toBeNull(); // so the debounce sweep can act on it, not just a manual publish
     expect(state.lastConfirmedRevision).toBeNull();
     expect(state.pocketId).toMatch(/[0-9a-f-]{36}/);
   });
