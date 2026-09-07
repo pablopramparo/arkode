@@ -2,15 +2,17 @@
   "name": "pocket-mobile",
   "version": "0.1.0",
   "private": true,
-  "main": "node_modules/expo/AppEntry.js",
+  "main": "index.js",
   "scripts": {
     "start": "expo start --dev-client",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
-    "test": "jest"
+    "test": "jest",
+    "eas-build-post-install": "pnpm --filter pocket-shared build"
   },
   "dependencies": {
+    "@babel/runtime": "^7.25.0",
     "expo": "~52.0.0",
     "expo-camera": "~16.0.0",
     "expo-clipboard": "~7.0.0",

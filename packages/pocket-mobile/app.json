@@ -7,7 +7,9 @@
     "userInterfaceStyle": "dark",
     "scheme": "arkodepocket",
     "backgroundColor": "#060d1a",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.codebius.arkodepocket",
@@ -19,7 +21,15 @@
     "android": {
       "package": "com.codebius.arkodepocket",
       "backgroundColor": "#060d1a",
-      "permissions": ["USE_BIOMETRIC", "USE_FINGERPRINT", "CAMERA"],
+      "permissions": [
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT",
+        "CAMERA",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
+      ],
       "allowBackup": false
     },
     "plugins": [
@@ -35,8 +45,9 @@
     "extra": {
       "googleWebClientId": "REPLACE_WITH_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com",
       "eas": {
-        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+        "projectId": "3b9b096a-6019-4045-aa72-4476ed59bfd0"
       }
-    }
+    },
+    "owner": "codebius.com"
   }
 }
