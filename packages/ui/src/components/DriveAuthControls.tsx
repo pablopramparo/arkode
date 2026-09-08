@@ -20,8 +20,15 @@ export function PasteTokenModal({ onClose, onSubmit }: { onClose: () => void; on
   return (
     <Modal title="Pegar token de rclone" onClose={onClose}>
       <p className="mb-2 text-sm" style={{ color: 'var(--muted)' }}>
-        En una PC con navegador, ejecutá <code>rclone authorize "drive"</code>, aprobá el acceso y pegá acá el bloque
-        <code> {'{'}"access_token"...{'}'}</code> que imprime.
+        Esta opción es para cuando estás autorizando desde <strong>otra PC</strong> (por ejemplo, un servidor sin
+        navegador) — no genera ningún enlace acá. Si estás en esta misma computadora, cerrá esto y usá alguna de las
+        otras opciones de esta pantalla en su lugar: son más simples y no requieren tener <code>rclone</code>{' '}
+        instalado por tu cuenta.
+      </p>
+      <p className="mb-2 text-sm" style={{ color: 'var(--muted)' }}>
+        En esa otra PC (que sí necesita tener <code>rclone</code> instalado), ejecutá{' '}
+        <code>rclone authorize "drive"</code> en una terminal, aprobá el acceso en el navegador que se abre, y pegá
+        acá el bloque <code>{'{'}"access_token"...{'}'}</code> que imprime.
       </p>
       <textarea
         className="mb-3 h-28 w-full rounded-md border px-3 py-2 font-mono text-xs"
@@ -211,7 +218,7 @@ export function DriveConnectButtons({
         </>
       )}
       <Button size="sm" variant="ghost" className="rounded-full px-3" onPress={() => setShowPaste(true)}>
-        {connected ? 'Reconectar (pegar token)' : 'Pegar token'}
+        {connected ? 'Reconectar desde otra PC' : 'Autorizar desde otra PC'}
       </Button>
 
       {showPaste && (

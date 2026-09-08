@@ -282,7 +282,7 @@ function ReplicationSlot({
         )}
         {target.provider === 'rclone_drive' && (
           <Button size="sm" variant="ghost" className="rounded-full px-3" onPress={() => setShowPasteToken(true)}>
-            {target.authorized ? 'Reconectar (pegar token)' : 'Pegar token'}
+            {target.authorized ? 'Reconectar desde otra PC' : 'Autorizar desde otra PC'}
           </Button>
         )}
         <Button
