@@ -5,6 +5,7 @@ import { Modal } from './Modal';
 import { IconButton } from './IconButton';
 import { CopyIcon, EditIcon, EyeIcon, EyeOffIcon, TrashIcon } from './icons';
 import { primaryPillStyle } from '../lib/pillStyles';
+import { VaultCredentialDetailModal } from './VaultDetailModals';
 import { useVaultStatus } from '../lib/useVaultStatus';
 import { useClipboardAutoClear } from '../lib/useClipboardAutoClear';
 import {
@@ -50,13 +51,24 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-export function CredencialesTab({ clientId }: { clientId: string }) {
+export function CredencialesTab({
+  clientId,
+  focusId,
+  onFocusHandled,
+}: {
+  clientId: string;
+  /** Open this credential's detail modal on arrival (e.g. from a search hit). */
+  focusId?: string;
+  onFocusHandled?: () => void;
+}) {
   const { status } = useVaultStatus();
   const [creds, setCreds] = useState<VaultCredential[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<VaultCredential | null>(null);
+  const [detail, setDetail] = useState<VaultCredential | null>(null);
   const [creating, setCreating] = useState(false);
   const [revealed, setRevealed] = useState<Record<string, VaultCredentialSecret>>({});
+  const [kindFilter, setKindFilter] = useState<VaultCredentialKind | 'all'>('all');
   const { copy, copiedKey } = useClipboardAutoClear();
 
   const refresh = useCallback(async () => {
@@ -71,6 +83,14 @@ export function CredencialesTab({ clientId }: { clientId: string }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Arrived pointing at one credential — open its detail once the list is loaded.
+  useEffect(() => {
+    if (!focusId || !creds) return;
+    const hit = creds.find((c) => c.id === focusId);
+    if (hit) setDetail(hit);
+    onFocusHandled?.();
+  }, [focusId, creds, onFocusHandled]);
 
   const locked = !status?.unlocked;
 
@@ -115,6 +135,8 @@ export function CredencialesTab({ clientId }: { clientId: string }) {
   };
 
   const anyLinked = (creds ?? []).some((c) => c.linkedTransportId || c.linkedDatabaseConnectionId);
+  const presentKinds = Array.from(new Set((creds ?? []).map((c) => c.kind)));
+  const visibleCreds = (creds ?? []).filter((c) => kindFilter === 'all' || c.kind === kindFilter);
 
   return (
     <div className="mt-3 space-y-3">
@@ -142,6 +164,38 @@ export function CredencialesTab({ clientId }: { clientId: string }) {
         </p>
       )}
 
+      {creds && creds.length > 0 && (
+        <div className="flex items-center gap-2">
+          <label className="text-xs" style={{ color: 'var(--muted)' }} htmlFor="cred-kind-filter">
+            Tipo
+          </label>
+          <select
+            id="cred-kind-filter"
+            className="rounded-md border px-2 py-1 text-xs outline-none"
+            style={inputStyle}
+            value={kindFilter}
+            onChange={(e) => setKindFilter(e.target.value as VaultCredentialKind | 'all')}
+          >
+            <option value="all">Todos ({creds.length})</option>
+            {KINDS.filter((k) => presentKinds.includes(k)).map((k) => (
+              <option key={k} value={k}>
+                {k} ({creds.filter((c) => c.kind === k).length})
+              </option>
+            ))}
+          </select>
+          {kindFilter !== 'all' && (
+            <button
+              type="button"
+              className="text-xs underline"
+              style={{ color: 'var(--muted)' }}
+              onClick={() => setKindFilter('all')}
+            >
+              limpiar
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--border)' }}>
         <table className="w-full text-sm">
           <thead>
@@ -154,19 +208,26 @@ export function CredencialesTab({ clientId }: { clientId: string }) {
             </tr>
           </thead>
           <tbody>
-            {creds?.length === 0 && (
+            {creds && visibleCreds.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-3 py-6 text-center" style={{ color: 'var(--muted)' }}>
-                  Sin credenciales todavía.
+                  {creds.length === 0 ? 'Sin credenciales todavía.' : 'Sin credenciales de este tipo.'}
                 </td>
               </tr>
             )}
-            {creds?.map((c) => (
+            {visibleCreds.map((c) => (
               <Fragment key={c.id}>
                 <tr className="border-t" style={{ borderColor: 'var(--border)' }}>
                   <td className="px-3 py-2">
                     {c.favorite ? '★ ' : ''}
-                    {c.name}
+                    <button
+                      type="button"
+                      className="text-left hover:underline"
+                      style={{ color: 'var(--accent)' }}
+                      onClick={() => setDetail(c)}
+                    >
+                      {c.name}
+                    </button>
                   </td>
                   <td className="px-3 py-2">
                     <span
@@ -235,6 +296,22 @@ export function CredencialesTab({ clientId }: { clientId: string }) {
         </table>
       </div>
 
+      {detail && !editing && (
+        <VaultCredentialDetailModal
+          credential={detail}
+          onClose={() => setDetail(null)}
+          onEdit={() => {
+            setEditing(detail);
+            setDetail(null);
+          }}
+          onDelete={() => {
+            const target = detail;
+            setDetail(null);
+            void doDelete(target);
+          }}
+        />
+      )}
+
       {(creating || editing) && (
         <CredentialFormModal
           clientId={clientId}
@@ -254,7 +331,7 @@ export function CredencialesTab({ clientId }: { clientId: string }) {
   );
 }
 
-function CopyField({
+export function CopyField({
   label,
   value,
   k,

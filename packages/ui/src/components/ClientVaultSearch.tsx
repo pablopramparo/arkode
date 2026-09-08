@@ -22,7 +22,7 @@ export function ClientVaultSearch({
   onJump,
 }: {
   clientId: string;
-  onJump: (tab: ClientVaultTab) => void;
+  onJump: (tab: ClientVaultTab, itemId?: string) => void;
 }) {
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<Hit[]>([]);
@@ -64,7 +64,7 @@ export function ClientVaultSearch({
     setOpen(false);
     setQ('');
     if (h.kind === 'url' && h.url) window.open(h.url, '_blank', 'noreferrer');
-    else onJump(h.tab);
+    else onJump(h.tab, h.id);
   };
 
   const showDropdown = open && q.trim().length >= 2;

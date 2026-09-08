@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { Clientes } from './components/Clientes';
-import { ClienteDetalle } from './components/ClienteDetalle';
+import { ClienteDetalle, type ProjectTab } from './components/ClienteDetalle';
 import { Conexiones } from './components/Conexiones';
 import { Tareas } from './components/Tareas';
 import { Historial } from './components/Historial';
@@ -13,6 +13,14 @@ import { AppShell, type Screen } from './components/AppShell';
 function App() {
   const [screen, setScreen] = useState<Screen>('dashboard');
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [selectedClientProjectTab, setSelectedClientProjectTab] = useState<ProjectTab | undefined>(undefined);
+  const [selectedClientProjectItemId, setSelectedClientProjectItemId] = useState<string | undefined>(undefined);
+
+  function selectClientFromList(clientId: string | null) {
+    setSelectedClientId(clientId);
+    setSelectedClientProjectTab(undefined);
+    setSelectedClientProjectItemId(undefined);
+  }
 
   // NOTE: there is deliberately NO onCloseRequested guard here. A previous
   // one (v0.5.4) trapped the window shut when its confirm didn't render
@@ -22,15 +30,19 @@ function App() {
 
   function navigate(next: Screen) {
     setScreen(next);
-    setSelectedClientId(null);
+    selectClientFromList(null);
   }
 
   // A client name is clickable from anywhere in the app — always lands on
   // "Clientes" with that client's ficha open, regardless of which screen it
-  // was clicked from.
-  function goToClient(clientId: string) {
+  // was clicked from. A global-search hit on vault content also passes the
+  // Proyecto sub-tab to open and, when it points at one item, its id so the
+  // ficha opens that credential/URL/item's detail directly.
+  function goToClient(clientId: string, projectTab?: ProjectTab, projectItemId?: string) {
     setScreen('clientes');
     setSelectedClientId(clientId);
+    setSelectedClientProjectTab(projectTab);
+    setSelectedClientProjectItemId(projectItemId);
   }
 
   return (
@@ -38,9 +50,14 @@ function App() {
       {screen === 'dashboard' && <Dashboard onSelectClient={goToClient} />}
       {screen === 'clientes' &&
         (selectedClientId ? (
-          <ClienteDetalle clientId={selectedClientId} onBack={() => setSelectedClientId(null)} />
+          <ClienteDetalle
+            clientId={selectedClientId}
+            initialProjectTab={selectedClientProjectTab}
+            initialProjectItemId={selectedClientProjectItemId}
+            onBack={() => selectClientFromList(null)}
+          />
         ) : (
-          <Clientes onSelectClient={setSelectedClientId} />
+          <Clientes onSelectClient={selectClientFromList} />
         ))}
       {screen === 'conexiones' && <Conexiones onSelectClient={goToClient} />}
       {screen === 'tareas' && <Tareas onSelectClient={goToClient} />}

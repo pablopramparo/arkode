@@ -2,6 +2,7 @@ import { DocumentIcon, GridIcon, HelpCircleIcon, SettingsIcon, UsersIcon } from 
 import { TitleBar } from "./TitleBar";
 import { VaultLockChip } from "./VaultLockChip";
 import { GlobalSearch } from "./GlobalSearch";
+import type { ProjectTab } from "./ClienteDetalle";
 import arkodeLogo from "../assets/arkode-logo-completo.png";
 
 export type Screen =
@@ -47,7 +48,7 @@ export function AppShell({
 }: {
   screen: Screen;
   onNavigate: (screen: Screen) => void;
-  onSelectClient?: (clientId: string) => void;
+  onSelectClient?: (clientId: string, projectTab?: ProjectTab, projectItemId?: string) => void;
   children: React.ReactNode;
 }) {
   return (

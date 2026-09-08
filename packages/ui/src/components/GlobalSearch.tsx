@@ -1,14 +1,26 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { searchVault, type VaultSearchResult } from '../lib/vaultClient';
 import { fetchClients, type ClientWithTaskCount } from '../lib/clientsClient';
+import type { ProjectTab } from './ClienteDetalle';
 
 type Hit = {
   kind: 'cliente' | 'credencial' | 'url' | 'snippet' | 'proceso' | 'nota';
   id: string;
   clientId: string;
   title: string;
-  subtitle: string;
+  /** The non-client portion of the subtitle (kind, URL, …). The client name is resolved at render time. */
+  meta: string;
   url?: string;
+};
+
+/** Which Proyecto sub-tab a vault hit opens on the client ficha. */
+const HIT_KIND_TO_PROJECT_TAB: Record<Hit['kind'], ProjectTab | undefined> = {
+  cliente: undefined,
+  credencial: 'credenciales',
+  url: 'urls',
+  snippet: 'snippets',
+  proceso: 'procesos',
+  nota: 'notas',
 };
 
 function clientHits(clients: ClientWithTaskCount[], tokens: string[]): Hit[] {
@@ -23,38 +35,44 @@ function clientHits(clients: ClientWithTaskCount[], tokens: string[]): Hit[] {
       id: c.id,
       clientId: c.id,
       title: c.name + (c.isActive ? '' : ' (inactivo)'),
-      subtitle: c.description || c.localBasePath || 'Cliente',
+      meta: c.description || c.localBasePath || 'Cliente',
     }));
 }
 
-function vaultHits(r: VaultSearchResult, clientName: (id: string) => string): Hit[] {
+function vaultHits(r: VaultSearchResult): Hit[] {
   const hits: Hit[] = [];
   for (const c of r.credentials)
-    hits.push({ kind: 'credencial', id: c.id, clientId: c.clientId, title: c.name, subtitle: `${clientName(c.clientId)} · ${c.kind}` });
+    hits.push({ kind: 'credencial', id: c.id, clientId: c.clientId, title: c.name, meta: c.kind });
   for (const u of r.urls)
-    hits.push({ kind: 'url', id: u.id, clientId: u.clientId, title: u.name, subtitle: `${clientName(u.clientId)} · ${u.url}`, url: u.url });
+    hits.push({ kind: 'url', id: u.id, clientId: u.clientId, title: u.name, meta: u.url, url: u.url });
   for (const it of r.items) {
     const kind = it.type === 'snippet' ? 'snippet' : it.type === 'process' ? 'proceso' : 'nota';
-    hits.push({ kind, id: it.id, clientId: it.clientId, title: it.title, subtitle: clientName(it.clientId) });
+    hits.push({ kind, id: it.id, clientId: it.clientId, title: it.title, meta: '' });
   }
   return hits;
 }
 
-export function GlobalSearch({ onSelectClient }: { onSelectClient?: (clientId: string) => void }) {
+export function GlobalSearch({
+  onSelectClient,
+}: {
+  onSelectClient?: (clientId: string, projectTab?: ProjectTab, projectItemId?: string) => void;
+}) {
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<Hit[]>([]);
   const [searched, setSearched] = useState(false);
   const [open, setOpen] = useState(false);
-  const clients = useRef<ClientWithTaskCount[]>([]);
-  const clientNames = useRef<Map<string, string>>(new Map());
+  const [clients, setClients] = useState<ClientWithTaskCount[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const clientNames = useMemo(() => {
+    const m = new Map<string, string>();
+    clients.forEach((c) => m.set(c.id, c.name));
+    return m;
+  }, [clients]);
 
   useEffect(() => {
     fetchClients({ includeInactive: true })
-      .then((cs) => {
-        clients.current = cs;
-        cs.forEach((c) => clientNames.current.set(c.id, c.name));
-      })
+      .then(setClients)
       .catch(() => {});
   }, []);
 
@@ -77,14 +95,14 @@ export function GlobalSearch({ onSelectClient }: { onSelectClient?: (clientId: s
     }
     const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     // Clients match instantly from the list we already have.
-    const cHits = clientHits(clients.current, tokens);
+    const cHits = clientHits(clients, tokens);
     setHits(cHits);
     setOpen(true);
 
     const t = setTimeout(async () => {
       try {
         const r = await searchVault(q.trim());
-        setHits([...cHits, ...vaultHits(r, (id) => clientNames.current.get(id) ?? id)].slice(0, 24));
+        setHits([...cHits, ...vaultHits(r)].slice(0, 24));
       } catch {
         setHits(cHits);
       } finally {
@@ -92,13 +110,19 @@ export function GlobalSearch({ onSelectClient }: { onSelectClient?: (clientId: s
       }
     }, 180);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, clients]);
 
   const go = (h: Hit) => {
     setOpen(false);
     setQ('');
     if (h.kind === 'url' && h.url) window.open(h.url, '_blank', 'noreferrer');
-    else onSelectClient?.(h.clientId);
+    else onSelectClient?.(h.clientId, HIT_KIND_TO_PROJECT_TAB[h.kind], h.kind === 'cliente' ? undefined : h.id);
+  };
+
+  const subtitleFor = (h: Hit): string => {
+    if (h.kind === 'cliente') return h.meta;
+    const client = clientNames.get(h.clientId) ?? (clients.length === 0 ? '…' : 'Cliente desconocido');
+    return h.meta ? `${client} · ${h.meta}` : client;
   };
 
   const showDropdown = open && q.trim().length >= 2;
@@ -136,7 +160,7 @@ export function GlobalSearch({ onSelectClient }: { onSelectClient?: (clientId: s
                 <span className="font-medium">
                   <span style={{ color: 'var(--muted)' }}>[{h.kind}]</span> {h.title}
                 </span>
-                <span style={{ color: 'var(--muted)' }}>{h.subtitle}</span>
+                <span style={{ color: 'var(--muted)' }}>{subtitleFor(h)}</span>
               </button>
             ))
           ) : (

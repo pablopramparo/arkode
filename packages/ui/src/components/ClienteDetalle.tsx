@@ -53,7 +53,7 @@ import type { ConnectionRow } from './Conexiones';
 
 type MainTab = 'resumen' | 'backups' | 'proyecto';
 type BackupTab = 'tareas' | 'conexiones' | 'archivos' | 'backups' | 'historial' | 'copia-externa';
-type ProjectTab = 'credenciales' | 'urls' | 'snippets' | 'procesos' | 'notas';
+export type ProjectTab = 'credenciales' | 'urls' | 'snippets' | 'procesos' | 'notas';
 /** The one deterministic selector every content block switches on. */
 type Section = 'resumen' | BackupTab | ProjectTab;
 
@@ -137,7 +137,19 @@ const PROJECT_TABS: readonly { id: ProjectTab; label: string }[] = [
   { id: 'notas', label: 'Notas' },
 ];
 
-export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack: () => void }) {
+export function ClienteDetalle({
+  clientId,
+  initialProjectTab,
+  initialProjectItemId,
+  onBack,
+}: {
+  clientId: string;
+  /** When set (e.g. arriving from a global-search hit), open the Proyecto tab on this sub-section. */
+  initialProjectTab?: ProjectTab;
+  /** When set, open that credential/URL/item's detail modal on arrival. */
+  initialProjectItemId?: string;
+  onBack: () => void;
+}) {
   const [client, setClient] = useState<ClientWithTaskCount | null>(null);
   const [tasks, setTasks] = useState<TaskRow[] | null>(null);
   const [fileTasks, setFileTasks] = useState<Awaited<ReturnType<typeof fetchFileBackupTasks>> | null>(null);
@@ -149,10 +161,11 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   const [backupsPage, setBackupsPage] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [actionState, setActionState] = useState<Record<string, RowActionState>>({});
-  const [mainTab, setMainTab] = useState<MainTab>('resumen');
+  const [mainTab, setMainTab] = useState<MainTab>(initialProjectTab ? 'proyecto' : 'resumen');
   // Sub-section per domain — remembered while ClienteDetalle stays mounted.
   const [backupTab, setBackupTab] = useState<BackupTab>('tareas');
-  const [projectTab, setProjectTab] = useState<ProjectTab>('credenciales');
+  const [projectTab, setProjectTab] = useState<ProjectTab>(initialProjectTab ?? 'credenciales');
+  const [focusItemId, setFocusItemId] = useState<string | null>(initialProjectItemId ?? null);
   const [showInactive, setShowInactive] = useState(false);
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [choosingKind, setChoosingKind] = useState(false);
@@ -290,6 +303,20 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Arriving from a global-search hit (or a later hit while this ficha stays
+  // mounted) — jump straight to the Proyecto sub-section it points at, and
+  // open the specific item's detail modal if one was named.
+  useEffect(() => {
+    if (!initialProjectTab && !initialProjectItemId) return;
+    if (initialProjectTab) {
+      setMainTab('proyecto');
+      setProjectTab(initialProjectTab);
+    }
+    setFocusItemId(initialProjectItemId ?? null);
+  }, [initialProjectTab, initialProjectItemId, clientId]);
+
+  const clearFocusItem = useCallback(() => setFocusItemId(null), []);
 
   const hasLiveRun =
     (runs ?? []).some((r) => isLiveProgress(r.status, r.progress)) ||
@@ -446,7 +473,13 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
             )}
             {mainTab === 'proyecto' && (
               <div className="mt-3 space-y-3">
-                <ClientVaultSearch clientId={clientId} onJump={setProjectTab} />
+                <ClientVaultSearch
+                  clientId={clientId}
+                  onJump={(tab, itemId) => {
+                    setProjectTab(tab);
+                    if (itemId) setFocusItemId(itemId);
+                  }}
+                />
                 <TabRow variant="secondary" tabs={PROJECT_TABS} active={projectTab} onChange={setProjectTab} />
               </div>
             )}
@@ -629,11 +662,40 @@ export function ClienteDetalle({ clientId, onBack }: { clientId: string; onBack:
           {section === 'resumen' && (
             <ClienteResumen clientId={clientId} backups={resumenStats} onNavigate={goToSection} />
           )}
-          {section === 'credenciales' && <CredencialesTab clientId={clientId} />}
-          {section === 'urls' && <UrlsTab clientId={clientId} />}
-          {section === 'snippets' && <ItemsTab clientId={clientId} type="snippet" />}
-          {section === 'procesos' && <ItemsTab clientId={clientId} type="process" />}
-          {section === 'notas' && <ItemsTab clientId={clientId} type="note" />}
+          {section === 'credenciales' && (
+            <CredencialesTab
+              clientId={clientId}
+              focusId={focusItemId ?? undefined}
+              onFocusHandled={clearFocusItem}
+            />
+          )}
+          {section === 'urls' && (
+            <UrlsTab clientId={clientId} focusId={focusItemId ?? undefined} onFocusHandled={clearFocusItem} />
+          )}
+          {section === 'snippets' && (
+            <ItemsTab
+              clientId={clientId}
+              type="snippet"
+              focusId={focusItemId ?? undefined}
+              onFocusHandled={clearFocusItem}
+            />
+          )}
+          {section === 'procesos' && (
+            <ItemsTab
+              clientId={clientId}
+              type="process"
+              focusId={focusItemId ?? undefined}
+              onFocusHandled={clearFocusItem}
+            />
+          )}
+          {section === 'notas' && (
+            <ItemsTab
+              clientId={clientId}
+              type="note"
+              focusId={focusItemId ?? undefined}
+              onFocusHandled={clearFocusItem}
+            />
+          )}
 
           {section === 'archivos' && <FileBackupsPanel clientId={clientId} />}
 

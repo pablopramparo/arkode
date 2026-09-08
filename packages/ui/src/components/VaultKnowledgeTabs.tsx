@@ -5,6 +5,7 @@ import { Modal } from './Modal';
 import { IconButton } from './IconButton';
 import { CopyIcon, EditIcon, EyeIcon, TrashIcon } from './icons';
 import { primaryPillStyle } from '../lib/pillStyles';
+import { VaultUrlDetailModal, VaultItemDetailModal } from './VaultDetailModals';
 import { useVaultStatus } from '../lib/useVaultStatus';
 import { useClipboardAutoClear } from '../lib/useClipboardAutoClear';
 import {
@@ -51,10 +52,19 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 // ---------------------------------------------------------------- URLs tab
-export function UrlsTab({ clientId }: { clientId: string }) {
+export function UrlsTab({
+  clientId,
+  focusId,
+  onFocusHandled,
+}: {
+  clientId: string;
+  focusId?: string;
+  onFocusHandled?: () => void;
+}) {
   const [urls, setUrls] = useState<VaultUrl[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<VaultUrl | null>(null);
+  const [detail, setDetail] = useState<VaultUrl | null>(null);
   const [creating, setCreating] = useState(false);
   const { copy, copiedKey } = useClipboardAutoClear();
 
@@ -69,6 +79,13 @@ export function UrlsTab({ clientId }: { clientId: string }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!focusId || !urls) return;
+    const hit = urls.find((u) => u.id === focusId);
+    if (hit) setDetail(hit);
+    onFocusHandled?.();
+  }, [focusId, urls, onFocusHandled]);
 
   return (
     <div className="mt-3 space-y-3">
@@ -104,7 +121,14 @@ export function UrlsTab({ clientId }: { clientId: string }) {
               <tr key={u.id} className="border-t" style={{ borderColor: 'var(--border)' }}>
                 <td className="px-3 py-2">
                   {u.favorite ? '★ ' : ''}
-                  {u.name}
+                  <button
+                    type="button"
+                    className="text-left hover:underline"
+                    style={{ color: 'var(--accent)' }}
+                    onClick={() => setDetail(u)}
+                  >
+                    {u.name}
+                  </button>
                 </td>
                 <td className="px-3 py-2">
                   <a href={u.url} target="_blank" rel="noreferrer" className="underline" style={{ color: 'var(--accent)' }}>
@@ -141,6 +165,25 @@ export function UrlsTab({ clientId }: { clientId: string }) {
           </tbody>
         </table>
       </div>
+      {detail && !editing && (
+        <VaultUrlDetailModal
+          url={detail}
+          onClose={() => setDetail(null)}
+          onEdit={() => {
+            setEditing(detail);
+            setDetail(null);
+          }}
+          onDelete={async () => {
+            const target = detail;
+            setDetail(null);
+            if (window.confirm(`Eliminar "${target.name}"?`)) {
+              await deleteUrl(target.id);
+              void refresh();
+            }
+          }}
+        />
+      )}
+
       {(creating || editing) && (
         <UrlFormModal
           clientId={clientId}
@@ -350,11 +393,22 @@ function LinkPicker({
   );
 }
 
-export function ItemsTab({ clientId, type }: { clientId: string; type: VaultItemType }) {
+export function ItemsTab({
+  clientId,
+  type,
+  focusId,
+  onFocusHandled,
+}: {
+  clientId: string;
+  type: VaultItemType;
+  focusId?: string;
+  onFocusHandled?: () => void;
+}) {
   const { status } = useVaultStatus();
   const [items, setItems] = useState<VaultItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<VaultItem | null>(null);
+  const [detail, setDetail] = useState<VaultItem | null>(null);
   const [creating, setCreating] = useState(false);
   const [bodies, setBodies] = useState<Record<string, string>>({});
   // For resolving a process's linked ids to names (process tab only).
@@ -376,6 +430,13 @@ export function ItemsTab({ clientId, type }: { clientId: string; type: VaultItem
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!focusId || !items) return;
+    const hit = items.find((i) => i.id === focusId);
+    if (hit) setDetail(hit);
+    onFocusHandled?.();
+  }, [focusId, items, onFocusHandled]);
 
   useEffect(() => {
     if (type !== 'process') return;
@@ -425,7 +486,14 @@ export function ItemsTab({ clientId, type }: { clientId: string; type: VaultItem
               <div>
                 <span className="font-medium">
                   {it.favorite ? '★ ' : ''}
-                  {it.title}
+                  <button
+                    type="button"
+                    className="text-left hover:underline"
+                    style={{ color: 'var(--accent)' }}
+                    onClick={() => setDetail(it)}
+                  >
+                    {it.title}
+                  </button>
                 </span>
                 {it.environment && (
                   <span className="ml-2 text-xs" style={{ color: 'var(--muted)' }}>
@@ -571,6 +639,25 @@ export function ItemsTab({ clientId, type }: { clientId: string; type: VaultItem
           </div>
         ))}
       </div>
+      {detail && !editing && (
+        <VaultItemDetailModal
+          item={detail}
+          onClose={() => setDetail(null)}
+          onEdit={() => {
+            setEditing(detail);
+            setDetail(null);
+          }}
+          onDelete={async () => {
+            const target = detail;
+            setDetail(null);
+            if (window.confirm(`Eliminar "${target.title}"?`)) {
+              await deleteItem(target.id);
+              void refresh();
+            }
+          }}
+        />
+      )}
+
       {(creating || editing) && (
         <ItemFormModal
           clientId={clientId}
