@@ -18,15 +18,18 @@ Core pipeline: **connect → fetch/generate backup → store locally → validat
 - A version-aware tool registry for `pg_dump`/`mysqldump`/`mariadb-dump` (with optional auto-download for Postgres/MariaDB), plus a pre-flight compatibility gate before enabling a schedule.
 - Live run progress bars for both DB dumps and restic file backups.
 - A native Windows desktop app (Tauri) wrapping the full UI (Dashboard · Clientes · Logs · Ayuda · Configuración, plus a per-client workspace), with an in-app "Ayuda" guide, auto-update and autostart.
+- **Arkode Pocket** — a read-only Android companion app: pair with Desktop via QR code, then search and copy the credentials/URLs you need from your phone. End-to-end encrypted sync via Google Drive under Pocket's own independent device key (Desktop's own Drive/rclone credentials are never shared with the phone), biometric unlock with a 5-minute grace period, cache-first offline startup, and device revocation/key rotation from Configuración. Ships as its own signed Android build via EAS, separate from Desktop's release cycle — see `packages/pocket-mobile/README.md` and [`docs/pocket.md`](docs/pocket.md).
 
 ## Project structure
 
 This is a pnpm workspace:
 
-- `packages/engine-core` — the backup engine: SQLite storage, transports (SFTP/SSH/FTP), database dump clients, file backups (restic-backed), validators, retention, scheduling, off-site replication (rclone), and the encrypted vault + `.arkvault` disaster-recovery backup. Pure TypeScript, no UI dependency.
+- `packages/engine-core` — the backup engine: SQLite storage, transports (SFTP/SSH/FTP), database dump clients, file backups (restic-backed), validators, retention, scheduling, off-site replication (rclone), the encrypted vault + `.arkvault` disaster-recovery backup, and Arkode Pocket's own state/snapshot/publish/pairing logic. Pure TypeScript, no UI dependency.
 - `packages/engine-cli` — a `commander` CLI wrapping `engine-core`, plus a dev-time local HTTP bridge for the UI.
 - `packages/ui` — the React + TypeScript + Tailwind + HeroUI dashboard.
 - `packages/desktop-shell` — the Tauri desktop shell wrapping `packages/ui` into a native Windows app, with the compiled `engine-cli` running as a sidecar in production.
+- `packages/pocket-shared` — the Pocket sync format/crypto/pairing logic shared between Desktop and Pocket. Pure TypeScript, zero platform dependency.
+- `packages/pocket-mobile` — Arkode Pocket itself, the Expo/React Native Android app.
 
 ## Development
 
@@ -52,6 +55,10 @@ pnpm --filter desktop-shell dev
 
 # Production installer (NSIS + MSI)
 pnpm --filter desktop-shell build
+
+# Arkode Pocket (see packages/pocket-mobile/README.md for the full setup)
+pnpm --filter pocket-mobile test
+pnpm --filter pocket-mobile typecheck
 ```
 
 See [CLAUDE.md](./CLAUDE.md) for the full architecture, command reference, and detailed history of every implemented feature.
