@@ -53,6 +53,13 @@ export interface DashboardRow {
    * dashboard's "needs attention", not "upcoming").
    */
   nextRunAt: string | null;
+  /**
+   * Whether this task's own schedule is enabled. A task the user has
+   * deliberately disabled has no freshness expectation at all, so the
+   * dashboard's "needs attention" staleness/never-run flagging must not
+   * apply to it — see isProblemRow in Dashboard.tsx.
+   */
+  scheduleEnabled: boolean;
 }
 
 export interface GetDashboardStatusDeps {
@@ -104,6 +111,7 @@ export function getDashboardStatus(deps: GetDashboardStatusDeps, now: Date = new
           progress: liveProgress(latestRun),
           backupSetName: backupSet?.name ?? null,
           nextRunAt: next ? next.toISOString() : null,
+          scheduleEnabled: task.scheduleEnabled,
         };
       });
 
@@ -133,6 +141,7 @@ export function getDashboardStatus(deps: GetDashboardStatusDeps, now: Date = new
           progress: liveProgress(latestRun),
           backupSetName: backupSet?.name ?? null,
           nextRunAt: next ? next.toISOString() : null,
+          scheduleEnabled: task.scheduleEnabled,
         };
       });
 

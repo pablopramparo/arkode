@@ -33,6 +33,13 @@ const RECENT_ACTIVITY_LIMIT = 15;
 const UPCOMING_LIMIT = 8;
 
 function isProblemRow(row: DashboardRow): boolean {
+  // A task the user deliberately disabled has no freshness expectation at
+  // all — it isn't running on any schedule, so a stale/missing/never-run
+  // backup for it isn't a problem. Only a Failed/Warning from an actual
+  // manual run is still worth surfacing.
+  if (!row.scheduleEnabled) {
+    return row.status === 'Failed' || row.status === 'Warning';
+  }
   // An interrupted run (update / reboot / power cut) isn't a backup failure —
   // only flag it if the last *good* backup is also missing or stale.
   if (isInterruptedRun(row.status, row.latestErrorMessage)) {

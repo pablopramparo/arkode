@@ -466,7 +466,7 @@ export function ClienteDetalle({
                 counts={{
                   tareas: unifiedTaskRows?.length ?? 0,
                   conexiones: visibleConnectionRows.length,
-                  backups: backupsTotal,
+                  backups: backupsTotal + fileBackupRows.length,
                   historial: historialRows?.length ?? 0,
                 }}
               />
