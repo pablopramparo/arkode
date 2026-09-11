@@ -70,7 +70,7 @@ export function TitleBar() {
         </button>
         <button
           type="button"
-          title="Cerrar"
+          title="Minimizar a la bandeja"
           onClick={() => win.close()}
           className="flex h-full w-11 items-center justify-center transition-colors hover:bg-[#e81123] hover:text-white"
           style={{ color: 'var(--muted)' }}

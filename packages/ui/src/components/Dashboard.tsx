@@ -11,7 +11,7 @@ import { StatusChip } from './StatusChip';
 import { StatCard } from './StatCard';
 import { ProgressBar } from './ProgressBar';
 import { isLiveProgress } from '../lib/progress';
-import { isInterruptedRun, friendlyRunError } from '../lib/runStatus';
+import { isInterruptedRun, friendlyRunError, isProblemRow } from '../lib/runStatus';
 import { ClientFilter, distinctClients } from './ClientFilter';
 import { AlertTriangleIcon, CheckCircleIcon, ClipboardIcon, ClockIcon, EyeIcon, PlayIcon, PulseIcon, UsersIcon } from './icons';
 import { primaryPillStyle } from '../lib/pillStyles';
@@ -23,33 +23,12 @@ import { SchedulerStatusBanner } from './SchedulerStatusBanner';
 import { InstallHealthBanner } from './InstallHealthBanner';
 
 const POLL_INTERVAL_MS = 20_000;
-/** A daily backup task without a fresh file past this age is worth flagging, even if the last *attempt* technically succeeded a while ago. */
-const STALE_THRESHOLD_HOURS = 26;
 /** "Backups exitosos" on the stat row counts a Success attempt within this window — otherwise a months-old Success would inflate the count meaninglessly. */
 const RECENT_SUCCESS_HOURS = 24;
 /** "Actividad reciente" is operational context only — a short glance at what just ran, not a replacement for Logs or the client's Historial. */
 const RECENT_ACTIVITY_LIMIT = 15;
 /** "Próximos backups" is a peek at what's coming, not a full agenda. */
 const UPCOMING_LIMIT = 8;
-
-function isProblemRow(row: DashboardRow): boolean {
-  // A task the user deliberately disabled has no freshness expectation at
-  // all — it isn't running on any schedule, so a stale/missing/never-run
-  // backup for it isn't a problem. Only a Failed/Warning from an actual
-  // manual run is still worth surfacing.
-  if (!row.scheduleEnabled) {
-    return row.status === 'Failed' || row.status === 'Warning';
-  }
-  // An interrupted run (update / reboot / power cut) isn't a backup failure —
-  // only flag it if the last *good* backup is also missing or stale.
-  if (isInterruptedRun(row.status, row.latestErrorMessage)) {
-    const hours = ageInHours(row.lastGoodBackupAt);
-    return hours == null || hours > STALE_THRESHOLD_HOURS;
-  }
-  if (row.status === 'Failed' || row.status === 'Warning' || row.status === 'NeverRun') return true;
-  const hours = ageInHours(row.lastGoodBackupAt);
-  return hours != null && hours > STALE_THRESHOLD_HOURS;
-}
 
 /** Order the "Necesita atención" list: hard failures first, then warnings, then never-run, then merely-stale. */
 function attentionRank(row: DashboardRow): number {

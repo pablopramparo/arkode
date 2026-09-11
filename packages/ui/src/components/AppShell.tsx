@@ -3,6 +3,7 @@ import { TitleBar } from "./TitleBar";
 import { VaultLockChip } from "./VaultLockChip";
 import { GlobalSearch } from "./GlobalSearch";
 import type { ProjectTab } from "./ClienteDetalle";
+import { useTraySync } from "../lib/useTraySync";
 import arkodeLogo from "../assets/arkode-logo-completo.png";
 
 export type Screen =
@@ -51,6 +52,11 @@ export function AppShell({
   onSelectClient?: (clientId: string, projectTab?: ProjectTab, projectItemId?: string) => void;
   children: React.ReactNode;
 }) {
+  // Mounted here (not inside Dashboard) so the tray icon/tooltip stays
+  // accurate regardless of which screen is open, or whether the window is
+  // even visible — AppShell is the one thing that's always mounted.
+  useTraySync();
+
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <TitleBar />

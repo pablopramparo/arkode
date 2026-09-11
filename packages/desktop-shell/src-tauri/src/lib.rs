@@ -1,7 +1,9 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, RunEvent};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -341,6 +343,77 @@ async fn reinstall_scheduler_service() -> Result<(), String> {
   run_elevated_engine_cli("scheduler:service-reinstall").await
 }
 
+/// A tiny UI-only preferences file, separate from engine-core's SQLite
+/// database on purpose — this is a per-machine Tauri-shell concern (does the
+/// window show on launch), not application data, so it lives under Tauri's
+/// own `app_config_dir()` rather than %PROGRAMDATA%\arkode.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct UiPrefs {
+  #[serde(default)]
+  start_minimized: bool,
+}
+
+fn ui_prefs_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+  app.path().app_config_dir().ok().map(|d| d.join("ui-prefs.json"))
+}
+
+fn read_ui_prefs(app: &tauri::AppHandle) -> UiPrefs {
+  ui_prefs_path(app)
+    .and_then(|p| std::fs::read_to_string(p).ok())
+    .and_then(|s| serde_json::from_str(&s).ok())
+    .unwrap_or_default()
+}
+
+/// Whether "Iniciar minimizado a la bandeja" is on — read directly by
+/// `setup()` (see below) to decide whether the main window shows itself on
+/// launch, before the frontend has even mounted. Also exposed to the
+/// frontend (Configuración) so it can show the toggle's current state.
+#[tauri::command]
+fn get_start_minimized(app: tauri::AppHandle) -> bool {
+  read_ui_prefs(&app).start_minimized
+}
+
+#[tauri::command]
+fn set_start_minimized(app: tauri::AppHandle, value: bool) -> Result<(), String> {
+  let path = ui_prefs_path(&app).ok_or_else(|| "No se pudo resolver la carpeta de configuración.".to_string())?;
+  if let Some(parent) = path.parent() {
+    std::fs::create_dir_all(parent).map_err(|e| format!("No se pudo crear la carpeta de configuración: {e}"))?;
+  }
+  let json = serde_json::to_string_pretty(&UiPrefs { start_minimized: value }).map_err(|e| e.to_string())?;
+  std::fs::write(path, json).map_err(|e| format!("No se pudo guardar la preferencia: {e}"))
+}
+
+/// Updates the tray icon + tooltip to reflect the dashboard's current health,
+/// as computed by the frontend (it already knows how to decide "is this row
+/// a problem" — see Dashboard.tsx's `isProblemRow`, shared via
+/// lib/runStatus.ts). Looked up by id rather than kept in managed state,
+/// since Tauri already tracks tray icons by id and this is called
+/// infrequently (once per status poll), not perf-sensitive.
+#[tauri::command]
+fn set_tray_status(app: tauri::AppHandle, has_problems: bool, tooltip: String) -> Result<(), String> {
+  let Some(tray) = app.tray_by_id("main") else {
+    return Ok(()); // Dev mode / a window not fully set up yet — not an error.
+  };
+  let icon = if has_problems {
+    tauri::include_image!("icons/tray-alert.png")
+  } else {
+    tauri::include_image!("icons/tray-ok.png")
+  };
+  tray.set_icon(Some(icon)).map_err(|e| e.to_string())?;
+  tray.set_tooltip(Some(tooltip)).map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+/// Shows, un-minimizes and focuses the main window — the one action both the
+/// tray icon's left click and its "Abrir Arkode" menu item trigger.
+fn show_main_window(app: &tauri::AppHandle) {
+  if let Some(window) = app.get_webview_window("main") {
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+  }
+}
+
 /// Pulls the OAuth token `{...}` blob out of `rclone authorize` stdout
 /// (with or without rclone's "--->" / "<---" paste markers).
 fn extract_rclone_token(stdout: &str) -> Option<String> {
@@ -515,7 +588,10 @@ pub fn run() {
       restart_scheduler_service,
       reinstall_scheduler_service,
       rclone_authorize_drive,
-      check_install_health
+      check_install_health,
+      get_start_minimized,
+      set_start_minimized,
+      set_tray_status
     ])
     // Must be the first plugin registered — it needs to intercept the app
     // launch before anything else runs. A second launch attempt is
@@ -523,11 +599,7 @@ pub fn run() {
     // existing one instead of leaving the user staring at a launch that
     // silently did nothing.
     .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-      if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-      }
+      show_main_window(app);
     }))
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_opener::init())
@@ -541,6 +613,61 @@ pub fn run() {
     .manage(EngineProcess(Mutex::new(None)))
     .manage(ApiPort(api_port_tx))
     .setup(|app| {
+      // Tray icon: a left click or "Abrir Arkode" shows the window, "Salir"
+      // is the one real way to quit (see the window-close intercept below —
+      // closing the window no longer quits the app, only hides it). Built
+      // unconditionally (dev included) so the dev workflow exercises the
+      // same tray code path as a real install, not a separate untested one.
+      let open_item = MenuItem::with_id(app, "open", "Abrir Arkode", true, None::<&str>)?;
+      let quit_item = MenuItem::with_id(app, "quit", "Salir", true, None::<&str>)?;
+      let separator = PredefinedMenuItem::separator(app)?;
+      let tray_menu = Menu::with_items(app, &[&open_item, &separator, &quit_item])?;
+      TrayIconBuilder::with_id("main")
+        .icon(tauri::include_image!("icons/tray-ok.png"))
+        .tooltip("arkode — verificando estado…")
+        .menu(&tray_menu)
+        // Windows convention: right-click shows the menu (the default), left
+        // click opens the app instead of also showing the menu.
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+          "open" => show_main_window(app),
+          "quit" => app.exit(0),
+          _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+          if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+            show_main_window(tray.app_handle());
+          }
+        })
+        .build(app)?;
+
+      // Closing the main window (the custom titlebar's × button, or
+      // Alt+F4 — both route through the same CloseRequested event, see
+      // Window::close's own doc comment) no longer quits arkode: it hides to
+      // the tray instead, same as Slack/Discord/etc. The only way to
+      // actually quit is the tray menu's "Salir" (app.exit(0) above), which
+      // never goes through this handler at all — it triggers RunEvent::Exit
+      // directly, so the sidecar-kill logic in .run()'s RunEvent::ExitRequested
+      // arm below still fires normally on a real quit.
+      if let Some(window) = app.get_webview_window("main") {
+        let window_to_hide = window.clone();
+        window.on_window_event(move |event| {
+          if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = window_to_hide.hide();
+          }
+        });
+      }
+
+      // The window starts invisible (tauri.conf.json's "visible": false) so
+      // there's no show-then-hide flash — show it now unless "Iniciar
+      // minimizado a la bandeja" is on. This applies to every launch (manual
+      // or via Windows autostart), matching the toggle's own description in
+      // Configuración, not just the autostart path.
+      if !read_ui_prefs(&app.handle()).start_minimized {
+        show_main_window(&app.handle());
+      }
+
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()

@@ -3,6 +3,7 @@ import { Button } from '@heroui/react';
 import { isTauri } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { isEnabled as isAutostartEnabled, enable as enableAutostart, disable as disableAutostart } from '@tauri-apps/plugin-autostart';
+import { getStartMinimized, setStartMinimized } from '../lib/trayClient';
 import { check as checkForUpdate, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
@@ -449,6 +450,8 @@ export function Configuracion() {
   const [toolRegistry, setToolRegistry] = useState<ToolRegistryData | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [autostartBusy, setAutostartBusy] = useState(false);
+  const [startMinimized, setStartMinimizedState] = useState<boolean | null>(null);
+  const [startMinimizedBusy, setStartMinimizedBusy] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'ready'>('idle');
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   /** The Update instance whose bytes are already downloaded (so a re-try doesn't re-download). */
@@ -471,6 +474,9 @@ export function Configuracion() {
       isAutostartEnabled()
         .then(setAutostart)
         .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      getStartMinimized()
+        .then(setStartMinimizedState)
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)));
       getVersion()
         .then(setAppVersion)
         .catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -488,6 +494,20 @@ export function Configuracion() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setAutostartBusy(false);
+    }
+  }
+
+  async function handleToggleStartMinimized() {
+    setStartMinimizedBusy(true);
+    setError(null);
+    try {
+      const next = !startMinimized;
+      await setStartMinimized(next);
+      setStartMinimizedState(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setStartMinimizedBusy(false);
     }
   }
 
@@ -691,6 +711,19 @@ export function Configuracion() {
                   Esto solo afecta si el Dashboard se abre solo al prender la PC — los backups programados corren igual
                   (los ejecuta el servicio <code>arkode-scheduler</code>, no depende de esta app).
                 </p>
+                <div className="mt-4 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
+                  <Switch
+                    checked={startMinimized ?? false}
+                    onChange={handleToggleStartMinimized}
+                    label={startMinimizedBusy ? 'Actualizando…' : 'Iniciar minimizado a la bandeja'}
+                  />
+                  <p className="mt-2 text-xs" style={{ color: 'var(--muted)' }}>
+                    Independiente de lo anterior — aplica a cualquier arranque, manual o automático. Cerrar la ventana
+                    (la ✕ de la barra de título) ya no cierra arkode: lo minimiza a la bandeja del sistema, junto al
+                    reloj de Windows. El ícono cambia de color si hay tareas con problemas, y desde ahí se puede volver
+                    a abrir la ventana o salir de la app de verdad.
+                  </p>
+                </div>
               </section>
             </>
           ) : (
