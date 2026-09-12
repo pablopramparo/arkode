@@ -7,6 +7,7 @@ use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_window_state::StateFlags;
 
 /// Tauri's `path().resolve(.., Resource)` returns a Windows extended-length
 /// ("verbatim") path, `\\?\C:\...`. That works for the OS, but it leaks into
@@ -610,6 +611,20 @@ pub fn run() {
     .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_process::init())
+    // Remembers window position/size/maximized state across launches (a
+    // real gap otherwise: Tauri doesn't do this on its own, and this app
+    // never built its own version). Deliberately excludes StateFlags::VISIBLE
+    // (and DECORATIONS/FULLSCREEN, neither used here) -- visibility is
+    // owned entirely by the "Iniciar minimizado a la bandeja" preference
+    // (see setup() below) and the tray's hide-to-close behavior; letting
+    // this plugin also decide show/hide on launch would fight that single
+    // source of truth, especially on a bare first run with no saved state
+    // yet, where it defaults to force-showing the window.
+    .plugin(
+      tauri_plugin_window_state::Builder::new()
+        .with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
+        .build(),
+    )
     .manage(EngineProcess(Mutex::new(None)))
     .manage(ApiPort(api_port_tx))
     .setup(|app| {
