@@ -40,6 +40,8 @@ export interface FileBackupTask {
   scheduleFrequency: ScheduleFrequency;
   scheduleDaysOfWeek: number[] | null;
   scheduleDayOfMonth: number | null;
+  /** 1,2,3,4,6,8,12. Only meaningful when scheduleFrequency is 'hourly'; scheduleTime is then the anchor. */
+  scheduleIntervalHours: number | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -55,6 +57,8 @@ export interface FileBackupRun {
   clientId: string;
   repositoryId: string;
   status: FileBackupRunStatus;
+  /** 'scheduled' only for runs started by the scheduler; 'manual' for "Ejecutar ahora" / CLI. */
+  trigger: 'manual' | 'scheduled';
   snapshotId: string | null;
   filesNew: number | null;
   filesChanged: number | null;

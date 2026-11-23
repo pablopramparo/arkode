@@ -1,4 +1,5 @@
 import type { FileBackupRun, FileBackupTask } from '../types.js';
+import { latestHourlySlot } from '../../scheduler/hourlySlots.js';
 
 function isSameLocalDate(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -19,8 +20,24 @@ function matchesDayOfMonth(day: number, now: Date): boolean {
  * schema was designed to match), so any behavior change made here should
  * probably be made in isTaskDue.ts too, by hand, not by re-sharing code.
  */
-export function isFileBackupTaskDue(task: FileBackupTask, now: Date, latestRun: FileBackupRun | null): boolean {
+export function isFileBackupTaskDue(
+  task: FileBackupTask,
+  now: Date,
+  latestRun: FileBackupRun | null,
+  latestScheduledRun: FileBackupRun | null = null
+): boolean {
   if (!task.isActive || !task.scheduleEnabled || !task.scheduleTime) return false;
+
+  // 'hourly' keys off the newest *scheduled* run only (a manual "Ejecutar ahora"
+  // never counts), like the DB domain. daily/weekly/monthly below keep their
+  // historical "any run today" check on `latestRun`, unchanged.
+  if (task.scheduleFrequency === 'hourly') {
+    if (task.scheduleIntervalHours == null) return false;
+    const slot = latestHourlySlot(task.scheduleTime, task.scheduleIntervalHours, now);
+    if (!slot) return false;
+    return !(latestScheduledRun && new Date(latestScheduledRun.startedAt).getTime() >= slot.getTime());
+  }
+
   if (latestRun && isSameLocalDate(new Date(latestRun.startedAt), now)) return false;
 
   if (task.scheduleFrequency === 'weekly') {

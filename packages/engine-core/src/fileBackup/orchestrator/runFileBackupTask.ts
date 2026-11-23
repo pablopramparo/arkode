@@ -34,6 +34,8 @@ export interface RunFileBackupTaskDeps {
   onUnknownHost?: (presented: { keyType: string; fingerprintSha256: string }) => Promise<boolean>;
   /** Receives live progress as `onProgress(run.id, progress)` — see RunProgress. Optional; omitting it makes every reportProgress call a no-op. */
   onProgress?: ProgressSink;
+  /** How this run was started; recorded on the run row. Defaults to 'manual'. runFileBackupDueTasks forces 'scheduled'. */
+  runTrigger?: 'manual' | 'scheduled';
 }
 
 export interface RunFileBackupTaskResult {
@@ -188,6 +190,7 @@ export async function runFileBackupTask(task: FileBackupTask, deps: RunFileBacku
     clientId: task.clientId,
     repositoryId: task.repositoryId,
     pid: process.pid,
+    trigger: deps.runTrigger,
   });
 
   const logger = createFileBackupRunLogger(run.id, deps.fileBackupLogEventsRepo);

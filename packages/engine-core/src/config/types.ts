@@ -61,6 +61,8 @@ export interface ExportedTask {
   scheduleFrequency: ScheduleFrequency;
   scheduleDaysOfWeek: number[] | null;
   scheduleDayOfMonth: number | null;
+  /** Absent in exports made before the 'hourly' frequency existed. */
+  scheduleIntervalHours?: number | null;
   retentionCount: number | null;
   retentionDays: number | null;
 }

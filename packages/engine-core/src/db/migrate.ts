@@ -29,10 +29,32 @@ export function runMigrations(db: Database, migrationsDir: string = migrationsSo
     if (applied.has(file)) continue;
 
     const sql = readFileSync(join(migrationsDir, file), 'utf8');
-    const applyMigration = db.transaction(() => {
-      db.exec(sql);
-      db.prepare('INSERT INTO schema_migrations (name) VALUES (?)').run(file);
-    });
-    applyMigration();
+
+    // Table-rebuild migrations (the 12-step procedure) start with
+    // `PRAGMA foreign_keys=OFF`, but SQLite ignores that pragma inside a
+    // transaction — and every migration runs in one. With enforcement still
+    // ON, `DROP TABLE <parent>` does an implicit DELETE that fires ON DELETE
+    // CASCADE on child tables, silently wiping e.g. every backup_runs row when
+    // backup_tasks is rebuilt. So for those files, switch enforcement off
+    // here, OUTSIDE the transaction, and restore it afterwards, verifying
+    // integrity before committing.
+    const rebuildsTables = /PRAGMA\s+foreign_keys\s*=\s*OFF/i.test(sql);
+    const fkWasOn = rebuildsTables && Number(db.pragma('foreign_keys', { simple: true })) === 1;
+    if (fkWasOn) db.pragma('foreign_keys = OFF');
+    try {
+      const applyMigration = db.transaction(() => {
+        db.exec(sql);
+        if (fkWasOn) {
+          const violations = db.pragma('foreign_key_check') as unknown[];
+          if (violations.length > 0) {
+            throw new Error(`Migration ${file} left ${violations.length} foreign-key violation(s); rolled back.`);
+          }
+        }
+        db.prepare('INSERT INTO schema_migrations (name) VALUES (?)').run(file);
+      });
+      applyMigration();
+    } finally {
+      if (fkWasOn) db.pragma('foreign_keys = ON');
+    }
   }
 }

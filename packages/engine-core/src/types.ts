@@ -1,7 +1,10 @@
 export type BackupStrategyKind = 'fetch_existing' | 'remote_dump' | 'direct_dump';
 export type TransportType = 'sftp' | 'ssh' | 'ftp';
 export type DbEngine = 'postgres' | 'mysql' | 'mariadb' | 'unknown';
-export type ScheduleFrequency = 'daily' | 'weekly' | 'monthly';
+export type ScheduleFrequency = 'daily' | 'weekly' | 'monthly' | 'hourly';
+
+/** Valid `scheduleIntervalHours` values for 'hourly' — divisors of 24, so slots tile a day evenly. */
+export const HOURLY_INTERVAL_CHOICES = [1, 2, 3, 4, 6, 8, 12] as const;
 /**
  * 'mariadb' is declared but not implemented — MySQL and MariaDB are
  * wire-compatible but not interchangeable at the dump-tool level
@@ -135,6 +138,8 @@ export interface BackupTask {
   scheduleDaysOfWeek: number[] | null;
   /** 1-31. Only meaningful when scheduleFrequency is 'monthly'. */
   scheduleDayOfMonth: number | null;
+  /** 1,2,3,4,6,8,12. Only meaningful when scheduleFrequency is 'hourly'; scheduleTime is then the anchor. */
+  scheduleIntervalHours: number | null;
   retentionCount: number | null;
   retentionDays: number | null;
   isActive: boolean;

@@ -1,3 +1,5 @@
+import { HOURLY_INTERVAL_CHOICES } from '../../types.js';
+import { isValidIntervalHours } from '../../scheduler/hourlySlots.js';
 import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { BackupTask, DbEngine, RemoteDumpExecMode, ScheduleFrequency } from '../../types.js';
@@ -27,6 +29,7 @@ interface BackupTaskRow {
   schedule_frequency: string;
   schedule_days_of_week: string | null;
   schedule_day_of_month: number | null;
+  schedule_interval_hours: number | null;
   retention_count: number | null;
   retention_days: number | null;
   is_active: number;
@@ -65,6 +68,7 @@ function toDomain(row: BackupTaskRow): BackupTask {
     scheduleFrequency: row.schedule_frequency as ScheduleFrequency,
     scheduleDaysOfWeek: parseDaysOfWeek(row.schedule_days_of_week),
     scheduleDayOfMonth: row.schedule_day_of_month,
+    scheduleIntervalHours: row.schedule_interval_hours,
     retentionCount: row.retention_count,
     retentionDays: row.retention_days,
     isActive: row.is_active === 1,
@@ -133,6 +137,8 @@ export interface SetScheduleInput {
   scheduleDaysOfWeek?: number[] | null;
   /** 1-31. Required when the resulting frequency is 'monthly'; ignored otherwise. */
   scheduleDayOfMonth?: number | null;
+  /** Required when the resulting frequency is 'hourly': one of 1,2,3,4,6,8,12 (divisors of 24). scheduleTime is then the anchor. */
+  scheduleIntervalHours?: number | null;
 }
 
 /**
@@ -226,7 +232,8 @@ export function createTasksRepo(
     `UPDATE backup_tasks
      SET schedule_time = @scheduleTime, schedule_enabled = @scheduleEnabled,
          schedule_frequency = @scheduleFrequency, schedule_days_of_week = @scheduleDaysOfWeek,
-         schedule_day_of_month = @scheduleDayOfMonth, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         schedule_day_of_month = @scheduleDayOfMonth,
+         schedule_interval_hours = @scheduleIntervalHours, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = @taskId`
   );
   const updateStmt = db.prepare(
@@ -474,6 +481,7 @@ export function createTasksRepo(
 
       let daysOfWeek: number[] | null = null;
       let dayOfMonth: number | null = null;
+      let intervalHours: number | null = null;
 
       if (frequency === 'weekly') {
         daysOfWeek = input.scheduleDaysOfWeek !== undefined ? input.scheduleDaysOfWeek : parseDaysOfWeek(existing.schedule_days_of_week);
@@ -488,6 +496,11 @@ export function createTasksRepo(
         if (dayOfMonth == null || !Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
           throw new Error('Monthly schedules require scheduleDayOfMonth between 1 and 31.');
         }
+      } else if (frequency === 'hourly') {
+        intervalHours = input.scheduleIntervalHours !== undefined ? input.scheduleIntervalHours : existing.schedule_interval_hours;
+        if (!isValidIntervalHours(intervalHours)) {
+          throw new Error(`Hourly schedules require scheduleIntervalHours to be one of ${HOURLY_INTERVAL_CHOICES.join(', ')} (divisors of 24).`);
+        }
       }
 
       setScheduleStmt.run({
@@ -497,6 +510,7 @@ export function createTasksRepo(
         scheduleFrequency: frequency,
         scheduleDaysOfWeek: daysOfWeek ? daysOfWeek.join(',') : null,
         scheduleDayOfMonth: dayOfMonth,
+        scheduleIntervalHours: intervalHours,
       });
       const row = getByIdStmt.get(taskId);
       if (!row) throw new Error(`Failed to read back task ${taskId} after updating its schedule.`);

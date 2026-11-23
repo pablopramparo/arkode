@@ -38,9 +38,10 @@ export interface FileBackupTask {
   retentionDays: number | null;
   scheduleTime: string | null;
   scheduleEnabled: boolean;
-  scheduleFrequency: 'daily' | 'weekly' | 'monthly';
+  scheduleFrequency: 'daily' | 'weekly' | 'monthly' | 'hourly';
   scheduleDaysOfWeek: number[] | null;
   scheduleDayOfMonth: number | null;
+  scheduleIntervalHours: number | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -163,9 +164,10 @@ export interface CreateFileBackupTaskInput {
   /** Optional inline schedule — applied right after creation, server-side. */
   scheduleTime?: string | null;
   scheduleEnabled?: boolean;
-  scheduleFrequency?: 'daily' | 'weekly' | 'monthly';
+  scheduleFrequency?: 'daily' | 'weekly' | 'monthly' | 'hourly';
   scheduleDaysOfWeek?: number[] | null;
   scheduleDayOfMonth?: number | null;
+  scheduleIntervalHours?: number | null;
 }
 
 export async function createFileBackupTask(input: CreateFileBackupTaskInput): Promise<FileBackupTask> {
@@ -227,9 +229,10 @@ export async function testFileBackupTaskConnection(id: string, trustHost?: boole
 export interface SetFileBackupScheduleInput {
   scheduleTime: string | null;
   scheduleEnabled: boolean;
-  scheduleFrequency?: 'daily' | 'weekly' | 'monthly';
+  scheduleFrequency?: 'daily' | 'weekly' | 'monthly' | 'hourly';
   scheduleDaysOfWeek?: number[] | null;
   scheduleDayOfMonth?: number | null;
+  scheduleIntervalHours?: number | null;
   disable?: boolean;
 }
 

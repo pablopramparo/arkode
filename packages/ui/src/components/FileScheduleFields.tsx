@@ -1,7 +1,7 @@
-import { Field, inputStyle } from './TaskCreateWizard';
+import { Field, inputStyle, HOURLY_INTERVAL_OPTIONS, hourlyPreview } from './TaskCreateWizard';
 import { primaryPillStyle } from '../lib/pillStyles';
 
-export type ScheduleFrequency = 'daily' | 'weekly' | 'monthly';
+export type ScheduleFrequency = 'daily' | 'weekly' | 'monthly' | 'hourly';
 
 export interface FileScheduleValue {
   time: string;
@@ -9,6 +9,8 @@ export interface FileScheduleValue {
   frequency: ScheduleFrequency;
   daysOfWeek: number[];
   dayOfMonth: string;
+  /** 'Cada N horas' interval as a string; only used when frequency is 'hourly'. */
+  intervalHours: string;
 }
 
 export const EMPTY_FILE_SCHEDULE: FileScheduleValue = {
@@ -17,9 +19,10 @@ export const EMPTY_FILE_SCHEDULE: FileScheduleValue = {
   frequency: 'daily',
   daysOfWeek: [],
   dayOfMonth: '',
+  intervalHours: '6',
 };
 
-const FREQUENCY_LABEL: Record<ScheduleFrequency, string> = { daily: 'Diario', weekly: 'Semanal', monthly: 'Mensual' };
+const FREQUENCY_LABEL: Record<ScheduleFrequency, string> = { daily: 'Diario', weekly: 'Semanal', monthly: 'Mensual', hourly: 'Cada N horas' };
 const WEEKDAY_LABEL: { value: number; label: string }[] = [
   { value: 1, label: 'Lun' },
   { value: 2, label: 'Mar' },
@@ -37,6 +40,7 @@ function toggleDay(days: number[], day: number): number[] {
 /** True when the schedule is either unset (no time) or internally consistent. */
 export function isFileScheduleValid(v: FileScheduleValue): boolean {
   if (!v.time) return true;
+  if (v.frequency === 'hourly') return HOURLY_INTERVAL_OPTIONS.includes(Number(v.intervalHours));
   if (v.frequency === 'weekly') return v.daysOfWeek.length > 0;
   if (v.frequency === 'monthly') {
     const n = Number(v.dayOfMonth);
@@ -58,7 +62,7 @@ export function FileScheduleFields({
   return (
     <>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Hora">
+        <Field label={value.frequency === 'hourly' ? 'Hora ancla' : 'Hora'}>
           <input style={inputStyle} type="time" value={value.time} onChange={(e) => onChange({ time: e.target.value })} />
         </Field>
         <label className="flex items-end gap-2 pb-2 text-sm" style={{ color: 'var(--muted)' }}>
@@ -87,6 +91,21 @@ export function FileScheduleFields({
           ))}
         </div>
       </Field>
+
+      {value.frequency === 'hourly' && (
+        <Field label="Repetir cada *">
+          <select style={inputStyle} value={value.intervalHours} onChange={(e) => onChange({ intervalHours: e.target.value })}>
+            {HOURLY_INTERVAL_OPTIONS.map((h) => (
+              <option key={h} value={String(h)}>
+                {h === 1 ? '1 hora' : `${h} horas`}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs" style={{ color: 'var(--muted)' }}>
+            {hourlyPreview(value.time, Number(value.intervalHours))}
+          </p>
+        </Field>
+      )}
 
       {value.frequency === 'weekly' && (
         <Field label="Días de la semana *">

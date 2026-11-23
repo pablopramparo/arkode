@@ -25,13 +25,14 @@ export async function runFileBackupDueTasks(
   const results: FileBackupRunDueResult[] = [];
   for (const task of tasks) {
     const latestRun = deps.fileBackupRunsRepo.getLatestByTask(task.id);
-    if (!isFileBackupTaskDue(task, now, latestRun)) {
+    const latestScheduledRun = deps.fileBackupRunsRepo.getLatestScheduledByTask(task.id);
+    if (!isFileBackupTaskDue(task, now, latestRun, latestScheduledRun)) {
       results.push({ taskId: task.id, taskName: task.name, ran: false });
       continue;
     }
 
     try {
-      const result = await runFileBackupTask(task, deps);
+      const result = await runFileBackupTask(task, { ...deps, runTrigger: 'scheduled' });
       results.push({ taskId: task.id, taskName: task.name, ran: true, result });
     } catch (err) {
       results.push({

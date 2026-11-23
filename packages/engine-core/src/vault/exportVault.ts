@@ -713,6 +713,7 @@ export function importVaultBuffer(deps: VaultBackupDeps, buf: Buffer, password: 
               scheduleFrequency: task.scheduleFrequency,
               scheduleDaysOfWeek: task.scheduleDaysOfWeek,
               scheduleDayOfMonth: task.scheduleDayOfMonth,
+              scheduleIntervalHours: task.scheduleIntervalHours ?? null,
             });
           }
           if (!task.isActive) deps.tasksRepo.deactivate(createdId);
@@ -780,6 +781,7 @@ export function importVaultBuffer(deps: VaultBackupDeps, buf: Buffer, password: 
               scheduleFrequency: ft.scheduleFrequency,
               scheduleDaysOfWeek: ft.scheduleDaysOfWeek,
               scheduleDayOfMonth: ft.scheduleDayOfMonth,
+              scheduleIntervalHours: ft.scheduleIntervalHours ?? null,
             });
           }
           if (!ft.isActive) deps.fileBackupTasksRepo.deactivate(createdId);

@@ -555,14 +555,15 @@ program
 program
   .command('task:set-schedule')
   .description(
-    "Set, change, or disable a task's schedule (daily by default, or --frequency weekly/monthly). Registering it with Windows Task Scheduler is a separate step (scheduler:install)."
+    "Set, change, or disable a task's schedule (daily by default, or --frequency weekly/monthly/hourly). Registering it with Windows Task Scheduler is a separate step (scheduler:install)."
   )
   .argument('<taskId>')
   .option('--time <HH:MM>', '24h local time; required unless only --disable is given')
   .option('--disable', 'disable scheduling without clearing the configured time', false)
-  .option('--frequency <daily|weekly|monthly>', 'defaults to the task\'s current frequency, or "daily" for a brand-new schedule')
+  .option('--frequency <daily|weekly|monthly|hourly>', 'defaults to the task\'s current frequency, or "daily" for a brand-new schedule')
   .option('--days-of-week <list>', 'comma-separated 0 (Sunday) through 6 (Saturday), e.g. "1,3,5" — required when --frequency weekly')
   .option('--day-of-month <n>', '1-31 — required when --frequency monthly')
+  .option('--interval-hours <n>', 'one of 1,2,3,4,6,8,12 — required when --frequency hourly; --time is then the anchor')
   .option('--force', 'for direct_dump tasks, enable the schedule even if the compatibility gate fails', false)
   .action(async (taskId: string, opts) => {
     const ctx = buildContext();
@@ -593,6 +594,7 @@ program
       scheduleFrequency: opts.frequency,
       scheduleDaysOfWeek: opts.daysOfWeek ? opts.daysOfWeek.split(',').map(Number) : undefined,
       scheduleDayOfMonth: opts.dayOfMonth ? Number(opts.dayOfMonth) : undefined,
+      scheduleIntervalHours: opts.intervalHours ? Number(opts.intervalHours) : undefined,
     });
     console.log(JSON.stringify(updated, null, 2));
   });
@@ -2618,9 +2620,10 @@ program
   .argument('<taskId>')
   .option('--time <HH:MM>')
   .option('--disable', 'disable scheduling without clearing the configured time', false)
-  .option('--frequency <daily|weekly|monthly>')
+  .option('--frequency <daily|weekly|monthly|hourly>')
   .option('--days-of-week <list>', 'comma-separated 0 (Sunday) through 6 (Saturday)')
   .option('--day-of-month <n>', '1-31')
+  .option('--interval-hours <n>', 'one of 1,2,3,4,6,8,12 — required when --frequency hourly; --time is then the anchor')
   .action((taskId: string, opts) => {
     const ctx = buildContext();
     const task = ctx.fileBackupTasksRepo.getById(taskId);
@@ -2641,6 +2644,7 @@ program
         scheduleFrequency: opts.frequency,
         scheduleDaysOfWeek: opts.daysOfWeek ? opts.daysOfWeek.split(',').map(Number) : undefined,
         scheduleDayOfMonth: opts.dayOfMonth ? Number(opts.dayOfMonth) : undefined,
+        scheduleIntervalHours: opts.intervalHours ? Number(opts.intervalHours) : undefined,
       });
       console.log(JSON.stringify(updated, null, 2));
     } catch (err) {
@@ -4781,6 +4785,7 @@ program
                 scheduleFrequency: body.scheduleFrequency,
                 scheduleDaysOfWeek: body.scheduleDaysOfWeek,
                 scheduleDayOfMonth: body.scheduleDayOfMonth,
+                scheduleIntervalHours: body.scheduleIntervalHours,
               });
             }
           }
@@ -4831,6 +4836,7 @@ program
             scheduleFrequency: body.scheduleFrequency,
             scheduleDaysOfWeek: body.scheduleDaysOfWeek,
             scheduleDayOfMonth: body.scheduleDayOfMonth,
+            scheduleIntervalHours: body.scheduleIntervalHours,
           });
           sendJson(res, 200, task);
         } catch (err) {
@@ -5013,6 +5019,7 @@ program
               scheduleFrequency: body.scheduleFrequency,
               scheduleDaysOfWeek: body.scheduleDaysOfWeek,
               scheduleDayOfMonth: body.scheduleDayOfMonth,
+              scheduleIntervalHours: body.scheduleIntervalHours,
             });
           }
           const created = ctx.fileBackupTasksRepo.getById(task.id);
@@ -5088,6 +5095,7 @@ program
             scheduleFrequency: body.scheduleFrequency,
             scheduleDaysOfWeek: body.scheduleDaysOfWeek,
             scheduleDayOfMonth: body.scheduleDayOfMonth,
+            scheduleIntervalHours: body.scheduleIntervalHours,
           });
           sendJson(res, 200, task);
         } catch (err) {

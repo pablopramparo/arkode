@@ -9,6 +9,7 @@ interface FileBackupRunRow {
   client_id: string;
   repository_id: string;
   status: string;
+  trigger: string;
   snapshot_id: string | null;
   files_new: number | null;
   files_changed: number | null;
@@ -48,6 +49,7 @@ function toDomain(row: FileBackupRunRow): FileBackupRun {
     clientId: row.client_id,
     repositoryId: row.repository_id,
     status: row.status as FileBackupRunStatus,
+    trigger: row.trigger === 'scheduled' ? 'scheduled' : 'manual',
     snapshotId: row.snapshot_id,
     filesNew: row.files_new,
     filesChanged: row.files_changed,
@@ -77,6 +79,7 @@ export interface CreateFileBackupRunInput {
   clientId: string;
   repositoryId: string;
   pid: number;
+  trigger?: 'manual' | 'scheduled';
 }
 
 export interface RecordBackupSummaryInput {
@@ -104,6 +107,8 @@ export interface FileBackupRunsRepo {
   markFinished(runId: string, status: 'Success' | 'Warning' | 'Failed', opts?: { errorMessage?: string; errorStack?: string }): void;
   getById(runId: string): FileBackupRun | null;
   getLatestByTask(taskId: string): FileBackupRun | null;
+  /** Newest run with trigger = 'scheduled' - deliberately blind to manual runs (hourly due-check). */
+  getLatestScheduledByTask(taskId: string): FileBackupRun | null;
   /** Most recent Success run that actually produced a snapshot — the baseline `restic diff` compares the next run against. */
   getLatestSuccessfulByTask(taskId: string): FileBackupRun | null;
   /** In-progress runs (Running/Producing/Validating) for every task sharing this repository — what the repository-level lock checks. */
@@ -113,8 +118,8 @@ export interface FileBackupRunsRepo {
 
 export function createFileBackupRunsRepo(db: Database): FileBackupRunsRepo {
   const insertStmt = db.prepare(
-    `INSERT INTO file_backup_runs (id, task_id, client_id, repository_id, status, started_at, pid)
-     VALUES (@id, @taskId, @clientId, @repositoryId, 'Pending', strftime('%Y-%m-%dT%H:%M:%fZ','now'), @pid)`
+    `INSERT INTO file_backup_runs (id, task_id, client_id, repository_id, status, trigger, started_at, pid)
+     VALUES (@id, @taskId, @clientId, @repositoryId, 'Pending', @trigger, strftime('%Y-%m-%dT%H:%M:%fZ','now'), @pid)`
   );
   const getStmt = db.prepare<[string], FileBackupRunRow>('SELECT * FROM file_backup_runs WHERE id = ?');
   const setStatusStmt = db.prepare('UPDATE file_backup_runs SET status = ? WHERE id = ?');
@@ -143,6 +148,9 @@ export function createFileBackupRunsRepo(db: Database): FileBackupRunsRepo {
   const getLatestByTaskStmt = db.prepare<[string], FileBackupRunRow>(
     'SELECT * FROM file_backup_runs WHERE task_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1'
   );
+  const getLatestScheduledByTaskStmt = db.prepare<[string], FileBackupRunRow>(
+    `SELECT * FROM file_backup_runs WHERE task_id = ? AND trigger = 'scheduled' ORDER BY started_at DESC, rowid DESC LIMIT 1`
+  );
   const getLatestSuccessfulByTaskStmt = db.prepare<[string], FileBackupRunRow>(
     `SELECT * FROM file_backup_runs WHERE task_id = ? AND status = 'Success' AND snapshot_id IS NOT NULL
      ORDER BY started_at DESC, rowid DESC LIMIT 1`
@@ -161,7 +169,7 @@ export function createFileBackupRunsRepo(db: Database): FileBackupRunsRepo {
   return {
     create(input) {
       const id = randomUUID();
-      insertStmt.run({ id, taskId: input.taskId, clientId: input.clientId, repositoryId: input.repositoryId, pid: input.pid });
+      insertStmt.run({ id, taskId: input.taskId, clientId: input.clientId, repositoryId: input.repositoryId, pid: input.pid, trigger: input.trigger ?? 'manual' });
       setStatusStmt.run('Running', id);
       const row = getStmt.get(id);
       if (!row) throw new Error(`Failed to read back created file_backup_run ${id}`);
@@ -210,6 +218,11 @@ export function createFileBackupRunsRepo(db: Database): FileBackupRunsRepo {
 
     getLatestByTask(taskId) {
       const row = getLatestByTaskStmt.get(taskId);
+      return row ? toDomain(row) : null;
+    },
+
+    getLatestScheduledByTask(taskId) {
+      const row = getLatestScheduledByTaskStmt.get(taskId);
       return row ? toDomain(row) : null;
     },
 

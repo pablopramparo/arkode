@@ -1,4 +1,5 @@
 import type { BackupRun, BackupTask } from '../types.js';
+import { latestHourlySlot } from './hourlySlots.js';
 
 function isSameLocalDate(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -44,6 +45,18 @@ function matchesDayOfMonth(day: number, now: Date): boolean {
  */
 export function isTaskDue(task: BackupTask, now: Date, latestScheduledRun: BackupRun | null): boolean {
   if (!task.isActive || !task.scheduleEnabled || !task.scheduleTime) return false;
+
+  // 'hourly' ("cada N horas"): due when the latest slot (<= now) has no scheduled
+  // run started at or after it. Missed slots collapse into this one - a PC that
+  // was off for 3 slots runs once, not three times. Manual runs never count
+  // (latestScheduledRun is trigger='scheduled' only).
+  if (task.scheduleFrequency === 'hourly') {
+    if (task.scheduleIntervalHours == null) return false;
+    const slot = latestHourlySlot(task.scheduleTime, task.scheduleIntervalHours, now);
+    if (!slot) return false;
+    return !(latestScheduledRun && new Date(latestScheduledRun.startedAt).getTime() >= slot.getTime());
+  }
+
   if (latestScheduledRun && isSameLocalDate(new Date(latestScheduledRun.startedAt), now)) return false;
 
   if (task.scheduleFrequency === 'weekly') {

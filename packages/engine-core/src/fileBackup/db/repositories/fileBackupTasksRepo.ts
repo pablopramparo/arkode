@@ -1,6 +1,7 @@
 import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import type { ScheduleFrequency } from '../../../types.js';
+import { HOURLY_INTERVAL_CHOICES, type ScheduleFrequency } from '../../../types.js';
+import { isValidIntervalHours } from '../../../scheduler/hourlySlots.js';
 import type { TransportsRepo } from '../../../db/repositories/transportsRepo.js';
 import type { FileBackupTask } from '../../types.js';
 
@@ -20,6 +21,7 @@ interface FileBackupTaskRow {
   schedule_frequency: string;
   schedule_days_of_week: string | null;
   schedule_day_of_month: number | null;
+  schedule_interval_hours: number | null;
   is_active: number;
   created_at: string;
   updated_at: string;
@@ -49,6 +51,7 @@ function toDomain(row: FileBackupTaskRow): FileBackupTask {
     scheduleFrequency: row.schedule_frequency as ScheduleFrequency,
     scheduleDaysOfWeek: parseDaysOfWeek(row.schedule_days_of_week),
     scheduleDayOfMonth: row.schedule_day_of_month,
+    scheduleIntervalHours: row.schedule_interval_hours,
     isActive: row.is_active === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -87,6 +90,8 @@ export interface SetFileBackupScheduleInput {
   scheduleFrequency?: ScheduleFrequency;
   scheduleDaysOfWeek?: number[] | null;
   scheduleDayOfMonth?: number | null;
+  /** Required when the resulting frequency is 'hourly': one of 1,2,3,4,6,8,12 (divisors of 24). scheduleTime is then the anchor. */
+  scheduleIntervalHours?: number | null;
 }
 
 /**
@@ -160,7 +165,8 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
     `UPDATE file_backup_tasks
      SET schedule_time = @scheduleTime, schedule_enabled = @scheduleEnabled,
          schedule_frequency = @scheduleFrequency, schedule_days_of_week = @scheduleDaysOfWeek,
-         schedule_day_of_month = @scheduleDayOfMonth, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         schedule_day_of_month = @scheduleDayOfMonth,
+         schedule_interval_hours = @scheduleIntervalHours, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = @taskId`
   );
   const updateStmt = db.prepare(
@@ -325,6 +331,7 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
 
       let daysOfWeek: number[] | null = null;
       let dayOfMonth: number | null = null;
+      let intervalHours: number | null = null;
 
       if (frequency === 'weekly') {
         daysOfWeek = input.scheduleDaysOfWeek !== undefined ? input.scheduleDaysOfWeek : parseDaysOfWeek(existing.schedule_days_of_week);
@@ -339,6 +346,11 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
         if (dayOfMonth == null || !Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
           throw new Error('Monthly schedules require scheduleDayOfMonth between 1 and 31.');
         }
+      } else if (frequency === 'hourly') {
+        intervalHours = input.scheduleIntervalHours !== undefined ? input.scheduleIntervalHours : existing.schedule_interval_hours;
+        if (!isValidIntervalHours(intervalHours)) {
+          throw new Error(`Hourly schedules require scheduleIntervalHours to be one of ${HOURLY_INTERVAL_CHOICES.join(', ')} (divisors of 24).`);
+        }
       }
 
       setScheduleStmt.run({
@@ -348,6 +360,7 @@ export function createFileBackupTasksRepo(db: Database, transportsRepo: Transpor
         scheduleFrequency: frequency,
         scheduleDaysOfWeek: daysOfWeek ? daysOfWeek.join(',') : null,
         scheduleDayOfMonth: dayOfMonth,
+        scheduleIntervalHours: intervalHours,
       });
       const row = getByIdStmt.get(taskId);
       if (!row) throw new Error(`Failed to read back file_backup_task ${taskId} after updating its schedule.`);

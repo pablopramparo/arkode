@@ -37,6 +37,7 @@ export function FileTaskEditModal({
     frequency: task.scheduleFrequency,
     daysOfWeek: task.scheduleDaysOfWeek ?? [],
     dayOfMonth: task.scheduleDayOfMonth != null ? String(task.scheduleDayOfMonth) : '',
+    intervalHours: task.scheduleIntervalHours != null ? String(task.scheduleIntervalHours) : '6',
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +71,7 @@ export function FileTaskEditModal({
         scheduleFrequency: schedule.frequency,
         scheduleDaysOfWeek: schedule.frequency === 'weekly' ? schedule.daysOfWeek : undefined,
         scheduleDayOfMonth: schedule.frequency === 'monthly' ? Number(schedule.dayOfMonth) : undefined,
+        scheduleIntervalHours: schedule.frequency === 'hourly' ? Number(schedule.intervalHours) : undefined,
         disable: clearing,
       });
       onSaved();

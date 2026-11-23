@@ -8,6 +8,7 @@ export interface ScheduleLike {
   scheduleFrequency: ScheduleFrequency;
   scheduleDaysOfWeek: number[] | null;
   scheduleDayOfMonth: number | null;
+  scheduleIntervalHours?: number | null;
 }
 
 /** "03:00 · Diario", "03:00 · Lun, Mié, Vie", "03:00 · Día 15", each with " (deshabilitado)" appended when disabled — "Sin programar" if there's no time at all. */
@@ -18,6 +19,8 @@ export function formatSchedule(task: ScheduleLike): string {
     frequencyPart = task.scheduleDaysOfWeek.map((d) => WEEKDAY_ABBR[d]).join(', ');
   } else if (task.scheduleFrequency === 'monthly' && task.scheduleDayOfMonth != null) {
     frequencyPart = `Día ${task.scheduleDayOfMonth}`;
+  } else if (task.scheduleFrequency === 'hourly' && task.scheduleIntervalHours) {
+    frequencyPart = `Cada ${task.scheduleIntervalHours} h`;
   } else {
     frequencyPart = 'Diario';
   }

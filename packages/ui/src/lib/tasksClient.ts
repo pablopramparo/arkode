@@ -45,6 +45,7 @@ export interface TaskInput {
   scheduleFrequency?: ScheduleFrequency;
   scheduleDaysOfWeek?: number[] | null;
   scheduleDayOfMonth?: number | null;
+  scheduleIntervalHours?: number | null;
   /** Skip the direct_dump compatibility gate and apply the schedule anyway — see ScheduleCompatibilityError. */
   force?: boolean;
   /** Optional — a pure visual/reporting label grouping this task with others. */
@@ -125,6 +126,7 @@ export interface SetTaskScheduleInput {
   scheduleFrequency?: ScheduleFrequency;
   scheduleDaysOfWeek?: number[] | null;
   scheduleDayOfMonth?: number | null;
+  scheduleIntervalHours?: number | null;
   /** Skip the direct_dump compatibility gate and apply the schedule anyway. */
   force?: boolean;
 }

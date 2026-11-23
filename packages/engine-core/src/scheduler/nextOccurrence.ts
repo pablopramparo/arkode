@@ -1,4 +1,5 @@
 import type { ScheduleFrequency } from '../types.js';
+import { nextHourlySlot } from './hourlySlots.js';
 
 /**
  * The subset of schedule fields both `backup_tasks` and `file_backup_tasks`
@@ -16,6 +17,7 @@ export interface ScheduleShape {
   scheduleFrequency: ScheduleFrequency;
   scheduleDaysOfWeek: number[] | null;
   scheduleDayOfMonth: number | null;
+  scheduleIntervalHours?: number | null;
 }
 
 function lastDayOfMonth(d: Date): number {
@@ -49,6 +51,10 @@ function dayMatchesFrequency(schedule: ScheduleShape, d: Date): boolean {
  */
 export function nextScheduledRunAt(schedule: ScheduleShape, now: Date, alreadyRanToday: boolean): Date | null {
   if (!schedule.scheduleEnabled || !schedule.scheduleTime) return null;
+  if (schedule.scheduleFrequency === 'hourly') {
+    // Next slot strictly after now; `alreadyRanToday` is irrelevant (an overdue slot is "needs attention", not "upcoming").
+    return schedule.scheduleIntervalHours ? nextHourlySlot(schedule.scheduleTime, schedule.scheduleIntervalHours, now) : null;
+  }
   const [hours, minutes] = schedule.scheduleTime.split(':').map(Number);
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
   if (schedule.scheduleFrequency === 'weekly' && (!schedule.scheduleDaysOfWeek || schedule.scheduleDaysOfWeek.length === 0)) {

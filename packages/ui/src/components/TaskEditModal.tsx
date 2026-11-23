@@ -32,6 +32,7 @@ function taskToFormValues(task: TaskRow): FormValues {
     scheduleFrequency: task.scheduleFrequency,
     scheduleDaysOfWeek: task.scheduleDaysOfWeek ?? [],
     scheduleDayOfMonth: task.scheduleDayOfMonth != null ? String(task.scheduleDayOfMonth) : '',
+    scheduleIntervalHours: task.scheduleIntervalHours != null ? String(task.scheduleIntervalHours) : '6',
     backupSetId: task.backupSetId ?? '',
   };
 }
@@ -292,6 +293,7 @@ export function TaskEditModal({ task, onClose, onSaved }: { task: TaskRow; onClo
         scheduleFrequency: form.scheduleFrequency,
         scheduleDaysOfWeek: form.scheduleFrequency === 'weekly' ? form.scheduleDaysOfWeek : undefined,
         scheduleDayOfMonth: form.scheduleFrequency === 'monthly' ? Number(form.scheduleDayOfMonth) : undefined,
+        scheduleIntervalHours: form.scheduleFrequency === 'hourly' ? Number(form.scheduleIntervalHours) : undefined,
         force,
       });
       setCompatibilityBlock(null);

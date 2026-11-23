@@ -62,6 +62,8 @@ export interface FormValues {
   scheduleDaysOfWeek: number[];
   /** 1-31, as a string for the number input; '' means unset. */
   scheduleDayOfMonth: string;
+  /** 'Cada N horas' interval, as a string for the <select>; only used when scheduleFrequency is 'hourly'. */
+  scheduleIntervalHours: string;
   /** Optional — a pure visual/reporting label grouping this task with others. '' means unassigned. */
   backupSetId: string;
 }
@@ -101,6 +103,7 @@ export const EMPTY_FORM: FormValues = {
   scheduleFrequency: 'daily',
   scheduleDaysOfWeek: [],
   scheduleDayOfMonth: '',
+  scheduleIntervalHours: '6',
   backupSetId: '',
 };
 
@@ -427,7 +430,10 @@ const FREQUENCY_LABEL: Record<ScheduleFrequency, string> = {
   daily: 'Diario',
   weekly: 'Semanal',
   monthly: 'Mensual',
+  hourly: 'Cada N horas',
 };
+
+export const HOURLY_INTERVAL_OPTIONS = [1, 2, 3, 4, 6, 8, 12];
 
 const WEEKDAY_LABEL: { value: number; label: string }[] = [
   { value: 1, label: 'Lun' },
@@ -439,6 +445,19 @@ const WEEKDAY_LABEL: { value: number; label: string }[] = [
   { value: 0, label: 'Dom' },
 ];
 
+/** "Turnos: 03:00, 09:00, 15:00, 21:00" — the day's slots for an anchor + interval (mirrors engine-core's hourlySlots). */
+export function hourlyPreview(anchor: string, intervalHours: number): string {
+  const [h, m] = anchor.split(':').map(Number);
+  if (!anchor || !Number.isFinite(h) || !Number.isFinite(m) || !HOURLY_INTERVAL_OPTIONS.includes(intervalHours)) return '';
+  const step = intervalHours * 60;
+  const offset = (((h * 60 + m) % step) + step) % step;
+  const slots: string[] = [];
+  for (let min = offset; min < 24 * 60; min += step) {
+    slots.push(`${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`);
+  }
+  return `Turnos: ${slots.join(', ')}. Si la PC estuvo apagada, corre una sola vez al volver.`;
+}
+
 function toggleDay(days: number[], day: number): number[] {
   return days.includes(day) ? days.filter((d) => d !== day) : [...days, day].sort();
 }
@@ -447,7 +466,7 @@ export function ScheduleFields({ values, onChange }: { values: FormValues; onCha
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Horario">
+        <Field label={values.scheduleFrequency === 'hourly' ? 'Hora ancla' : 'Horario'}>
           <input
             style={inputStyle}
             type="time"
@@ -473,6 +492,25 @@ export function ScheduleFields({ values, onChange }: { values: FormValues; onCha
           options={(Object.keys(FREQUENCY_LABEL) as ScheduleFrequency[]).map((f) => ({ value: f, label: FREQUENCY_LABEL[f] }))}
         />
       </Field>
+
+      {values.scheduleFrequency === 'hourly' && (
+        <Field label="Repetir cada *">
+          <select
+            style={inputStyle}
+            value={values.scheduleIntervalHours}
+            onChange={(e) => onChange({ scheduleIntervalHours: e.target.value })}
+          >
+            {HOURLY_INTERVAL_OPTIONS.map((h) => (
+              <option key={h} value={String(h)}>
+                {h === 1 ? '1 hora' : `${h} horas`}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs" style={{ color: 'var(--muted)' }}>
+            {hourlyPreview(values.scheduleTime, Number(values.scheduleIntervalHours))}
+          </p>
+        </Field>
+      )}
 
       {values.scheduleFrequency === 'weekly' && (
         <Field label="Días de la semana *">
@@ -522,6 +560,7 @@ export function ScheduleFields({ values, onChange }: { values: FormValues; onCha
 
 export function isScheduleValid(values: FormValues): boolean {
   if (!values.scheduleTime.trim()) return true;
+  if (values.scheduleFrequency === 'hourly') return HOURLY_INTERVAL_OPTIONS.includes(Number(values.scheduleIntervalHours));
   if (values.scheduleFrequency === 'weekly') return values.scheduleDaysOfWeek.length > 0;
   if (values.scheduleFrequency === 'monthly') {
     const day = Number(values.scheduleDayOfMonth);
@@ -822,6 +861,7 @@ export function TaskCreateWizard({
         scheduleFrequency: form.scheduleFrequency,
         scheduleDaysOfWeek: form.scheduleFrequency === 'weekly' ? form.scheduleDaysOfWeek : undefined,
         scheduleDayOfMonth: form.scheduleFrequency === 'monthly' ? Number(form.scheduleDayOfMonth) : undefined,
+        scheduleIntervalHours: form.scheduleFrequency === 'hourly' ? Number(form.scheduleIntervalHours) : undefined,
       });
 
       if (created.scheduleBlocked) {
@@ -856,6 +896,7 @@ export function TaskCreateWizard({
         scheduleFrequency: form.scheduleFrequency,
         scheduleDaysOfWeek: form.scheduleFrequency === 'weekly' ? form.scheduleDaysOfWeek : undefined,
         scheduleDayOfMonth: form.scheduleFrequency === 'monthly' ? Number(form.scheduleDayOfMonth) : undefined,
+        scheduleIntervalHours: form.scheduleFrequency === 'hourly' ? Number(form.scheduleIntervalHours) : undefined,
         force: true,
       });
       onClose();

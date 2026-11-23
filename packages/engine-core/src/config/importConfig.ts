@@ -246,6 +246,7 @@ function importOneClient(exported: ExportedClient, deps: ImportConfigDeps): Impo
           scheduleFrequency: task.scheduleFrequency,
           scheduleDaysOfWeek: task.scheduleDaysOfWeek,
           scheduleDayOfMonth: task.scheduleDayOfMonth,
+          scheduleIntervalHours: task.scheduleIntervalHours ?? null,
         });
       }
 
@@ -357,6 +358,7 @@ export function importTaskBundle(bundle: ExportedTaskBundle, clientId: string, d
         scheduleFrequency: task.scheduleFrequency,
         scheduleDaysOfWeek: task.scheduleDaysOfWeek,
         scheduleDayOfMonth: task.scheduleDayOfMonth,
+        scheduleIntervalHours: task.scheduleIntervalHours ?? null,
       });
     }
 

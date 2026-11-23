@@ -133,6 +133,7 @@ export function FileTaskCreateModal({
               scheduleFrequency: schedule.frequency,
               scheduleDaysOfWeek: schedule.frequency === 'weekly' ? schedule.daysOfWeek : undefined,
               scheduleDayOfMonth: schedule.frequency === 'monthly' ? Number(schedule.dayOfMonth) : undefined,
+              scheduleIntervalHours: schedule.frequency === 'hourly' ? Number(schedule.intervalHours) : undefined,
             }
           : {}),
       });

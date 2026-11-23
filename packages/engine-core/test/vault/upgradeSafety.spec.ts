@@ -27,6 +27,12 @@ function preVaultDb(): Database.Database {
     db.exec(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'));
     db.prepare('INSERT INTO schema_migrations (name) VALUES (?)').run(file);
   }
+  // This fixture seeds rows through the *current* repos, whose prepared
+  // statements reference columns added after 0017 (0024's schedule_interval_hours).
+  // Pre-adding them here is harmless: 0024 rebuilds both tables with explicit
+  // column lists, so it simply drops/recreates them (covered by hourlySchedule.spec.ts).
+  db.exec('ALTER TABLE backup_tasks ADD COLUMN schedule_interval_hours INTEGER');
+  db.exec('ALTER TABLE file_backup_tasks ADD COLUMN schedule_interval_hours INTEGER');
   return db;
 }
 

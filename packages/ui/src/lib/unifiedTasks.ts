@@ -26,6 +26,7 @@ export interface UnifiedTaskRow {
   scheduleFrequency: ScheduleFrequency;
   scheduleDaysOfWeek: number[] | null;
   scheduleDayOfMonth: number | null;
+  scheduleIntervalHours: number | null;
   backupSetName: string | null;
   latestRunStatus: BackupRunStatus | FileBackupRunStatus | null;
   /** Non-null ⇒ the task's schedule is actually registered in Windows Task Scheduler. */
@@ -57,6 +58,7 @@ export function toUnifiedDbTask(t: TaskRow): UnifiedTaskRow {
     scheduleFrequency: t.scheduleFrequency,
     scheduleDaysOfWeek: t.scheduleDaysOfWeek,
     scheduleDayOfMonth: t.scheduleDayOfMonth,
+    scheduleIntervalHours: t.scheduleIntervalHours,
     backupSetName: t.backupSetName,
     latestRunStatus: t.latestRunStatus,
     windowsTaskName: t.windowsTaskName,
@@ -79,6 +81,7 @@ export function toUnifiedFileTask(t: FileBackupTaskRow): UnifiedTaskRow {
     scheduleFrequency: t.scheduleFrequency,
     scheduleDaysOfWeek: t.scheduleDaysOfWeek,
     scheduleDayOfMonth: t.scheduleDayOfMonth,
+    scheduleIntervalHours: t.scheduleIntervalHours,
     backupSetName: t.backupSetName,
     latestRunStatus: t.latestRunStatus,
     windowsTaskName: t.windowsTaskName,

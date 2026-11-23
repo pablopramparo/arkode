@@ -66,6 +66,7 @@ function toExportedTask(task: BackupTask, transportName: string | null, database
     scheduleFrequency: task.scheduleFrequency,
     scheduleDaysOfWeek: task.scheduleDaysOfWeek,
     scheduleDayOfMonth: task.scheduleDayOfMonth,
+    scheduleIntervalHours: task.scheduleIntervalHours,
     retentionCount: task.retentionCount,
     retentionDays: task.retentionDays,
   };
